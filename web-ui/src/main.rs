@@ -34,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Build the router
     let app = Router::new()
-        .route("/api/*path", get(proxy_to_daemon).post(proxy_to_daemon))
+        .route("/api/{*path}", get(proxy_to_daemon).post(proxy_to_daemon))
         .route("/health", get(health_check))
         .fallback(serve_frontend)
         .layer(CorsLayer::permissive());

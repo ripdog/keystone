@@ -153,6 +153,10 @@ rebuild: clean build-release
 # Vagrant VM Commands
 # ====================
 
+# Fix file permissions in /src (after rsync as root)
+vagrant-fix-perms:
+    vagrant ssh -c "sudo chown -R vagrant:vagrant /src"
+
 # Start Vagrant VM (provision on first run)
 vagrant-up:
     vagrant up
@@ -186,21 +190,48 @@ vagrant-build:
 vagrant-test:
     vagrant ssh -c "cd /src && cargo test --all"
 
-# Run Keystone daemon inside Vagrant VM (as root)
+# Run Keystone daemon inside Vagrant VM (as root, background)
 vagrant-run-daemon:
-    vagrant ssh -c "cd /src && sudo ./target/release/keystone-daemon"
+    vagrant ssh -c "cd /src && sudo ./target/release/keystone-daemon &"
+    @echo "Daemon started in background"
 
-# Run Keystone web-ui inside Vagrant VM
+# Run Keystone web-ui inside Vagrant VM (background)
 vagrant-run-web:
-    vagrant ssh -c "cd /src && ./target/release/keystone-web-ui"
+    vagrant ssh -c "cd /src && ./target/release/keystone-web-ui &"
+    @echo "Web UI started in background"
+    @echo "Access at: http://192.168.56.10:8080"
+
+# Start both services in Vagrant VM
+vagrant-run-all: vagrant-run-daemon
+    @sleep 2
+    vagrant ssh -c "cd /src && ./target/release/keystone-web-ui &"
+    @echo "✅ Services started"
+    @echo "Daemon: Running as root on unix socket"
+    @echo "Web UI: http://192.168.56.10:8080"
 
 # Install Keystone binaries to /usr/local/bin in VM
-vagrant-install: vagrant-build
+vagrant-install:
     vagrant ssh -c "cd /src && sudo cp target/release/keystone-daemon /usr/local/bin/ && sudo cp target/release/keystone-web-ui /usr/local/bin/ && sudo chmod 755 /usr/local/bin/keystone-*"
+    @echo "✅ Binaries installed to /usr/local/bin"
+
+# Check if services are running
+vagrant-status-services:
+    vagrant ssh -c "ps aux | grep keystone | grep -v grep"
+
+# Stop all keystone services
+vagrant-stop-services:
+    vagrant ssh -c "sudo pkill -f keystone-daemon; pkill -f keystone-web-ui" || true
+    @echo "✅ Services stopped"
 
 # Full integration test in Vagrant
-vagrant-integration: vagrant-build vagrant-install
-    @echo "🧪 Running integration tests in Vagrant VM..."
-    vagrant ssh -c "sudo systemctl start keystone-daemon || sudo /usr/local/bin/keystone-daemon &"
-    vagrant ssh -c "/usr/local/bin/keystone-web-ui &"
-    @echo "✅ Services started. Access at http://192.168.56.10:8080"
+vagrant-integration:
+    @echo "🧪 Running integration test..."
+    vagrant ssh -c "cd /src && cargo build --release"
+    vagrant ssh -c "cd /src && sudo ./target/release/keystone-daemon &"
+    @sleep 2
+    vagrant ssh -c "cd /src && ./target/release/keystone-web-ui &"
+    @sleep 2
+    vagrant ssh -c "curl -s http://localhost:8080/health"
+    @echo ""
+    @echo "✅ Integration test complete"
+    @echo "Access at: http://192.168.56.10:8080"

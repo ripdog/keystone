@@ -18,3 +18,7 @@ Thumbs.db
 web-ui/dist/
 web-ui/pkg/
 
+# Vagrant
+.vagrant/
+*.box
+

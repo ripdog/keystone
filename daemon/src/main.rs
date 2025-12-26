@@ -1,7 +1,7 @@
-/// Keystone Daemon
-/// 
-/// The privileged backend service that runs as root and performs system mutations.
-/// Listens only on a Unix Domain Socket at /run/keystone.sock for security.
+//! Keystone Daemon
+//! 
+//! The privileged backend service that runs as root and performs system mutations.
+//! Listens only on a Unix Domain Socket at /run/keystone.sock for security.
 
 use axum::{
     extract::State,

@@ -1,7 +1,7 @@
-/// Keystone Core Library
-/// 
-/// This crate contains shared type definitions used by both the daemon and web-ui.
-/// All types must be serializable to ensure strict type safety across the system boundary.
+//! Keystone Core Library
+//! 
+//! This crate contains shared type definitions used by both the daemon and web-ui.
+//! All types must be serializable to ensure strict type safety across the system boundary.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -99,6 +99,7 @@ pub struct FirewallRule {
 
 /// Complete system state representing the router configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SystemState {
     /// All configured network interfaces
     pub interfaces: Vec<Interface>,
@@ -113,16 +114,6 @@ pub struct SystemState {
     pub nat_enabled: bool,
 }
 
-impl Default for SystemState {
-    fn default() -> Self {
-        Self {
-            interfaces: Vec::new(),
-            firewall_rules: Vec::new(),
-            ip_forwarding_enabled: false,
-            nat_enabled: false,
-        }
-    }
-}
 
 /// Request to apply a new system configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

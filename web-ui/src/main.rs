@@ -1,8 +1,8 @@
-/// Keystone Web UI - Server
-/// 
-/// Unprivileged web server that:
-/// 1. Serves the WASM frontend bundle
-/// 2. Proxies API requests from HTTP to the daemon's Unix socket
+//! Keystone Web UI - Server
+//! 
+//! Unprivileged web server that:
+//! 1. Serves the WASM frontend bundle
+//! 2. Proxies API requests from HTTP to the daemon's Unix socket
 
 use axum::{
     body::Body,

@@ -1,40 +1,14 @@
-/// Keystone Web UI - Leptos Frontend (WASM)
-/// 
-/// This module contains the Leptos components that compile to WASM
-/// and run in the browser as a Single Page Application.
+//! Keystone Web UI - Leptos Frontend (WASM)
+//! 
+//! This module contains the Leptos components that compile to WASM
+//! and run in the browser as a Single Page Application.
 
-use leptos::*;
-use leptos_meta::*;
-use leptos_router::*;
+use leptos::prelude::*;
 use keystone_core::{Interface, InterfaceRole, FirewallRule, SystemState};
 
 #[component]
 pub fn App() -> impl IntoView {
-    provide_meta_context();
-
-    view! {
-        <Router>
-            <Routes>
-                <Route path="/" view=Dashboard/>
-            </Routes>
-        </Router>
-    }
-}
-
-#[component]
-fn Dashboard() -> impl IntoView {
-    let (state, _set_state) = create_signal(SystemState::default());
-    let (_loading, set_loading) = create_signal(false);
-
-    // Fetch initial state
-    create_effect(move |_| {
-        spawn_local(async move {
-            set_loading.set(true);
-            // TODO: Implement actual API call
-            // let response = fetch("/api/state").await;
-            set_loading.set(false);
-        });
-    });
+    let (state, _set_state) = signal(SystemState::default());
 
     view! {
         <div class="min-h-screen bg-gray-900 text-gray-100 p-8">
@@ -96,32 +70,40 @@ fn InterfaceCard(interface: Interface) -> impl IntoView {
         InterfaceRole::LAN => "text-green-400",
     };
 
+    let name = interface.name.clone();
+    let role_str = format!("{:?}", interface.role);
+    let address = interface.address.clone().unwrap_or_else(|| "Not configured".to_string());
+    let dhcp_status = if interface.dhcp_enabled { "Enabled" } else { "Disabled" };
+    let enabled_status = if interface.enabled { "Enabled" } else { "Disabled" };
+    let status_class = if interface.enabled {
+        "bg-green-600 text-white px-2 py-1 rounded text-xs"
+    } else {
+        "bg-gray-600 text-white px-2 py-1 rounded text-xs"
+    };
+    let toggle_text = if interface.enabled { "Disable" } else { "Enable" };
+
     view! {
         <div class="bg-gray-700 rounded p-4 border-l-4 border-blue-500">
             <div class="flex justify-between items-start mb-2">
                 <div>
-                    <h3 class="text-lg font-medium">{interface.name}</h3>
+                    <h3 class="text-lg font-medium">{name}</h3>
                     <span class={format!("text-sm {}", role_color)}>
-                        {format!("{:?}", interface.role)}
+                        {role_str}
                     </span>
                 </div>
-                <span class={if interface.enabled {
-                    "bg-green-600 text-white px-2 py-1 rounded text-xs"
-                } else {
-                    "bg-gray-600 text-white px-2 py-1 rounded text-xs"
-                }}>
-                    {if interface.enabled { "Enabled" } else { "Disabled" }}
+                <span class={status_class}>
+                    {enabled_status}
                 </span>
             </div>
 
             <div class="text-sm text-gray-300 space-y-1">
                 <div>
                     <span class="text-gray-400">"IP: "</span>
-                    {interface.address.unwrap_or_else(|| "Not configured".to_string())}
+                    {address}
                 </div>
                 <div>
                     <span class="text-gray-400">"DHCP: "</span>
-                    {if interface.dhcp_enabled { "Enabled" } else { "Disabled" }}
+                    {dhcp_status}
                 </div>
             </div>
 
@@ -130,7 +112,7 @@ fn InterfaceCard(interface: Interface) -> impl IntoView {
                     "Edit"
                 </button>
                 <button class="text-xs bg-gray-600 hover:bg-gray-700 px-3 py-1 rounded">
-                    {if interface.enabled { "Disable" } else { "Enable" }}
+                    {toggle_text}
                 </button>
             </div>
         </div>
@@ -175,31 +157,38 @@ fn FirewallRuleCard(rule: FirewallRule) -> impl IntoView {
         keystone_core::FirewallAction::Reject => "text-yellow-400",
     };
 
+    let description = rule.description.clone();
+    let action_str = format!("{:?}", rule.action);
+    let port = rule.port;
+    let protocol_str = format!("{:?}", rule.protocol);
+    let enabled_status = if rule.enabled { "On" } else { "Off" };
+    let status_class = if rule.enabled {
+        "bg-green-600 text-white px-2 py-1 rounded text-xs"
+    } else {
+        "bg-gray-600 text-white px-2 py-1 rounded text-xs"
+    };
+
     view! {
         <div class="bg-gray-700 rounded p-3 text-sm">
             <div class="flex justify-between items-start mb-2">
                 <div>
-                    <span class="font-medium">{rule.description}</span>
+                    <span class="font-medium">{description}</span>
                     <span class={format!("ml-2 {}", action_color)}>
-                        {format!("{:?}", rule.action)}
+                        {action_str}
                     </span>
                 </div>
-                <span class={if rule.enabled {
-                    "bg-green-600 text-white px-2 py-1 rounded text-xs"
-                } else {
-                    "bg-gray-600 text-white px-2 py-1 rounded text-xs"
-                }}>
-                    {if rule.enabled { "On" } else { "Off" }}
+                <span class={status_class}>
+                    {enabled_status}
                 </span>
             </div>
 
             <div class="text-gray-300 space-y-1">
                 <div>
                     <span class="text-gray-400">"Port: "</span>
-                    {rule.port}
+                    {port}
                     " | "
                     <span class="text-gray-400">"Protocol: "</span>
-                    {format!("{:?}", rule.protocol)}
+                    {protocol_str}
                 </div>
             </div>
         </div>

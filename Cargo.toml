@@ -17,17 +17,17 @@ anyhow = "1.0"
 thiserror = "2.0"
 
 # Web/API
-axum = { version = "0.7", features = ["tokio"] }
+axum = { version = "0.8", features = ["tokio"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 
 # Leptos
-leptos = { version = "0.6", features = ["csr"] }
-leptos_axum = "0.6"
-leptos_meta = "0.6"
-leptos_router = "0.6"
+leptos = { version = "0.8", features = ["csr"] }
+leptos_axum = "0.8"
+leptos_meta = "0.8"
+leptos_router = "0.8"
 
 # Others
 tracing = "0.1"

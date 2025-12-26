@@ -13,8 +13,8 @@ Vagrant.configure("2") do |config|
   config.vm.network "private_network", ip: "192.168.56.10"
 
   # SYNCED FOLDERS
-  # Map your current folder (Rust code) to /src in the VM
-  config.vm.synced_folder ".", "/src"
+  # Disabled for now - will manually copy files
+  config.vm.synced_folder ".", "/src", type: "rsync"
 
   # PROVISIONING (The Scriptable Part)
   # This runs the first time you do 'vagrant up'

@@ -11,7 +11,7 @@ pub fn AppLayout(on_logout: Callback<()>, children: Children) -> impl IntoView {
     let logout_click = move |_| on_logout.run(());
 
     view! {
-        <div class="min-h-screen bg-gray-900 text-white">
+        <div class="min-h-screen bg-gray-900 text-white w-full mx-auto" style="max-width: 1000px;">
             // Mobile header
             <header class="lg:hidden bg-gray-800 p-4 flex justify-between items-center">
                 <div class="text-xl font-semibold text-blue-400">"Keystone"</div>
@@ -84,11 +84,9 @@ pub fn AppLayout(on_logout: Callback<()>, children: Children) -> impl IntoView {
                     </aside>
                 </Show>
 
-                // Main content area with max-width container
+                // Main content area
                 <main class="flex-1 lg:ml-64 p-4 lg:p-8">
-                    <div class="max-w-6xl mx-auto">
-                        {children()}
-                    </div>
+                    {children()}
                 </main>
             </div>
         </div>

@@ -8,10 +8,12 @@ default:
 # Build all crates (debug)
 build:
     cargo build
+    cp -r web-ui/dist target/debug/
 
 # Build all crates (release)
 build-release:
     cargo build --release
+    cp -r web-ui/dist target/release/
 
 # Run tests
 test:
@@ -70,12 +72,16 @@ serve-wasm:
     cd web-ui && ~/.cargo/bin/trunk serve
 
 # Build everything including WASM, then run (development)
-dev-full: build-wasm dev-web
+dev-full: build-wasm build
+    cp -r web-ui/dist target/debug/
     @echo "✅ Full development build ready"
+    target/debug/keystone-web-ui
 
 # Run web UI with WASM built (requires trunk)
-run-full: build-wasm run-web
+run-full: build-wasm build-release
+    cp -r web-ui/dist target/release/
     @echo "✅ Web UI running with WASM at http://localhost:8080"
+    target/release/keystone-web-ui
 
 # Update dependencies
 update:
@@ -120,6 +126,7 @@ build-daemon:
 # Build web UI only
 build-web:
     cargo build -p keystone-web-ui --release
+    cp -r web-ui/dist target/release/
 
 # Test core library only
 test-core:

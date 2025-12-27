@@ -207,7 +207,7 @@ fn DashboardPage(
     set_state: WriteSignal<SystemState>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
-    let (dashboard, set_dashboard) = signal(Option::<DashboardResponse>::None);
+    let (_dashboard, set_dashboard) = signal(Option::<DashboardResponse>::None);
     let (rates, set_rates) = signal(Vec::<InterfaceRate>::new());
     let (prev_counters, set_prev_counters) = signal(Vec::<InterfaceCounters>::new());
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
@@ -338,18 +338,6 @@ fn DashboardPage(
                         }>
                             <div class="text-gray-500">"—"</div>
                         </Show>
-                    </div>
-                </div>
-
-                <div class="bg-gray-800 rounded-lg p-5 shadow-lg">
-                    <div class="text-sm text-gray-400 mb-1">"Last Update"</div>
-                    <div class="text-sm text-gray-200">
-                        {move || {
-                            dashboard
-                                .get()
-                                .map(|d| format!("{} ms", d.timestamp_ms))
-                                .unwrap_or_else(|| "—".to_string())
-                        }}
                     </div>
                 </div>
             </div>

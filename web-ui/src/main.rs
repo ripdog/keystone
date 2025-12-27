@@ -42,11 +42,20 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Starting Keystone Web UI");
 
+    // Determine asset directory relative to binary location
+    let exe_path = std::env::current_exe()?;
+    let exe_dir = exe_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Failed to get binary directory"))?;
+    let dist_dir = exe_dir.join("dist");
+    
+    info!("Serving static assets from: {}", dist_dir.display());
+
     // Build the router
     let app = Router::new()
         .route("/api/{*path}", get(proxy_to_daemon).post(proxy_to_daemon))
         .route("/health", get(health_check))
-        .fallback_service(ServeDir::new("dist"))
+        .fallback_service(ServeDir::new(dist_dir))
         .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind(LISTEN_ADDR).await?;

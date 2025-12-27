@@ -34,6 +34,9 @@ argon2 = "0.5"
 jsonwebtoken = "9.2"
 rand = "0.8"
 
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+
 # Others
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

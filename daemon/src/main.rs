@@ -5,6 +5,7 @@
 
 mod auth;
 mod config;
+mod db;
 
 use auth::AuthManager;
 use axum::{
@@ -16,9 +17,11 @@ use axum::{
     routing::{get, post},
 };
 use config::Config;
+use db::Database;
 use keystone_core::{
     ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, InterfaceCounters, KeystoneError,
-    LoginRequest, LoginResponse, SystemState,
+    LoginRequest, LoginResponse, ManagedInterfacesResponse, SaveManagedInterfacesRequest,
+    SaveManagedInterfacesResponse, SystemState,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -34,11 +37,12 @@ const DEV_HTTP_ADDR: &str = "127.0.0.1:3000";
 #[derive(Clone)]
 struct AppState {
     auth: Arc<AuthManager>,
+    db: Database,
 }
 
 impl AppState {
-    fn new(auth: Arc<AuthManager>) -> Self {
-        Self { auth }
+    fn new(auth: Arc<AuthManager>, db: Database) -> Self {
+        Self { auth, db }
     }
 }
 
@@ -64,6 +68,10 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load()?;
     info!("Configuration loaded");
 
+    // Initialize database
+    let db = Database::new().await?;
+    info!("Database initialized");
+
     // Initialize authentication manager
     let auth_manager = Arc::new(AuthManager::new(config.admin_password_hash));
     info!("Authentication system initialized");
@@ -74,13 +82,15 @@ async fn main() -> anyhow::Result<()> {
         std::fs::remove_file(SOCKET_PATH)?;
     }
 
-    let state = Arc::new(AppState::new(auth_manager));
+    let state = Arc::new(AppState::new(auth_manager, db));
 
     // Build the router with protected routes
     let protected = Router::new()
         .route("/state", get(get_state))
         .route("/dashboard", get(get_dashboard))
         .route("/apply", post(apply_config))
+        .route("/managed-interfaces", get(get_managed_interfaces))
+        .route("/managed-interfaces", post(save_managed_interfaces))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -415,6 +425,32 @@ async fn apply_config(
 
     info!("Configuration applied successfully");
     Ok(Json(response))
+}
+
+/// GET /managed-interfaces - Get all managed interfaces
+async fn get_managed_interfaces(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ManagedInterfacesResponse>, AppError> {
+    info!("Retrieving managed interfaces");
+
+    let interfaces = state.db.get_managed_interfaces().await?;
+
+    Ok(Json(ManagedInterfacesResponse { interfaces }))
+}
+
+/// POST /managed-interfaces - Save managed interfaces configuration
+async fn save_managed_interfaces(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SaveManagedInterfacesRequest>,
+) -> Result<Json<SaveManagedInterfacesResponse>, AppError> {
+    info!("Saving {} managed interfaces", request.interfaces.len());
+
+    state.db.save_managed_interfaces(&request.interfaces).await?;
+
+    Ok(Json(SaveManagedInterfacesResponse {
+        success: true,
+        message: format!("Saved {} managed interfaces", request.interfaces.len()),
+    }))
 }
 
 /// Error wrapper for Axum handlers

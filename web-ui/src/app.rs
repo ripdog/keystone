@@ -5,8 +5,9 @@
 
 use gloo_timers::callback::Interval;
 use keystone_core::{
-    DashboardResponse, FirewallRule, Interface, InterfaceCounters, InterfaceRole, LoginRequest,
-    LoginResponse, SystemState,
+    DashboardResponse, FirewallRule, InterfaceCounters, InterfaceRole, LoginRequest,
+    LoginResponse, ManagedInterface, ManagedInterfacesResponse, SaveManagedInterfacesRequest,
+    SaveManagedInterfacesResponse, SystemState,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -177,7 +178,11 @@ fn LoggedInLayout(
                     </Show>
 
                     <Show when=move || page.get() == AppPage::Interfaces>
-                        <InterfacesPanel state=state/>
+                        <InterfacesPanel
+                            auth_token=auth_token
+                            state=state
+                            on_unauthorized=on_unauthorized
+                        />
                     </Show>
 
                     <Show when=move || page.get() == AppPage::Firewall>
@@ -518,103 +523,344 @@ async fn login_api(password: &str) -> Result<LoginResponse, String> {
     }
 }
 
-#[component]
-fn InterfacesPanel(state: ReadSignal<SystemState>) -> impl IntoView {
-    view! {
-        <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
-            <h2 class="text-2xl font-semibold text-blue-300 mb-4">
-                "Network Interfaces"
-            </h2>
+/// Fetch managed interfaces from the API
+async fn fetch_managed_interfaces(token: &str) -> Result<Vec<ManagedInterface>, String> {
+    let response = gloo_net::http::Request::get("/api/managed-interfaces")
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
 
-            <div class="space-y-4">
-                <Show
-                    when=move || !state.get().interfaces.is_empty()
-                    fallback=|| view! {
-                        <p class="text-gray-500 italic">"No interfaces configured"</p>
-                    }
-                >
-                    <For
-                        each=move || state.get().interfaces.clone()
-                        key=|iface| iface.name.clone()
-                        children=|iface| view! { <InterfaceCard interface=iface/> }
-                    />
-                </Show>
-            </div>
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
 
-            <button class="mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
-                "+ Add Interface"
-            </button>
-        </div>
+    if response.ok() {
+        let data: ManagedInterfacesResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(data.interfaces)
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save managed interfaces to the API
+async fn save_managed_interfaces(
+    token: &str,
+    interfaces: Vec<ManagedInterface>,
+) -> Result<SaveManagedInterfacesResponse, String> {
+    let request = SaveManagedInterfacesRequest { interfaces };
+
+    let response = gloo_net::http::Request::post("/api/managed-interfaces")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&request).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
     }
 }
 
 #[component]
-fn InterfaceCard(interface: Interface) -> impl IntoView {
-    let role_color = match interface.role {
-        InterfaceRole::WAN => "text-red-400",
-        InterfaceRole::LAN => "text-green-400",
+fn InterfacesPanel(
+    auth_token: ReadSignal<Option<String>>,
+    state: ReadSignal<SystemState>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
+    // Managed interfaces from the database
+    let (managed_interfaces, set_managed_interfaces) = signal::<Vec<ManagedInterface>>(vec![]);
+    // Local edits (interface name -> Option<role>, None means not managed)
+    let (pending_changes, set_pending_changes) =
+        signal::<HashMap<String, Option<InterfaceRole>>>(HashMap::new());
+    let (loading, set_loading) = signal(true);
+    let (saving, set_saving) = signal(false);
+    let (error, set_error) = signal::<Option<String>>(None);
+    let (success, set_success) = signal::<Option<String>>(None);
+
+    // Load managed interfaces on mount
+    {
+        let auth_token = auth_token.clone();
+        let set_managed_interfaces = set_managed_interfaces.clone();
+        let set_loading = set_loading.clone();
+        let set_error = set_error.clone();
+        let on_unauthorized = on_unauthorized.clone();
+
+        spawn_local(async move {
+            if let Some(token) = auth_token.get() {
+                match fetch_managed_interfaces(&token).await {
+                    Ok(interfaces) => {
+                        set_managed_interfaces.set(interfaces);
+                    }
+                    Err(e) => {
+                        if e == "Unauthorized" {
+                            on_unauthorized.run(());
+                        } else {
+                            set_error.set(Some(e));
+                        }
+                    }
+                }
+            }
+            set_loading.set(false);
+        });
+    }
+
+    // Get current managed state for an interface (checking pending changes first)
+    let get_interface_role = move |name: &str| -> Option<InterfaceRole> {
+        let changes = pending_changes.get();
+        if let Some(role) = changes.get(name) {
+            return *role;
+        }
+        // Check saved managed interfaces
+        managed_interfaces
+            .get()
+            .iter()
+            .find(|m| m.name == name)
+            .map(|m| m.role)
     };
 
-    let name = interface.name.clone();
-    let role_str = format!("{:?}", interface.role);
-    let address = interface
-        .address
-        .clone()
-        .unwrap_or_else(|| "Not configured".to_string());
-    let dhcp_status = if interface.dhcp_enabled {
-        "Enabled"
-    } else {
-        "Disabled"
+    // Check if there are unsaved changes
+    let has_changes = move || !pending_changes.get().is_empty();
+
+    // Handle toggling interface management
+    let toggle_interface = move |name: String, current_role: Option<InterfaceRole>| {
+        set_pending_changes.update(|changes| {
+            let new_role = match current_role {
+                None => Some(InterfaceRole::LAN), // Default to LAN when enabling
+                Some(_) => None,                  // Disable management
+            };
+            changes.insert(name, new_role);
+        });
+        set_success.set(None);
     };
-    let enabled_status = if interface.enabled {
-        "Enabled"
-    } else {
-        "Disabled"
+
+    // Handle changing role
+    let change_role = move |name: String, role: InterfaceRole| {
+        set_pending_changes.update(|changes| {
+            changes.insert(name, Some(role));
+        });
+        set_success.set(None);
     };
-    let status_class = if interface.enabled {
-        "bg-green-600 text-white px-2 py-1 rounded text-xs"
-    } else {
-        "bg-gray-600 text-white px-2 py-1 rounded text-xs"
+
+    // Save changes
+    let save_changes = move |_| {
+        let auth_token = auth_token.clone();
+        let managed_interfaces = managed_interfaces.clone();
+        let pending_changes = pending_changes.clone();
+        let set_managed_interfaces = set_managed_interfaces.clone();
+        let set_pending_changes = set_pending_changes.clone();
+        let set_saving = set_saving.clone();
+        let set_error = set_error.clone();
+        let set_success = set_success.clone();
+        let on_unauthorized = on_unauthorized.clone();
+
+        spawn_local(async move {
+            set_saving.set(true);
+            set_error.set(None);
+
+            if let Some(token) = auth_token.get() {
+                // Build new managed interfaces list
+                let mut new_managed: HashMap<String, ManagedInterface> = managed_interfaces
+                    .get()
+                    .iter()
+                    .map(|m| (m.name.clone(), m.clone()))
+                    .collect();
+
+                // Apply pending changes
+                for (name, role) in pending_changes.get().iter() {
+                    match role {
+                        Some(r) => {
+                            new_managed.insert(
+                                name.clone(),
+                                ManagedInterface {
+                                    name: name.clone(),
+                                    role: *r,
+                                    static_ip: None,
+                                    enabled: true,
+                                },
+                            );
+                        }
+                        None => {
+                            new_managed.remove(name);
+                        }
+                    }
+                }
+
+                let interfaces: Vec<ManagedInterface> = new_managed.into_values().collect();
+
+                match save_managed_interfaces(&token, interfaces.clone()).await {
+                    Ok(response) => {
+                        if response.success {
+                            set_managed_interfaces.set(interfaces);
+                            set_pending_changes.set(HashMap::new());
+                            set_success.set(Some(response.message));
+                        } else {
+                            set_error.set(Some(response.message));
+                        }
+                    }
+                    Err(e) => {
+                        if e == "Unauthorized" {
+                            on_unauthorized.run(());
+                        } else {
+                            set_error.set(Some(e));
+                        }
+                    }
+                }
+            }
+            set_saving.set(false);
+        });
     };
-    let toggle_text = if interface.enabled {
-        "Disable"
-    } else {
-        "Enable"
+
+    // Discard changes
+    let discard_changes = move |_| {
+        set_pending_changes.set(HashMap::new());
+        set_error.set(None);
+        set_success.set(None);
     };
 
     view! {
-        <div class="bg-gray-700 rounded p-4 border-l-4 border-blue-500">
-            <div class="flex justify-between items-start mb-2">
-                <div>
-                    <h3 class="text-lg font-medium">{name}</h3>
-                    <span class={format!("text-sm {}", role_color)}>
-                        {role_str}
-                    </span>
-                </div>
-                <span class={status_class}>
-                    {enabled_status}
-                </span>
+        <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-semibold text-blue-300">
+                    "Interface Management"
+                </h2>
+                <Show when=move || has_changes()>
+                    <span class="text-yellow-400 text-sm">"Unsaved changes"</span>
+                </Show>
             </div>
 
-            <div class="text-sm text-gray-300 space-y-1">
-                <div>
-                    <span class="text-gray-400">"IP: "</span>
-                    {address}
-                </div>
-                <div>
-                    <span class="text-gray-400">"DHCP: "</span>
-                    {dhcp_status}
-                </div>
-            </div>
+            <p class="text-gray-400 mb-6">
+                "Select which interfaces Keystone should manage and assign them a role (LAN or WAN)."
+            </p>
 
-            <div class="mt-3 flex gap-2">
-                <button class="text-xs bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded">
-                    "Edit"
-                </button>
-                <button class="text-xs bg-gray-600 hover:bg-gray-700 px-3 py-1 rounded">
-                    {toggle_text}
-                </button>
-            </div>
+            // Error/Success messages
+            <Show when=move || error.get().is_some()>
+                <div class="bg-red-900/50 border border-red-500 text-red-200 px-4 py-2 rounded mb-4">
+                    {move || error.get().unwrap_or_default()}
+                </div>
+            </Show>
+            <Show when=move || success.get().is_some()>
+                <div class="bg-green-900/50 border border-green-500 text-green-200 px-4 py-2 rounded mb-4">
+                    {move || success.get().unwrap_or_default()}
+                </div>
+            </Show>
+
+            <Show
+                when=move || !loading.get()
+                fallback=|| view! {
+                    <div class="text-gray-400">"Loading interfaces..."</div>
+                }
+            >
+                <div class="space-y-3">
+                    <For
+                        each=move || state.get().interfaces.clone()
+                        key=|iface| iface.name.clone()
+                        children=move |iface| {
+                            let name = iface.name.clone();
+                            let name2 = iface.name.clone();
+                            let name3 = iface.name.clone();
+                            let name4 = iface.name.clone();
+                            let name5 = iface.name.clone();
+                            let name6 = iface.name.clone();
+                            let name7 = iface.name.clone();
+                            let address = iface.address.clone().unwrap_or_else(|| "No IP".to_string());
+
+                            let is_managed = move || get_interface_role(&name3).is_some();
+                            let role_section_class = move || {
+                                if is_managed() {
+                                    "flex items-center gap-2"
+                                } else {
+                                    "hidden"
+                                }
+                            };
+
+                            view! {
+                                <div class="bg-gray-700 rounded p-4 flex items-center justify-between">
+                                    <div class="flex items-center gap-4">
+                                        // Checkbox to toggle management
+                                        <input
+                                            type="checkbox"
+                                            checked=move || get_interface_role(&name).is_some()
+                                            class="w-5 h-5 rounded border-gray-500 bg-gray-600 text-blue-500 focus:ring-blue-500"
+                                            on:change=move |_| {
+                                                let n = name2.clone();
+                                                toggle_interface(n.clone(), get_interface_role(&n))
+                                            }
+                                        />
+                                        <div>
+                                            <div class="font-medium text-white">{name4.clone()}</div>
+                                            <div class="text-sm text-gray-400">{address}</div>
+                                        </div>
+                                    </div>
+
+                                    // Role selector (hidden when not managed via CSS)
+                                    <div class=role_section_class>
+                                        <span class="text-gray-400 text-sm">"Role:"</span>
+                                        <select
+                                            class="bg-gray-600 text-white rounded px-3 py-1 border border-gray-500 focus:border-blue-500 focus:outline-none"
+                                            on:change=move |ev| {
+                                                let value = event_target_value(&ev);
+                                                let role = match value.as_str() {
+                                                    "WAN" => InterfaceRole::WAN,
+                                                    _ => InterfaceRole::LAN,
+                                                };
+                                                change_role(name5.clone(), role);
+                                            }
+                                        >
+                                            <option
+                                                value="LAN"
+                                                selected=move || get_interface_role(&name6) == Some(InterfaceRole::LAN)
+                                            >
+                                                "LAN"
+                                            </option>
+                                            <option
+                                                value="WAN"
+                                                selected=move || get_interface_role(&name7) == Some(InterfaceRole::WAN)
+                                            >
+                                                "WAN"
+                                            </option>
+                                        </select>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    />
+                </div>
+
+                // Save/Discard buttons
+                <Show when=move || has_changes()>
+                    <div class="mt-6 flex gap-3">
+                        <button
+                            class="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 disabled:cursor-not-allowed text-white px-4 py-2 rounded font-medium"
+                            disabled=move || saving.get()
+                            on:click=save_changes
+                        >
+                            {move || if saving.get() { "Saving..." } else { "Save Changes" }}
+                        </button>
+                        <button
+                            class="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded"
+                            disabled=move || saving.get()
+                            on:click=discard_changes
+                        >
+                            "Discard"
+                        </button>
+                    </div>
+                </Show>
+            </Show>
         </div>
     }
 }

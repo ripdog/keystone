@@ -53,6 +53,63 @@ pub enum InterfaceRole {
     LAN,
 }
 
+impl std::fmt::Display for InterfaceRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InterfaceRole::WAN => write!(f, "WAN"),
+            InterfaceRole::LAN => write!(f, "LAN"),
+        }
+    }
+}
+
+impl std::str::FromStr for InterfaceRole {
+    type Err = String;
+    
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_uppercase().as_str() {
+            "WAN" => Ok(InterfaceRole::WAN),
+            "LAN" => Ok(InterfaceRole::LAN),
+            _ => Err(format!("Unknown role: {}", s)),
+        }
+    }
+}
+
+/// A network interface that Keystone is configured to manage
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ManagedInterface {
+    /// Interface name (e.g., "eth0", "enp3s0")
+    pub name: String,
+    
+    /// Role/label for this interface (WAN, LAN)
+    pub role: InterfaceRole,
+    
+    /// Optional static IP configuration (CIDR notation, e.g., "192.168.1.1/24")
+    /// If None, DHCP will be used
+    pub static_ip: Option<String>,
+    
+    /// Whether this interface configuration is enabled
+    pub enabled: bool,
+}
+
+/// Request to save managed interfaces configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveManagedInterfacesRequest {
+    pub interfaces: Vec<ManagedInterface>,
+}
+
+/// Response from saving managed interfaces
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveManagedInterfacesResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Response containing list of managed interfaces
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagedInterfacesResponse {
+    pub interfaces: Vec<ManagedInterface>,
+}
+
 /// Firewall protocol
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Protocol {

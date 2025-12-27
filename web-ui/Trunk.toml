@@ -13,6 +13,11 @@ address = "127.0.0.1"
 port = 8080
 open = false
 
+# Proxy API requests to the daemon (running with KEYSTONE_DEV=1)
+[[proxy]]
+backend = "http://127.0.0.1:3000/"
+rewrite = "/api/"
+
 [[hooks]]
 stage = "pre_build"
 command = "echo"

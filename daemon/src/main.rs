@@ -29,6 +29,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
 const SOCKET_PATH: &str = "/run/keystone.sock";
+const DEV_HTTP_ADDR: &str = "127.0.0.1:3000";
 
 #[derive(Clone)]
 struct AppState {
@@ -92,60 +93,76 @@ async fn main() -> anyhow::Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    // Bind to Unix socket
-    info!("Binding to Unix socket: {}", SOCKET_PATH);
-    let listener = UnixListener::bind(SOCKET_PATH)?;
+    // Check for development mode (HTTP listener instead of Unix socket)
+    let dev_mode = std::env::var("KEYSTONE_DEV").is_ok();
 
-    // Set socket permissions (0660 - owner and group can read/write)
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o660))?;
+    if dev_mode {
+        // Development mode: Listen on HTTP for easy proxying from Trunk
+        warn!("⚠️  Running in DEVELOPMENT mode - HTTP listener enabled!");
+        warn!("⚠️  Do NOT use this in production!");
+        
+        let listener = tokio::net::TcpListener::bind(DEV_HTTP_ADDR).await?;
+        info!("Daemon listening on http://{}", DEV_HTTP_ADDR);
+        
+        axum::serve(listener, app).await?;
+    } else {
+        // Production mode: Unix socket only
+        info!("Binding to Unix socket: {}", SOCKET_PATH);
+        let listener = UnixListener::bind(SOCKET_PATH)?;
 
-    // Set socket group to 'wheel' so non-root users in wheel group can access it
-    use std::ffi::CString;
-    use std::os::unix::fs::MetadataExt;
+        // Set socket permissions (0660 - owner and group can read/write)
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o660))?;
 
-    let metadata = fs::metadata(SOCKET_PATH)?;
-    let uid = metadata.uid();
+        // Set socket group to 'wheel' so non-root users in wheel group can access it
+        use std::ffi::CString;
+        use std::os::unix::fs::MetadataExt;
 
-    // Try to set group to 'wheel'
-    match nix::unistd::Group::from_name("wheel") {
-        Ok(Some(group)) => {
-            let path_cstr = CString::new(SOCKET_PATH)?;
-            let result = unsafe { libc::chown(path_cstr.as_ptr(), uid, group.gid.as_raw()) };
-            if result != 0 {
-                warn!("Failed to set socket group to wheel");
-            } else {
-                info!("Socket group set to wheel");
+        let metadata = fs::metadata(SOCKET_PATH)?;
+        let uid = metadata.uid();
+
+        // Try to set group to 'wheel'
+        match nix::unistd::Group::from_name("wheel") {
+            Ok(Some(group)) => {
+                let path_cstr = CString::new(SOCKET_PATH)?;
+                let result = unsafe { libc::chown(path_cstr.as_ptr(), uid, group.gid.as_raw()) };
+                if result != 0 {
+                    warn!("Failed to set socket group to wheel");
+                } else {
+                    info!("Socket group set to wheel");
+                }
+            }
+            _ => {
+                warn!("Could not find 'wheel' group, socket will be root:root only");
             }
         }
-        _ => {
-            warn!("Could not find 'wheel' group, socket will be root:root only");
+
+        info!("Daemon listening on {}", SOCKET_PATH);
+
+        // Serve the application using tower
+        loop {
+            let (socket, _addr) = listener.accept().await?;
+            let app = app.clone();
+
+            tokio::spawn(async move {
+                let socket = hyper_util::rt::TokioIo::new(socket);
+
+                let hyper_service =
+                    hyper::service::service_fn(move |request| app.clone().oneshot(request));
+
+                if let Err(err) =
+                    hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+                        .serve_connection(socket, hyper_service)
+                        .await
+                {
+                    error!("Error serving connection: {:?}", err);
+                }
+            });
         }
     }
 
-    info!("Daemon listening on {}", SOCKET_PATH);
-
-    // Serve the application using tower
-    loop {
-        let (socket, _addr) = listener.accept().await?;
-        let app = app.clone();
-
-        tokio::spawn(async move {
-            let socket = hyper_util::rt::TokioIo::new(socket);
-
-            let hyper_service =
-                hyper::service::service_fn(move |request| app.clone().oneshot(request));
-
-            if let Err(err) =
-                hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                    .serve_connection(socket, hyper_service)
-                    .await
-            {
-                error!("Error serving connection: {:?}", err);
-            }
-        });
-    }
+    Ok(())
 }
 
 /// GET /health - Health check endpoint

@@ -5,6 +5,13 @@
 default:
     @just --list
 
+# === Development Workflow ===
+# For hot-reload development (2 terminals):
+#   Terminal 1: sudo just dev-daemon  (daemon in dev mode on :3000)
+#   Terminal 2: just serve-wasm       (frontend on :8080 with hot reload)
+# Access at: http://localhost:8080
+
+
 # Build all crates (debug)
 build:
     cargo build
@@ -50,17 +57,17 @@ run-daemon:
 
 # Run web UI (unprivileged)
 run-web:
-    @echo "Starting web UI on http://localhost:8080"
+    @echo "Starting web UI on http://localhost:3000"
     target/release/keystone-web-ui
 
-# Build and run daemon
+# Run daemon in dev mode with HTTP listener (for use with trunk serve)
 dev-daemon: build
-    @echo "Starting daemon in dev mode (requires root)..."
-    sudo target/debug/keystone-daemon
+    @echo "Starting daemon in dev mode on http://localhost:3000..."
+    sudo KEYSTONE_DEV=1 target/debug/keystone-daemon
 
 # Build and run web UI
 dev-web: build
-    @echo "Starting web UI in dev mode on http://localhost:8080"
+    @echo "Starting web UI in dev mode on http://localhost:3000"
     target/debug/keystone-web-ui
 
 # Build WASM frontend (requires trunk)
@@ -68,6 +75,7 @@ build-wasm:
     cd web-ui && ~/.cargo/bin/trunk build --release
 
 # Serve WASM frontend with hot reload (requires trunk)
+# Start the daemon first with: sudo just dev-daemon
 serve-wasm:
     cd web-ui && ~/.cargo/bin/trunk serve
 

@@ -59,28 +59,49 @@ The built files will be in `web-ui/dist/`.
 
 ## Running
 
-### Quick Start
+### Development Mode (with Hot Reload)
 
-1. Build the WASM frontend (one-time):
+For hot-reload development, you only need **2 terminals**:
+
+1. **Terminal 1** - Start the daemon in dev mode:
 ```bash
-cd web-ui
-~/.cargo/bin/trunk build --release
-cd ..
+sudo just dev-daemon
+# Runs on http://localhost:3000 with HTTP listener (instead of Unix socket)
 ```
 
-2. Start the web UI server:
+2. **Terminal 2** - Start the frontend with hot reload:
 ```bash
-cargo run -p keystone-web-ui
-# or
-./target/release/keystone-web-ui
+just serve-wasm
+# Runs on http://localhost:8080, proxies /api/* to the daemon
 ```
 
-3. Access the UI at http://localhost:8080
+3. Access the UI at **http://localhost:8080**
 
-**Note:** The daemon must be running for API calls to work. Start it with:
+Any changes to the frontend code will automatically rebuild and hot-reload in the browser!
+
+### Production Mode
+
+In production, the architecture is:
+- **Daemon** listens on Unix socket only (security)
+- **Web UI server** serves static files and proxies `/api/*` to the daemon
+
+1. Build everything:
+```bash
+just build-wasm
+just build-release
+```
+
+2. Run the daemon (as root):
 ```bash
 sudo ./target/release/keystone-daemon
 ```
+
+3. Run the web UI:
+```bash
+./target/release/keystone-web-ui
+```
+
+4. Access the UI at http://localhost:3000
 
 Default login: password `admin` (change in production!)
 

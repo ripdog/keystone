@@ -17,12 +17,13 @@ pub fn LoginPage(on_login: WriteSignal<Option<String>>) -> impl IntoView {
     let handle_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
 
+        let username_value = username.get();
         let password_value = password.get();
         set_loading.set(true);
         set_error_msg.set(None);
 
         spawn_local(async move {
-            match api::login(&password_value).await {
+            match api::login(&username_value, &password_value).await {
                 Ok(response) => {
                     if response.success {
                         if let Some(token) = &response.token {

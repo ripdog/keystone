@@ -202,9 +202,10 @@ pub struct ApplyConfigResponse {
     pub errors: Vec<String>,
 }
 
-/// Login request containing password
+/// Login request containing username and password
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
+    pub username: String,
     pub password: String,
 }
 
@@ -221,6 +222,61 @@ pub struct LoginResponse {
 pub struct Claims {
     pub sub: String, // Subject (username)
     pub exp: u64,    // Expiration time (Unix timestamp)
+}
+
+/// User account
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct User {
+    pub id: i64,
+    pub username: String,
+    pub email: Option<String>,
+    pub password_hash: String,
+    pub created_at: i64,
+}
+
+/// Request to create or update a user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveUserRequest {
+    pub id: Option<i64>, // None for new user
+    pub username: String,
+    pub email: Option<String>,
+    pub password: Option<String>, // Only required for new users or password changes
+}
+
+/// Response from saving a user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveUserResponse {
+    pub success: bool,
+    pub message: String,
+    pub user_id: Option<i64>,
+}
+
+/// Request to delete a user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteUserRequest {
+    pub id: i64,
+}
+
+/// Response from deleting a user
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteUserResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Response containing list of users (without password hashes)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsersResponse {
+    pub users: Vec<UserInfo>,
+}
+
+/// User information without sensitive data
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UserInfo {
+    pub id: i64,
+    pub username: String,
+    pub email: Option<String>,
+    pub created_at: i64,
 }
 
 #[cfg(test)]

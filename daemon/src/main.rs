@@ -14,14 +14,15 @@ use axum::{
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, delete},
 };
 use config::Config;
 use db::Database;
 use keystone_core::{
-    ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, InterfaceCounters, KeystoneError,
-    LoginRequest, LoginResponse, ManagedInterfacesResponse, SaveManagedInterfacesRequest,
-    SaveManagedInterfacesResponse, SystemState,
+    ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
+    DeleteUserResponse, InterfaceCounters, KeystoneError, LoginRequest, LoginResponse,
+    ManagedInterfacesResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
+    SaveUserRequest, SaveUserResponse, SystemState, UsersResponse,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -64,17 +65,37 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("This daemon requires root privileges");
     }
 
-    // Load configuration
-    let config = Config::load()?;
-    info!("Configuration loaded");
-
     // Initialize database
     let db = Database::new().await?;
     info!("Database initialized");
 
-    // Initialize authentication manager
-    let auth_manager = Arc::new(AuthManager::new(config.admin_password_hash));
+    // Get or create JWT key from database
+    let jwt_key = db.get_or_create_jwt_key().await?;
+
+    // Initialize authentication manager with persistent key
+    let auth_manager = Arc::new(AuthManager::new(jwt_key));
     info!("Authentication system initialized");
+
+    // Migrate from old config file if needed
+    if let Ok(old_config) = Config::load() {
+        // Check if we have any users in the database
+        let users = db.get_users().await?;
+        if users.is_empty() {
+            info!("Migrating admin user from config file");
+            // Create default admin user with the password from config
+            db.create_user("admin", None, &old_config.admin_password_hash).await?;
+            info!("Created admin user from config file");
+        }
+    } else {
+        // No config file, check if we need to create default user
+        let users = db.get_users().await?;
+        if users.is_empty() {
+            info!("Creating default admin user");
+            let default_hash = AuthManager::hash_password("admin")?;
+            db.create_user("admin", None, &default_hash).await?;
+            warn!("⚠️  Created default admin user with password 'admin' - CHANGE THIS IMMEDIATELY!");
+        }
+    }
 
     // Remove old socket if it exists
     if Path::new(SOCKET_PATH).exists() {
@@ -91,6 +112,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/apply", post(apply_config))
         .route("/managed-interfaces", get(get_managed_interfaces))
         .route("/managed-interfaces", post(save_managed_interfaces))
+        .route("/users", get(get_users))
+        .route("/users", post(save_user))
+        .route("/users", delete(delete_user))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -188,23 +212,38 @@ async fn login(
     State(state): State<Arc<AppState>>,
     Json(request): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
-    info!("Login attempt");
+    info!("Login attempt for user: {}", request.username);
 
-    match state.auth.login(&request.password) {
-        Ok(token) => {
-            info!("Login successful");
-            Ok(Json(LoginResponse {
-                success: true,
-                token: Some(token),
-                message: "Login successful".to_string(),
-            }))
+    // Look up user in database
+    let user = state.db.get_user_by_username(&request.username).await?;
+    
+    match user {
+        Some(user) => {
+            match state.auth.verify_and_login(&user.username, &request.password, &user.password_hash) {
+                Ok(token) => {
+                    info!("Login successful for user: {}", request.username);
+                    Ok(Json(LoginResponse {
+                        success: true,
+                        token: Some(token),
+                        message: "Login successful".to_string(),
+                    }))
+                }
+                Err(e) => {
+                    warn!("Login failed for user {}: {}", request.username, e);
+                    Ok(Json(LoginResponse {
+                        success: false,
+                        token: None,
+                        message: "Invalid password".to_string(),
+                    }))
+                }
+            }
         }
-        Err(e) => {
-            warn!("Login failed: {}", e);
+        None => {
+            warn!("Login failed: user {} not found", request.username);
             Ok(Json(LoginResponse {
                 success: false,
                 token: None,
-                message: "Invalid password".to_string(),
+                message: "Invalid username or password".to_string(),
             }))
         }
     }
@@ -450,6 +489,105 @@ async fn save_managed_interfaces(
     Ok(Json(SaveManagedInterfacesResponse {
         success: true,
         message: format!("Saved {} managed interfaces", request.interfaces.len()),
+    }))
+}
+
+/// GET /users - Get all users
+async fn get_users(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<UsersResponse>, AppError> {
+    info!("Retrieving users");
+
+    let users = state.db.get_users().await?;
+
+    Ok(Json(UsersResponse { users }))
+}
+
+/// POST /users - Create or update a user
+async fn save_user(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SaveUserRequest>,
+) -> Result<Json<SaveUserResponse>, AppError> {
+    info!("Saving user: {}", request.username);
+
+    // Validate username
+    if request.username.is_empty() || request.username.len() > 50 {
+        return Ok(Json(SaveUserResponse {
+            success: false,
+            message: "Username must be 1-50 characters".to_string(),
+            user_id: None,
+        }));
+    }
+
+    match request.id {
+        Some(id) => {
+            // Update existing user
+            let password_hash = if let Some(password) = request.password {
+                if password.len() < 6 {
+                    return Ok(Json(SaveUserResponse {
+                        success: false,
+                        message: "Password must be at least 6 characters".to_string(),
+                        user_id: None,
+                    }));
+                }
+                Some(AuthManager::hash_password(&password)?)
+            } else {
+                None
+            };
+
+            state.db.update_user(id, &request.username, request.email.as_deref(), password_hash.as_deref()).await?;
+
+            Ok(Json(SaveUserResponse {
+                success: true,
+                message: "User updated successfully".to_string(),
+                user_id: Some(id),
+            }))
+        }
+        None => {
+            // Create new user
+            let password = request.password.ok_or_else(|| anyhow::anyhow!("Password required for new user"))?;
+            
+            if password.len() < 6 {
+                return Ok(Json(SaveUserResponse {
+                    success: false,
+                    message: "Password must be at least 6 characters".to_string(),
+                    user_id: None,
+                }));
+            }
+
+            let password_hash = AuthManager::hash_password(&password)?;
+            let user_id = state.db.create_user(&request.username, request.email.as_deref(), &password_hash).await?;
+
+            Ok(Json(SaveUserResponse {
+                success: true,
+                message: "User created successfully".to_string(),
+                user_id: Some(user_id),
+            }))
+        }
+    }
+}
+
+/// DELETE /users - Delete a user
+async fn delete_user(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<DeleteUserRequest>,
+) -> Result<Json<DeleteUserResponse>, AppError> {
+    info!("Deleting user id: {}", request.id);
+
+    // Don't allow deleting the last user
+    let users = state.db.get_users().await?;
+    if users.len() <= 1 {
+        return Ok(Json(DeleteUserResponse {
+            success: false,
+            message: "Cannot delete the last user".to_string(),
+        }));
+    }
+
+    state.db.delete_user(request.id).await?;
+
+    Ok(Json(DeleteUserResponse {
+        success: true,
+        message: "User deleted successfully".to_string(),
     }))
 }
 

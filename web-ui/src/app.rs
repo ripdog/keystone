@@ -74,7 +74,11 @@ pub fn App() -> impl IntoView {
                         <Route
                             path=path!("/settings")
                             view=move || view! {
-                                <SettingsPage state=state/>
+                                <SettingsPage
+                                    state=state
+                                    auth_token=auth_token
+                                    on_unauthorized=on_unauthorized
+                                />
                             }
                         />
                     </Routes>

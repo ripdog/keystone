@@ -61,21 +61,21 @@ dev-web: build
     @echo "Starting web UI in dev mode on http://localhost:8080"
     target/debug/keystone-web-ui
 
-# Watch and rebuild on changes (requires cargo-watch)
-watch:
-    cargo watch -x build
-
-# Watch and run tests on changes
-watch-test:
-    cargo watch -x test
-
 # Build WASM frontend (requires trunk)
 build-wasm:
-    cd web-ui && trunk build
+    cd web-ui && ~/.cargo/bin/trunk build --release
 
 # Serve WASM frontend with hot reload (requires trunk)
 serve-wasm:
-    cd web-ui && trunk serve
+    cd web-ui && ~/.cargo/bin/trunk serve
+
+# Build everything including WASM, then run (development)
+dev-full: build-wasm dev-web
+    @echo "✅ Full development build ready"
+
+# Run web UI with WASM built (requires trunk)
+run-full: build-wasm run-web
+    @echo "✅ Web UI running with WASM at http://localhost:8080"
 
 # Update dependencies
 update:

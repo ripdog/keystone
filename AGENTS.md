@@ -302,8 +302,77 @@ Create files:
 1. **System State Reading**: Parse existing networkd and nftables configs
 2. **Configuration Application**: Write configs and reload services
 3. **API Integration**: Wire up frontend to actual API calls
-4. **Authentication**: Add user authentication (future)
+4. ~~**Authentication**: Add user authentication (future)~~ **✓ COMPLETED**
 5. **HTTPS**: Add TLS support for web UI (future)
+
+## Authentication System
+
+Keystone now includes a JWT-based authentication system with the following features:
+
+### Architecture
+
+- **Password Storage**: Admin password is hashed with Argon2 and stored in `/etc/keystone/keystone.toml`
+- **JWT Tokens**: The daemon issues JWTs signed with an ephemeral key (regenerated on restart)
+- **Token Expiry**: Tokens are valid for 24 hours
+- **Protected Endpoints**: All mutation endpoints (`/state`, `/apply`) require authentication
+
+### Configuration File
+
+On first run, the daemon creates `/etc/keystone/keystone.toml` with:
+- Default password: `admin` (⚠️ CHANGE IMMEDIATELY IN PRODUCTION)
+- Restrictive permissions: `chmod 600` (owner read/write only)
+
+Example configuration:
+```toml
+admin_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
+```
+
+### API Endpoints
+
+**Public Endpoints** (no authentication required):
+- `GET /health` - Health check
+- `POST /login` - Login with password to receive JWT token
+
+**Protected Endpoints** (require `Authorization: Bearer <token>` header):
+- `GET /state` - Retrieve current system state
+- `POST /apply` - Apply new configuration
+
+### Usage Example
+
+```bash
+# 1. Login to get token
+curl -X POST http://localhost:8080/api/login \
+  -H "Content-Type: application/json" \
+  -d '{"password": "admin"}'
+
+# Response: {"success": true, "token": "eyJhbGc...", "message": "Login successful"}
+
+# 2. Use token for authenticated requests
+TOKEN="eyJhbGc..."
+curl -X GET http://localhost:8080/api/state \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Security Features
+
+1. **Privilege Separation**: Web UI never has root access
+2. **Ephemeral Keys**: JWT signing keys are generated in-memory on daemon startup
+3. **Automatic Logout**: Restarting daemon invalidates all tokens
+4. **Argon2 Hashing**: Industry-standard password hashing (resistant to GPU attacks)
+5. **No Network Exposure**: Daemon only accessible via Unix socket
+
+### Changing the Admin Password
+
+To change the admin password, manually update `/etc/keystone/keystone.toml` with a new Argon2 hash:
+
+```bash
+# Generate hash (using a tool or script)
+# Then update the config file
+sudo vim /etc/keystone/keystone.toml
+
+# Restart daemon to load new config
+sudo systemctl restart keystone-daemon
+```
 
 ## Resources
 

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Keystone Router Manager - Error</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link data-trunk rel="rust" data-wasm-opt="z" data-cargo-no-default-features/>
+</head>
+<body class="bg-gray-900 text-white flex items-center justify-center min-h-screen p-4">
+    <div class="max-w-2xl w-full bg-red-900/20 border-2 border-red-500 rounded-lg p-8">
+        <div class="flex items-center gap-4 mb-6">
+            <svg class="w-12 h-12 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <h1 class="text-3xl font-bold text-red-400">WASM Bundle Failed to Load</h1>
+        </div>
+        <div class="space-y-4 text-gray-300">
+            <p class="text-lg">The WebAssembly bundle for Keystone could not be loaded. This means the application cannot start.</p>
+            
+            <div class="bg-gray-800/50 border border-gray-700 rounded p-4">
+                <h2 class="text-xl font-semibold text-red-400 mb-2">Possible Causes:</h2>
+                <ul class="list-disc list-inside space-y-2 ml-2">
+                    <li>The WASM bundle was not built (run <code class="bg-gray-900 px-2 py-1 rounded">trunk build</code>)</li>
+                    <li>The web server is not running from the correct directory (must run from <code class="bg-gray-900 px-2 py-1 rounded">web-ui/</code> directory)</li>
+                    <li>The <code class="bg-gray-900 px-2 py-1 rounded">dist/</code> folder is missing or empty</li>
+                    <li>Static file serving is misconfigured</li>
+                </ul>
+            </div>
+
+            <div class="bg-gray-800/50 border border-gray-700 rounded p-4">
+                <h2 class="text-xl font-semibold text-green-400 mb-2">To Fix:</h2>
+                <ol class="list-decimal list-inside space-y-2 ml-2">
+                    <li>Navigate to the web-ui directory: <code class="bg-gray-900 px-2 py-1 rounded">cd web-ui/</code></li>
+                    <li>Build the WASM bundle: <code class="bg-gray-900 px-2 py-1 rounded">trunk build</code></li>
+                    <li>Run the server from the web-ui directory: <code class="bg-gray-900 px-2 py-1 rounded">../target/release/keystone-web-ui</code></li>
+                    <li>Or use: <code class="bg-gray-900 px-2 py-1 rounded">just run-web</code> from the repository root</li>
+                </ol>
+            </div>
+
+            <div class="mt-6 pt-6 border-t border-gray-700">
+                <p class="text-sm text-gray-400">Check the browser console (F12) for additional error details.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -33,6 +33,13 @@ tracing-subscriber.workspace = true
 # Unix utilities
 nix = { version = "0.29", features = ["user"] }
 
+# Authentication
+argon2.workspace = true
+jsonwebtoken.workspace = true
+rand.workspace = true
+toml = "0.8"
+libc = "0.2.178"
+
 [[bin]]
 name = "keystone-daemon"
 path = "src/main.rs"

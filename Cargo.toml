@@ -4,7 +4,7 @@ resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Keystone Project"]
 license = "MIT"
 
@@ -24,10 +24,15 @@ hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 
 # Leptos
-leptos = { version = "0.8", features = ["csr"] }
+leptos = { version = "0.8", features = ["csr", "nightly"] }
 leptos_axum = "0.8"
 leptos_meta = "0.8"
 leptos_router = "0.8"
+
+# Auth
+argon2 = "0.5"
+jsonwebtoken = "9.2"
+rand = "0.8"
 
 # Others
 tracing = "0.1"

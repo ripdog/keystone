@@ -82,6 +82,30 @@ just ci             # clippy + fmt-check + test
 
 ## Coding Standards
 
+### Documentation-First Development
+
+**⚠️ CRITICAL: Always consult documentation before implementing framework-specific features!**
+
+1. **Leptos Features**: Before implementing any Leptos UI component, signal, or reactive pattern:
+   - Use the `leptos-mcp-list-sections` tool to see available documentation
+   - Use `leptos-mcp-get-documentation` to read relevant sections
+   - Search web for "Leptos [feature] documentation" if needed
+   - **Common pitfalls**:
+     - `For` component reactivity requires proper key functions
+     - Signal reactivity patterns (`.get()`, `.set()`, `.update()`)
+     - Component lifecycle and effects
+
+2. **Other Frameworks**: When working with unfamiliar libraries/frameworks:
+   - Search official documentation first using `web_search`
+   - Check for MCP tools that provide documentation access
+   - Verify implementation patterns match current best practices
+   - Don't assume patterns from other frameworks apply
+
+3. **Why This Matters**:
+   - Saves debugging time on subtle reactivity issues
+   - Ensures idiomatic code that follows framework conventions
+   - Prevents implementing workarounds for non-existent problems
+
 ### Rust Guidelines
 
 1. **No Unsafe Code**: Avoid `unsafe` unless absolutely necessary and thoroughly documented
@@ -311,31 +335,43 @@ Keystone now includes a JWT-based authentication system with the following featu
 
 ### Architecture
 
-- **Password Storage**: Admin password is hashed with Argon2 and stored in `/etc/keystone/keystone.toml`
-- **JWT Tokens**: The daemon issues JWTs signed with an ephemeral key (regenerated on restart)
+- **User Management**: Multiple users with username, optional email, and Argon2-hashed passwords stored in SQLite database
+- **JWT Tokens**: The daemon issues JWTs signed with a persistent key stored in database (survives daemon restarts)
 - **Token Expiry**: Tokens are valid for 24 hours
-- **Protected Endpoints**: All mutation endpoints (`/state`, `/apply`) require authentication
+- **Protected Endpoints**: All mutation endpoints (`/state`, `/apply`, `/users`) require authentication
 
-### Configuration File
+### Database Storage
 
-On first run, the daemon creates `/etc/keystone/keystone.toml` with:
-- Default password: `admin` (⚠️ CHANGE IMMEDIATELY IN PRODUCTION)
-- Restrictive permissions: `chmod 600` (owner read/write only)
+The daemon uses SQLite at `/var/lib/keystone/keystone.db` with tables:
+- `users` - User accounts (id, username, email, password_hash, created_at)
+- `jwt_key` - Persistent JWT signing key
+- `managed_interfaces` - Interface configurations
 
-Example configuration:
-```toml
-admin_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
-```
+### User Management
+
+**Web UI** (Settings page):
+- Add/edit/delete users with username, email (optional), and password
+- Cannot delete the last user (prevents lockout)
+- Password changes require entering new password
+- User list updates reactively when modified
+
+**Default User**:
+- On first run, creates default user: `admin` / `admin`
+- ⚠️ CHANGE IMMEDIATELY IN PRODUCTION
+- Automatically migrates from old `/etc/keystone/keystone.toml` if present
 
 ### API Endpoints
 
 **Public Endpoints** (no authentication required):
 - `GET /health` - Health check
-- `POST /login` - Login with password to receive JWT token
+- `POST /login` - Login with username and password to receive JWT token
 
 **Protected Endpoints** (require `Authorization: Bearer <token>` header):
 - `GET /state` - Retrieve current system state
 - `POST /apply` - Apply new configuration
+- `GET /users` - List all users (without password hashes)
+- `POST /users` - Create or update user
+- `DELETE /users` - Delete user (prevents deleting last user)
 
 ### Usage Example
 
@@ -343,7 +379,7 @@ admin_password_hash = "$argon2id$v=19$m=19456,t=2,p=1$..."
 # 1. Login to get token
 curl -X POST http://localhost:8080/api/login \
   -H "Content-Type: application/json" \
-  -d '{"password": "admin"}'
+  -d '{"username": "admin", "password": "admin"}'
 
 # Response: {"success": true, "token": "eyJhbGc...", "message": "Login successful"}
 
@@ -351,33 +387,43 @@ curl -X POST http://localhost:8080/api/login \
 TOKEN="eyJhbGc..."
 curl -X GET http://localhost:8080/api/state \
   -H "Authorization: Bearer $TOKEN"
+
+# 3. Create a new user
+curl -X POST http://localhost:8080/api/users \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice", "email": "alice@example.com", "password": "secure_password"}'
+
+# 4. Update user email (password optional)
+curl -X POST http://localhost:8080/api/users \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"id": 2, "username": "alice", "email": "alice.new@example.com"}'
 ```
 
 ### Security Features
 
 1. **Privilege Separation**: Web UI never has root access
-2. **Ephemeral Keys**: JWT signing keys are generated in-memory on daemon startup
-3. **Automatic Logout**: Restarting daemon invalidates all tokens
+2. **Persistent Keys**: JWT signing keys stored in database, survive daemon restarts
+3. **Multi-User Support**: Multiple users with unique credentials
 4. **Argon2 Hashing**: Industry-standard password hashing (resistant to GPU attacks)
 5. **No Network Exposure**: Daemon only accessible via Unix socket
+6. **Database Security**: SQLite database at `/var/lib/keystone/keystone.db` with restricted permissions
 
-### Changing the Admin Password
+### Leptos Reactivity Lessons Learned
 
-To change the admin password, manually update `/etc/keystone/keystone.toml` with a new Argon2 hash:
-
-```bash
-# Generate hash (using a tool or script)
-# Then update the config file
-sudo vim /etc/keystone/keystone.toml
-
-# Restart daemon to load new config
-sudo systemctl restart keystone-daemon
-```
+**`For` Component Keys**: When using `<For/>` to iterate over lists where items can be updated in-place:
+- The `key` function must include all fields that should trigger a re-render
+- **Wrong**: `key=|user| user.id` - won't update when username/email changes
+- **Correct**: `key=|user| (user.id, user.username.clone(), user.email.clone())` - updates when any field changes
+- Alternative: Make individual fields reactive signals (more complex)
+- See: https://book.leptos.dev/view/04b_iteration.html
 
 ## Resources
 
+- **[Leptos Book](https://book.leptos.dev/)** - Primary reference for Leptos framework
+- **[Leptos Iteration Docs](https://book.leptos.dev/view/04_iteration.html)** - For component reactivity
 - [Axum Documentation](https://docs.rs/axum/)
-- [Leptos Book](https://leptos.dev/)
 - [systemd-networkd](https://www.freedesktop.org/software/systemd/man/systemd-networkd.html)
 - [nftables Wiki](https://wiki.nftables.org/)
 

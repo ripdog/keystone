@@ -18,12 +18,11 @@ pub fn main() {
     web_sys::console::log_1(&"Keystone WASM initializing...".into());
     
     // Clear body content before mounting
-    if let Some(window) = web_sys::window() {
-        if let Some(document) = window.document() {
-            if let Some(body) = document.body() {
-                body.set_inner_html("");
-            }
-        }
+    if let Some(window) = web_sys::window()
+        && let Some(document) = window.document()
+        && let Some(body) = document.body()
+    {
+        body.set_inner_html("");
     }
     
     leptos::mount::mount_to_body(App);

@@ -95,11 +95,13 @@ pub fn SettingsPage(
                 Ok(response) => {
                     if response.success {
                         set_show_user_modal.set(false);
-                        set_success_msg.set(Some(response.message));
+                        set_success_msg.set(Some(response.message.clone()));
                         // Reload users
-                        match api::fetch_users(&token).await {
-                            Ok(users_list) => set_users.set(users_list),
-                            Err(_) => {}
+                        if let Ok(users_list) = api::fetch_users(&token).await {
+                            leptos::logging::log!("Reloaded {} users after save", users_list.len());
+                            set_users.set(users_list);
+                        } else {
+                            leptos::logging::warn!("Failed to reload users after save");
                         }
                     } else {
                         set_error_msg.set(Some(response.message));
@@ -133,11 +135,13 @@ pub fn SettingsPage(
             match api::delete_user(&token, user_id).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        set_success_msg.set(Some(response.message.clone()));
                         // Reload users
-                        match api::fetch_users(&token).await {
-                            Ok(users_list) => set_users.set(users_list),
-                            Err(_) => {}
+                        if let Ok(users_list) = api::fetch_users(&token).await {
+                            leptos::logging::log!("Reloaded {} users after delete", users_list.len());
+                            set_users.set(users_list);
+                        } else {
+                            leptos::logging::warn!("Failed to reload users after delete");
                         }
                     } else {
                         set_error_msg.set(Some(response.message));
@@ -181,16 +185,18 @@ pub fn SettingsPage(
                 <div class="space-y-2">
                     <For
                         each=move || users.get()
-                        key=|user| user.id
+                        key=|user| (user.id, user.username.clone(), user.email.clone())
                         children=move |user: UserInfo| {
                             let user_for_edit = user.clone();
                             let user_id_for_delete = user.id;
+                            let username = user.username.clone();
+                            let email = user.email.clone();
                             view! {
                                 <div class="flex items-center justify-between p-4 bg-gray-700 rounded">
                                     <div>
-                                        <h3 class="font-medium text-white">{user.username.clone()}</h3>
+                                        <h3 class="font-medium text-white">{username}</h3>
                                         <p class="text-sm text-gray-400">
-                                            {user.email.clone().unwrap_or_else(|| "No email".to_string())}
+                                            {email.unwrap_or_else(|| "No email".to_string())}
                                         </p>
                                     </div>
                                     <div class="flex gap-2">

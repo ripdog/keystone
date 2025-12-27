@@ -80,7 +80,7 @@ pub fn DashboardPage(
     Effect::new(move |_| {
         if auth_token.get().is_some() {
             do_poll();
-            let interval = Interval::new(1000, move || do_poll());
+            let interval = Interval::new(1000, do_poll);
             std::mem::forget(interval);
         }
     });

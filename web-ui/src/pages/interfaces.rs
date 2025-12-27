@@ -26,12 +26,6 @@ pub fn InterfacesPage(
 
     // Load managed interfaces on mount
     {
-        let auth_token = auth_token.clone();
-        let set_managed_interfaces = set_managed_interfaces.clone();
-        let set_loading = set_loading.clone();
-        let set_error = set_error.clone();
-        let on_unauthorized = on_unauthorized.clone();
-
         spawn_local(async move {
             if let Some(token) = auth_token.get() {
                 match api::fetch_managed_interfaces(&token).await {
@@ -90,16 +84,6 @@ pub fn InterfacesPage(
 
     // Save changes
     let save_changes = move |_| {
-        let auth_token = auth_token.clone();
-        let managed_interfaces = managed_interfaces.clone();
-        let pending_changes = pending_changes.clone();
-        let set_managed_interfaces = set_managed_interfaces.clone();
-        let set_pending_changes = set_pending_changes.clone();
-        let set_saving = set_saving.clone();
-        let set_error = set_error.clone();
-        let set_success = set_success.clone();
-        let on_unauthorized = on_unauthorized.clone();
-
         spawn_local(async move {
             set_saving.set(true);
             set_error.set(None);

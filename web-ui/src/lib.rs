@@ -2,6 +2,10 @@
 //!
 //! This module exports the Leptos app for WASM compilation
 
+mod api;
+mod components;
+mod pages;
+
 pub mod app;
 
 use wasm_bindgen::prelude::wasm_bindgen;

@@ -129,16 +129,16 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `PoolOffset=` | u32 | Start of DHCP pool | P1 | ⬜ TODO |
-| `PoolSize=` | u32 | Size of DHCP pool | P1 | ⬜ TODO |
-| `DefaultLeaseTimeSec=` | duration | Default lease time | P1 | ⬜ TODO |
-| `MaxLeaseTimeSec=` | duration | Max lease time | P2 | ⬜ TODO |
-| `EmitDNS=` | bool | Provide DNS to clients | P1 | ⬜ TODO |
-| `DNS=` | IP list | DNS servers to provide | P1 | ⬜ TODO |
-| `EmitNTP=` | bool | Provide NTP to clients | P2 | ⬜ TODO |
-| `NTP=` | IP list | NTP servers to provide | P2 | ⬜ TODO |
-| `EmitRouter=` | bool | Provide router to clients | P1 | ⬜ TODO |
-| `Router=` | IP | Router address to provide | P2 | ⬜ TODO |
+| `PoolOffset=` | u32 | Start of DHCP pool | P1 | ✅ DONE |
+| `PoolSize=` | u32 | Size of DHCP pool | P1 | ✅ DONE |
+| `DefaultLeaseTimeSec=` | duration | Default lease time | P1 | ✅ DONE |
+| `MaxLeaseTimeSec=` | duration | Max lease time | P2 | ✅ DONE |
+| `EmitDNS=` | bool | Provide DNS to clients | P1 | ✅ DONE |
+| `DNS=` | IP list | DNS servers to provide | P1 | 🔄 TYPES DONE |
+| `EmitNTP=` | bool | Provide NTP to clients | P2 | 🔄 TYPES DONE |
+| `NTP=` | IP list | NTP servers to provide | P2 | 🔄 TYPES DONE |
+| `EmitRouter=` | bool | Provide router to clients | P1 | ✅ DONE |
+| `Router=` | IP | Router address to provide | P2 | 🔄 TYPES DONE |
 | `EmitTimezone=` | bool | Provide timezone | P3 | ⬜ TODO |
 | `Timezone=` | string | Timezone to provide | P3 | ⬜ TODO |
 | `ServerAddress=` | CIDR | DHCP server address | P2 | ⬜ TODO |
@@ -149,8 +149,8 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `MACAddress=` | MAC | Client MAC address | P1 | ⬜ TODO |
-| `Address=` | IP | Reserved IP address | P1 | ⬜ TODO |
+| `MACAddress=` | MAC | Client MAC address | P1 | ✅ DONE |
+| `Address=` | IP | Reserved IP address | P1 | ✅ DONE |
 
 ### [Link] Section (from .network file)
 

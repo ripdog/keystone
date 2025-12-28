@@ -286,6 +286,7 @@ impl Database {
                 activation_policy: ActivationPolicy::default(),
                 dhcpv4_client,
                 dhcpv6_client,
+                dhcp_server: None, // TODO: Load from database
                 ipv6_accept_ra,
                 ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                 ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -332,6 +333,7 @@ impl Database {
                     activation_policy: ActivationPolicy::default(),
                     dhcpv4_client,
                     dhcpv6_client,
+                    dhcp_server: None, // TODO: Load from database
                     ipv6_accept_ra,
                     ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                     ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),

@@ -1,9 +1,9 @@
 //! Interface edit page for configuring individual interface settings
 
 use keystone_core::{
-    ActivationPolicy, AddressScope, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
-    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, LinkLocalMode, RouteType,
-    StaticAddress, StaticRoute,
+    ActivationPolicy, AddressScope, DhcpMode, DhcpServerConfig, DhcpStaticLease,
+    Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
+    IpMasqueradeMode, LinkLocalMode, RouteType, StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -66,9 +66,22 @@ pub fn InterfaceEditPage(
     let (required_for_online, set_required_for_online) = signal(true);
     let (activation_policy, set_activation_policy) = signal(ActivationPolicy::default());
     
+    // DHCP Server settings (for LAN interfaces)
+    let (dhcp_server_enabled, set_dhcp_server_enabled) = signal(false);
+    let (dhcp_pool_offset, set_dhcp_pool_offset) = signal(String::from("100"));
+    let (dhcp_pool_size, set_dhcp_pool_size) = signal(String::from("100"));
+    let (dhcp_lease_time, set_dhcp_lease_time) = signal(String::from("3600"));
+    let (dhcp_emit_dns, set_dhcp_emit_dns) = signal(true);
+    let (dhcp_emit_router, set_dhcp_emit_router) = signal(true);
+    let (dhcp_static_leases, set_dhcp_static_leases) = signal::<Vec<DhcpStaticLease>>(vec![]);
+    let (new_lease_mac, set_new_lease_mac) = signal(String::new());
+    let (new_lease_ip, set_new_lease_ip) = signal(String::new());
+    let (new_lease_hostname, set_new_lease_hostname) = signal(String::new());
+    
     // UI state
     let (show_advanced, set_show_advanced) = signal(false);
     let (show_interface_state, set_show_interface_state) = signal(false);
+    let (show_dhcp_server, set_show_dhcp_server) = signal(false);
 
     // Load interface configuration
     Effect::new(move |_| {
@@ -117,6 +130,17 @@ pub fn InterfaceEditPage(
                         set_required_for_online.set(cfg.required_for_online);
                         set_activation_policy.set(cfg.activation_policy);
                         
+                        // DHCP Server settings
+                        if let Some(dhcp_srv) = &cfg.dhcp_server {
+                            set_dhcp_server_enabled.set(dhcp_srv.enabled);
+                            set_dhcp_pool_offset.set(dhcp_srv.pool_offset.map(|v| v.to_string()).unwrap_or_default());
+                            set_dhcp_pool_size.set(dhcp_srv.pool_size.map(|v| v.to_string()).unwrap_or_default());
+                            set_dhcp_lease_time.set(dhcp_srv.default_lease_time_secs.map(|v| v.to_string()).unwrap_or_default());
+                            set_dhcp_emit_dns.set(dhcp_srv.emit_dns);
+                            set_dhcp_emit_router.set(dhcp_srv.emit_router);
+                            set_dhcp_static_leases.set(dhcp_srv.static_leases.clone());
+                        }
+                        
                         set_config.set(Some(cfg));
                         set_is_new.set(false);
                     }
@@ -139,6 +163,7 @@ pub fn InterfaceEditPage(
                             activation_policy: ActivationPolicy::default(),
                             dhcpv4_client: None,
                             dhcpv6_client: None,
+                            dhcp_server: None,
                             ipv6_accept_ra: true,
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
@@ -302,6 +327,26 @@ pub fn InterfaceEditPage(
                     None
                 };
                 
+                // Build DHCP server config (for LAN interfaces)
+                let dhcp_server = if dhcp_server_enabled.get() {
+                    Some(DhcpServerConfig {
+                        enabled: true,
+                        pool_offset: dhcp_pool_offset.get().parse().ok(),
+                        pool_size: dhcp_pool_size.get().parse().ok(),
+                        default_lease_time_secs: dhcp_lease_time.get().parse().ok(),
+                        max_lease_time_secs: dhcp_lease_time.get().parse::<u32>().ok().map(|v| v * 24), // Max = 24x default
+                        emit_dns: dhcp_emit_dns.get(),
+                        dns_servers: vec![], // Uses interface DNS by default
+                        emit_ntp: false,
+                        ntp_servers: vec![],
+                        emit_router: dhcp_emit_router.get(),
+                        router_address: None, // Uses interface address by default
+                        static_leases: dhcp_static_leases.get(),
+                    })
+                } else {
+                    None
+                };
+                
                 let updated = InterfaceConfig {
                     id: current.id,
                     name: current.name.clone(),
@@ -319,6 +364,7 @@ pub fn InterfaceEditPage(
                     activation_policy: activation_policy.get(),
                     dhcpv4_client,
                     dhcpv6_client,
+                    dhcp_server,
                     ipv6_accept_ra: ipv6_accept_ra.get(),
                     ip_forward: ip_forward.get(),
                     ip_masquerade: ip_masquerade.get(),
@@ -373,6 +419,13 @@ pub fn InterfaceEditPage(
             .collect::<Vec<_>>()
     };
     let routes_indexed = move || routes.get().into_iter().enumerate().collect::<Vec<_>>();
+    let static_leases_indexed = move || {
+        dhcp_static_leases
+            .get()
+            .into_iter()
+            .enumerate()
+            .collect::<Vec<_>>()
+    };
 
     view! {
         <div class="space-y-6">
@@ -818,6 +871,196 @@ pub fn InterfaceEditPage(
                             </div>
                         </Show>
                     </div>
+
+                    // DHCP Server Settings (only shown for LAN interfaces)
+                    <Show when=move || role.get() == InterfaceRole::LAN>
+                        <div class="border border-gray-600 rounded-lg overflow-hidden">
+                            <button
+                                type="button"
+                                class="w-full flex items-center justify-between px-4 py-3 bg-gray-700/50 hover:bg-gray-700 text-left"
+                                on:click=move |_| set_show_dhcp_server.update(|v| *v = !*v)
+                            >
+                                <div class="flex items-center gap-3">
+                                    <span class="text-gray-200 font-medium">"DHCP Server"</span>
+                                    <Show when=move || dhcp_server_enabled.get()>
+                                        <span class="text-xs bg-green-600 text-white px-2 py-0.5 rounded">"Enabled"</span>
+                                    </Show>
+                                </div>
+                                <svg
+                                    class="w-5 h-5 text-gray-400 transition-transform"
+                                    class:rotate-180=move || show_dhcp_server.get()
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                            <Show when=move || show_dhcp_server.get()>
+                                <div class="p-4 space-y-4 border-t border-gray-600">
+                                    // Enable DHCP Server
+                                    <div>
+                                        <label class="flex items-center gap-3 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked=move || dhcp_server_enabled.get()
+                                                on:change=move |ev| set_dhcp_server_enabled.set(event_target_checked(&ev))
+                                                class="w-5 h-5 rounded"
+                                            />
+                                            <span class="text-gray-200 font-medium">"Enable DHCP Server"</span>
+                                        </label>
+                                        <p class="text-gray-500 text-sm mt-1 ml-8">"Provide IP addresses to clients on this network"</p>
+                                    </div>
+
+                                    <Show when=move || dhcp_server_enabled.get()>
+                                        // Pool Settings
+                                        <div class="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label class="block text-gray-300 mb-2 text-sm">"Pool Offset"</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="100"
+                                                    prop:value=move || dhcp_pool_offset.get()
+                                                    on:input=move |ev| set_dhcp_pool_offset.set(event_target_value(&ev))
+                                                    class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                                                />
+                                                <p class="text-gray-500 text-xs mt-1">"Start offset from network (e.g., 100 = .100)"</p>
+                                            </div>
+                                            <div>
+                                                <label class="block text-gray-300 mb-2 text-sm">"Pool Size"</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="100"
+                                                    prop:value=move || dhcp_pool_size.get()
+                                                    on:input=move |ev| set_dhcp_pool_size.set(event_target_value(&ev))
+                                                    class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                                                />
+                                                <p class="text-gray-500 text-xs mt-1">"Number of addresses in pool"</p>
+                                            </div>
+                                        </div>
+
+                                        // Lease Time
+                                        <div>
+                                            <label class="block text-gray-300 mb-2 text-sm">"Default Lease Time (seconds)"</label>
+                                            <input
+                                                type="text"
+                                                placeholder="3600"
+                                                prop:value=move || dhcp_lease_time.get()
+                                                on:input=move |ev| set_dhcp_lease_time.set(event_target_value(&ev))
+                                                class="w-48 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                                            />
+                                            <p class="text-gray-500 text-xs mt-1">"How long clients keep their address (3600 = 1 hour)"</p>
+                                        </div>
+
+                                        // Emit Options
+                                        <div class="grid grid-cols-2 gap-4">
+                                            <label class="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked=move || dhcp_emit_dns.get()
+                                                    on:change=move |ev| set_dhcp_emit_dns.set(event_target_checked(&ev))
+                                                    class="w-4 h-4 rounded"
+                                                />
+                                                <span class="text-gray-300">"Provide DNS servers"</span>
+                                            </label>
+                                            <label class="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked=move || dhcp_emit_router.get()
+                                                    on:change=move |ev| set_dhcp_emit_router.set(event_target_checked(&ev))
+                                                    class="w-4 h-4 rounded"
+                                                />
+                                                <span class="text-gray-300">"Provide gateway/router"</span>
+                                            </label>
+                                        </div>
+
+                                        // Static Leases section
+                                        <div class="border-t border-gray-600 pt-4">
+                                            <h4 class="text-gray-200 font-medium mb-3">"Static Leases (Reserved Addresses)"</h4>
+                                            <div class="space-y-2">
+                                                <For
+                                                    each=static_leases_indexed
+                                                    key=|(i, lease)| (*i, lease.mac_address.clone(), lease.ip_address.clone())
+                                                    children=move |(i, lease)| {
+                                                        let hostname_display = lease.hostname.clone().unwrap_or_default();
+                                                        let hostname_for_show = hostname_display.clone();
+                                                        view! {
+                                                            <div class="flex items-center gap-2 bg-gray-700/50 rounded px-3 py-2">
+                                                                <span class="flex-1 text-sm font-mono">{lease.mac_address}</span>
+                                                                <span class="text-gray-400">"→"</span>
+                                                                <span class="text-sm">{lease.ip_address}</span>
+                                                                <Show when=move || !hostname_for_show.is_empty()>
+                                                                    <span class="text-gray-400 text-sm">"("{hostname_display.clone()}")"</span>
+                                                                </Show>
+                                                                <button
+                                                                    class="text-red-400 hover:text-red-300 px-2"
+                                                                    on:click=move |_| {
+                                                                        set_dhcp_static_leases.update(|list| {
+                                                                            if i < list.len() {
+                                                                                list.remove(i);
+                                                                            }
+                                                                        });
+                                                                    }
+                                                                >
+                                                                    "✕"
+                                                                </button>
+                                                            </div>
+                                                        }
+                                                    }
+                                                />
+                                                // Add new lease form
+                                                <div class="flex gap-2 flex-wrap">
+                                                    <input
+                                                        type="text"
+                                                        placeholder="MAC (00:11:22:33:44:55)"
+                                                        prop:value=move || new_lease_mac.get()
+                                                        on:input=move |ev| set_new_lease_mac.set(event_target_value(&ev))
+                                                        class="flex-1 min-w-40 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 font-mono text-sm"
+                                                    />
+                                                    <input
+                                                        type="text"
+                                                        placeholder="IP (192.168.1.200)"
+                                                        prop:value=move || new_lease_ip.get()
+                                                        on:input=move |ev| set_new_lease_ip.set(event_target_value(&ev))
+                                                        class="w-36 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 text-sm"
+                                                    />
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Hostname (optional)"
+                                                        prop:value=move || new_lease_hostname.get()
+                                                        on:input=move |ev| set_new_lease_hostname.set(event_target_value(&ev))
+                                                        class="w-32 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 text-sm"
+                                                    />
+                                                    <button
+                                                        class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm"
+                                                        on:click=move |_| {
+                                                            let mac = new_lease_mac.get();
+                                                            let ip = new_lease_ip.get();
+                                                            if !mac.is_empty() && !ip.is_empty() {
+                                                                let hostname = new_lease_hostname.get();
+                                                                set_dhcp_static_leases.update(|list| {
+                                                                    list.push(DhcpStaticLease {
+                                                                        mac_address: mac,
+                                                                        ip_address: ip,
+                                                                        hostname: if hostname.is_empty() { None } else { Some(hostname) },
+                                                                    });
+                                                                });
+                                                                set_new_lease_mac.set(String::new());
+                                                                set_new_lease_ip.set(String::new());
+                                                                set_new_lease_hostname.set(String::new());
+                                                            }
+                                                        }
+                                                    >
+                                                        "Add"
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </Show>
+                                </div>
+                            </Show>
+                        </div>
+                    </Show>
 
                     // Save/Cancel buttons
                     <div class="flex gap-3 pt-4 border-t border-gray-700">

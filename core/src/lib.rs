@@ -414,6 +414,65 @@ impl Default for Dhcpv6ClientConfig {
     }
 }
 
+/// DHCP static lease for reserving IP addresses
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DhcpStaticLease {
+    /// Client MAC address (e.g., "00:11:22:33:44:55")
+    pub mac_address: String,
+    /// Reserved IP address (e.g., "192.168.1.100")
+    pub ip_address: String,
+    /// Optional hostname for the client
+    pub hostname: Option<String>,
+}
+
+/// DHCP server configuration for LAN interfaces
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DhcpServerConfig {
+    /// Whether DHCP server is enabled
+    pub enabled: bool,
+    /// Offset from network address for pool start (e.g., 100 for .100)
+    pub pool_offset: Option<u32>,
+    /// Number of addresses in the pool
+    pub pool_size: Option<u32>,
+    /// Default lease time in seconds
+    pub default_lease_time_secs: Option<u32>,
+    /// Maximum lease time in seconds
+    pub max_lease_time_secs: Option<u32>,
+    /// Whether to provide DNS servers to clients
+    pub emit_dns: bool,
+    /// DNS servers to provide (if empty, uses interface's DNS)
+    pub dns_servers: Vec<String>,
+    /// Whether to provide NTP servers to clients
+    pub emit_ntp: bool,
+    /// NTP servers to provide
+    pub ntp_servers: Vec<String>,
+    /// Whether to provide router/gateway to clients
+    pub emit_router: bool,
+    /// Router address to provide (if None, uses interface's address)
+    pub router_address: Option<String>,
+    /// Static DHCP leases (MAC to IP reservations)
+    pub static_leases: Vec<DhcpStaticLease>,
+}
+
+impl Default for DhcpServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pool_offset: Some(100),
+            pool_size: Some(100),
+            default_lease_time_secs: Some(3600),
+            max_lease_time_secs: Some(86400),
+            emit_dns: true,
+            dns_servers: Vec::new(),
+            emit_ntp: false,
+            ntp_servers: Vec::new(),
+            emit_router: true,
+            router_address: None,
+            static_leases: Vec::new(),
+        }
+    }
+}
+
 /// Complete interface configuration for systemd-networkd
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InterfaceConfig {
@@ -459,6 +518,11 @@ pub struct InterfaceConfig {
     /// DHCPv6 client configuration (only used when dhcp_mode includes IPv6)
     pub dhcpv6_client: Option<Dhcpv6ClientConfig>,
     
+    // DHCP server settings (for LAN interfaces)
+    /// DHCP server configuration (typically for LAN interfaces)
+    #[serde(default)]
+    pub dhcp_server: Option<DhcpServerConfig>,
+    
     // IPv6 settings
     /// Accept IPv6 Router Advertisements
     pub ipv6_accept_ra: bool,
@@ -493,6 +557,7 @@ impl Default for InterfaceConfig {
             activation_policy: ActivationPolicy::default(),
             dhcpv4_client: None,
             dhcpv6_client: None,
+            dhcp_server: None,
             ipv6_accept_ra: true,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
@@ -911,6 +976,24 @@ mod tests {
                 prefix_delegation_hint: Some("::1/64".to_string()),
                 rapid_commit: true,
                 without_ra: "no".to_string(),
+            }),
+            dhcp_server: Some(DhcpServerConfig {
+                enabled: true,
+                pool_offset: Some(100),
+                pool_size: Some(50),
+                default_lease_time_secs: Some(3600),
+                max_lease_time_secs: Some(86400),
+                emit_dns: true,
+                dns_servers: vec!["192.168.1.1".to_string()],
+                emit_ntp: false,
+                ntp_servers: vec![],
+                emit_router: true,
+                router_address: None,
+                static_leases: vec![DhcpStaticLease {
+                    mac_address: "00:11:22:33:44:55".to_string(),
+                    ip_address: "192.168.1.200".to_string(),
+                    hostname: Some("server1".to_string()),
+                }],
             }),
             ipv6_accept_ra: true,
             ip_forward: IpForwardMode::Yes,

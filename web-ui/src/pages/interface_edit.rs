@@ -1,8 +1,8 @@
 //! Interface edit page for configuring individual interface settings
 
 use keystone_core::{
-    DhcpMode, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, StaticAddress,
-    StaticRoute,
+    DhcpMode, Dhcpv4ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
+    StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -28,12 +28,15 @@ pub fn InterfaceEditPage(
 
     // Form fields
     let (role, set_role) = signal(InterfaceRole::LAN);
+    let (description, set_description) = signal(String::new());
     let (dhcp_mode, set_dhcp_mode) = signal(DhcpMode::No);
     let (addresses, set_addresses) = signal::<Vec<StaticAddress>>(vec![]);
     let (new_address, set_new_address) = signal(String::new());
     let (gateway, set_gateway) = signal(String::new());
     let (dns_servers, set_dns_servers) = signal::<Vec<String>>(vec![]);
     let (new_dns, set_new_dns) = signal(String::new());
+    let (search_domains, set_search_domains) = signal::<Vec<String>>(vec![]);
+    let (new_domain, set_new_domain) = signal(String::new());
     let (routes, set_routes) = signal::<Vec<StaticRoute>>(vec![]);
     let (new_route_dest, set_new_route_dest) = signal(String::new());
     let (new_route_gw, set_new_route_gw) = signal(String::new());
@@ -41,6 +44,15 @@ pub fn InterfaceEditPage(
     let (ipv6_accept_ra, set_ipv6_accept_ra) = signal(true);
     let (ip_forward, set_ip_forward) = signal(IpForwardMode::No);
     let (ip_masquerade, set_ip_masquerade) = signal(IpMasqueradeMode::No);
+    
+    // DHCPv4 client settings
+    let (dhcp_use_dns, set_dhcp_use_dns) = signal(true);
+    let (dhcp_use_ntp, set_dhcp_use_ntp) = signal(true);
+    let (dhcp_use_routes, set_dhcp_use_routes) = signal(true);
+    let (dhcp_use_gateway, set_dhcp_use_gateway) = signal(true);
+    let (dhcp_use_mtu, set_dhcp_use_mtu) = signal(true);
+    let (dhcp_send_hostname, set_dhcp_send_hostname) = signal(true);
+    let (dhcp_route_metric, set_dhcp_route_metric) = signal(String::new());
 
     // Load interface configuration
     Effect::new(move |_| {
@@ -54,14 +66,28 @@ pub fn InterfaceEditPage(
                     Ok(Some(cfg)) => {
                         // Populate form fields from config
                         set_role.set(cfg.role);
+                        set_description.set(cfg.description.clone().unwrap_or_default());
                         set_dhcp_mode.set(cfg.dhcp_mode);
                         set_addresses.set(cfg.addresses.clone());
                         set_gateway.set(cfg.gateway.clone().unwrap_or_default());
                         set_dns_servers.set(cfg.dns_servers.clone());
+                        set_search_domains.set(cfg.search_domains.clone());
                         set_routes.set(cfg.routes.clone());
                         set_ipv6_accept_ra.set(cfg.ipv6_accept_ra);
                         set_ip_forward.set(cfg.ip_forward);
                         set_ip_masquerade.set(cfg.ip_masquerade);
+                        
+                        // DHCPv4 client settings
+                        if let Some(dhcp_cfg) = &cfg.dhcpv4_client {
+                            set_dhcp_use_dns.set(dhcp_cfg.use_dns);
+                            set_dhcp_use_ntp.set(dhcp_cfg.use_ntp);
+                            set_dhcp_use_routes.set(dhcp_cfg.use_routes);
+                            set_dhcp_use_gateway.set(dhcp_cfg.use_gateway);
+                            set_dhcp_use_mtu.set(dhcp_cfg.use_mtu);
+                            set_dhcp_send_hostname.set(dhcp_cfg.send_hostname);
+                            set_dhcp_route_metric.set(dhcp_cfg.route_metric.map(|m| m.to_string()).unwrap_or_default());
+                        }
+                        
                         set_config.set(Some(cfg));
                         set_is_new.set(false);
                     }
@@ -72,11 +98,14 @@ pub fn InterfaceEditPage(
                             name: name.clone(),
                             role: InterfaceRole::LAN,
                             enabled: true,
+                            description: None,
                             dhcp_mode: DhcpMode::Ipv4,
                             addresses: vec![],
                             routes: vec![],
                             dns_servers: vec![],
+                            search_domains: vec![],
                             gateway: None,
+                            dhcpv4_client: None,
                             ipv6_accept_ra: true,
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
@@ -171,6 +200,26 @@ pub fn InterfaceEditPage(
         });
     };
 
+    // Add search domain (inner logic)
+    let do_add_domain = move || {
+        let domain = new_domain.get();
+        if !domain.is_empty() {
+            set_search_domains.update(|list| {
+                list.push(domain);
+            });
+            set_new_domain.set(String::new());
+        }
+    };
+
+    // Remove search domain
+    let remove_domain = move |index: usize| {
+        set_search_domains.update(|list| {
+            if index < list.len() {
+                list.remove(index);
+            }
+        });
+    };
+
     // Save configuration
     let save_changes = move |_| {
         spawn_local(async move {
@@ -182,16 +231,39 @@ pub fn InterfaceEditPage(
                 && let Some(current) = config.get()
             {
                 let gw = gateway.get();
+                let desc = description.get();
+                let current_dhcp_mode = dhcp_mode.get();
+                
+                // Build DHCPv4 client config if DHCP includes IPv4
+                let dhcpv4_client = if current_dhcp_mode == DhcpMode::Yes || current_dhcp_mode == DhcpMode::Ipv4 {
+                    Some(Dhcpv4ClientConfig {
+                        send_hostname: dhcp_send_hostname.get(),
+                        hostname: None,
+                        use_dns: dhcp_use_dns.get(),
+                        use_ntp: dhcp_use_ntp.get(),
+                        use_routes: dhcp_use_routes.get(),
+                        use_gateway: dhcp_use_gateway.get(),
+                        use_mtu: dhcp_use_mtu.get(),
+                        use_domains: "yes".to_string(),
+                        route_metric: dhcp_route_metric.get().parse::<u32>().ok(),
+                    })
+                } else {
+                    None
+                };
+                
                 let updated = InterfaceConfig {
                     id: current.id,
                     name: current.name.clone(),
                     role: role.get(),
                     enabled: true,
-                    dhcp_mode: dhcp_mode.get(),
+                    description: if desc.is_empty() { None } else { Some(desc) },
+                    dhcp_mode: current_dhcp_mode,
                     addresses: addresses.get(),
                     routes: routes.get(),
                     dns_servers: dns_servers.get(),
+                    search_domains: search_domains.get(),
                     gateway: if gw.is_empty() { None } else { Some(gw) },
+                    dhcpv4_client,
                     ipv6_accept_ra: ipv6_accept_ra.get(),
                     ip_forward: ip_forward.get(),
                     ip_masquerade: ip_masquerade.get(),
@@ -233,6 +305,13 @@ pub fn InterfaceEditPage(
     let addresses_indexed = move || addresses.get().into_iter().enumerate().collect::<Vec<_>>();
     let dns_indexed = move || {
         dns_servers
+            .get()
+            .into_iter()
+            .enumerate()
+            .collect::<Vec<_>>()
+    };
+    let domains_indexed = move || {
+        search_domains
             .get()
             .into_iter()
             .enumerate()
@@ -296,6 +375,19 @@ pub fn InterfaceEditPage(
                         </select>
                     </div>
 
+                    // Description
+                    <div>
+                        <label class="block text-gray-300 mb-2 font-medium">"Description"</label>
+                        <input
+                            type="text"
+                            placeholder="e.g., Main WAN connection"
+                            prop:value=move || description.get()
+                            on:input=move |ev| set_description.set(event_target_value(&ev))
+                            class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
+                        />
+                        <p class="text-gray-500 text-sm mt-1">"Optional human-readable description"</p>
+                    </div>
+
                     // DHCP Mode
                     <div>
                         <label class="block text-gray-300 mb-2 font-medium">"DHCP Mode"</label>
@@ -317,9 +409,90 @@ pub fn InterfaceEditPage(
                         </select>
                     </div>
 
+                    // DHCPv4 Client Settings (only show when DHCP includes IPv4)
+                    <Show when=move || dhcp_mode.get() == DhcpMode::Yes || dhcp_mode.get() == DhcpMode::Ipv4>
+                        <div class="bg-gray-700/50 rounded-lg p-4 space-y-4">
+                            <h3 class="text-gray-200 font-medium">"DHCPv4 Client Options"</h3>
+                            <div class="grid grid-cols-2 gap-4">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp_use_dns.get()
+                                        on:change=move |ev| set_dhcp_use_dns.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use DHCP DNS"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp_use_ntp.get()
+                                        on:change=move |ev| set_dhcp_use_ntp.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use DHCP NTP"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp_use_gateway.get()
+                                        on:change=move |ev| set_dhcp_use_gateway.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use DHCP Gateway"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp_use_routes.get()
+                                        on:change=move |ev| set_dhcp_use_routes.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use DHCP Routes"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp_use_mtu.get()
+                                        on:change=move |ev| set_dhcp_use_mtu.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use DHCP MTU"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp_send_hostname.get()
+                                        on:change=move |ev| set_dhcp_send_hostname.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Send Hostname"</span>
+                                </label>
+                            </div>
+                            <div>
+                                <label class="block text-gray-400 text-sm mb-1">"Route Metric (optional)"</label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g., 100"
+                                    prop:value=move || dhcp_route_metric.get()
+                                    on:input=move |ev| set_dhcp_route_metric.set(event_target_value(&ev))
+                                    class="w-32 bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
+                                />
+                            </div>
+                        </div>
+                    </Show>
+
                     // Static Addresses
                     <div>
                         <label class="block text-gray-300 mb-2 font-medium">"Static IP Addresses"</label>
+                        
+                        // Warning when DHCP is enabled
+                        <Show when=move || dhcp_mode.get() != DhcpMode::No>
+                            <div class="bg-yellow-900/30 border border-yellow-600 text-yellow-200 px-3 py-2 rounded mb-2 text-sm">
+                                <strong>"Note:"</strong> " DHCP is enabled. Static addresses will be used in addition to DHCP-assigned addresses."
+                            </div>
+                        </Show>
+                        
                         <div class="space-y-2">
                             <For
                                 each=addresses_indexed
@@ -372,11 +545,29 @@ pub fn InterfaceEditPage(
                             on:input=move |ev| set_gateway.set(event_target_value(&ev))
                             class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
                         />
+                        <Show when=move || {
+                            let mode = dhcp_mode.get();
+                            (mode == DhcpMode::Yes || mode == DhcpMode::Ipv4) && dhcp_use_gateway.get()
+                        }>
+                            <p class="text-yellow-400 text-sm mt-1">
+                                "⚠ DHCP gateway is enabled. This static gateway will be used if DHCP doesn't provide one."
+                            </p>
+                        </Show>
                     </div>
 
                     // DNS Servers
                     <div>
                         <label class="block text-gray-300 mb-2 font-medium">"DNS Servers"</label>
+                        
+                        <Show when=move || {
+                            let mode = dhcp_mode.get();
+                            (mode == DhcpMode::Yes || mode == DhcpMode::Ipv4) && dhcp_use_dns.get()
+                        }>
+                            <div class="bg-blue-900/30 border border-blue-600 text-blue-200 px-3 py-2 rounded mb-2 text-sm">
+                                "DHCP DNS is enabled. Static DNS servers will be used in addition to DHCP-provided servers."
+                            </div>
+                        </Show>
+                        
                         <div class="space-y-2">
                             <For
                                 each=dns_indexed
@@ -412,6 +603,51 @@ pub fn InterfaceEditPage(
                                 <button
                                     class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
                                     on:click=move |_| do_add_dns()
+                                >
+                                    "Add"
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    // Search Domains
+                    <div>
+                        <label class="block text-gray-300 mb-2 font-medium">"Search Domains"</label>
+                        <div class="space-y-2">
+                            <For
+                                each=domains_indexed
+                                key=|(i, domain)| (*i, domain.clone())
+                                children=move |(i, domain)| {
+                                    view! {
+                                        <div class="flex items-center gap-2">
+                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{domain}</span>
+                                            <button
+                                                class="text-red-400 hover:text-red-300 px-2"
+                                                on:click=move |_| remove_domain(i)
+                                            >
+                                                "✕"
+                                            </button>
+                                        </div>
+                                    }
+                                }
+                            />
+                            <div class="flex gap-2">
+                                <input
+                                    type="text"
+                                    placeholder="example.com"
+                                    prop:value=move || new_domain.get()
+                                    on:input=move |ev| set_new_domain.set(event_target_value(&ev))
+                                    on:keydown=move |ev| {
+                                        if ev.key() == "Enter" {
+                                            ev.prevent_default();
+                                            do_add_domain();
+                                        }
+                                    }
+                                    class="flex-1 bg-gray-700 text-white rounded px-4 py-2 border border-gray-600"
+                                />
+                                <button
+                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                                    on:click=move |_| do_add_domain()
                                 >
                                     "Add"
                                 </button>

@@ -147,6 +147,45 @@ pub struct StaticRoute {
     pub metric: Option<u32>,
 }
 
+/// DHCPv4 client configuration options
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Dhcpv4ClientConfig {
+    /// Send hostname to DHCP server
+    pub send_hostname: bool,
+    /// Custom hostname to send (if different from system hostname)
+    pub hostname: Option<String>,
+    /// Use DNS servers provided by DHCP
+    pub use_dns: bool,
+    /// Use NTP servers provided by DHCP
+    pub use_ntp: bool,
+    /// Use routes provided by DHCP
+    pub use_routes: bool,
+    /// Use gateway provided by DHCP
+    pub use_gateway: bool,
+    /// Use MTU provided by DHCP
+    pub use_mtu: bool,
+    /// Use domains provided by DHCP (yes/no/route)
+    pub use_domains: String,
+    /// Route metric for DHCP-provided routes
+    pub route_metric: Option<u32>,
+}
+
+impl Default for Dhcpv4ClientConfig {
+    fn default() -> Self {
+        Self {
+            send_hostname: true,
+            hostname: None,
+            use_dns: true,
+            use_ntp: true,
+            use_routes: true,
+            use_gateway: true,
+            use_mtu: true,
+            use_domains: "yes".to_string(),
+            route_metric: None,
+        }
+    }
+}
+
 /// Complete interface configuration for systemd-networkd
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InterfaceConfig {
@@ -158,6 +197,8 @@ pub struct InterfaceConfig {
     pub role: InterfaceRole,
     /// Whether this interface is enabled
     pub enabled: bool,
+    /// Human-readable description of the interface
+    pub description: Option<String>,
     
     // Basic IP configuration
     /// DHCP mode
@@ -168,8 +209,14 @@ pub struct InterfaceConfig {
     pub routes: Vec<StaticRoute>,
     /// DNS servers
     pub dns_servers: Vec<String>,
+    /// Search domains for DNS resolution
+    pub search_domains: Vec<String>,
     /// Default gateway (convenience field, also creates a route)
     pub gateway: Option<String>,
+    
+    // DHCP client settings
+    /// DHCPv4 client configuration (only used when dhcp_mode includes IPv4)
+    pub dhcpv4_client: Option<Dhcpv4ClientConfig>,
     
     // IPv6 settings
     /// Accept IPv6 Router Advertisements
@@ -189,11 +236,14 @@ impl Default for InterfaceConfig {
             name: String::new(),
             role: InterfaceRole::LAN,
             enabled: true,
+            description: None,
             dhcp_mode: DhcpMode::No,
             addresses: Vec::new(),
             routes: Vec::new(),
             dns_servers: Vec::new(),
+            search_domains: Vec::new(),
             gateway: None,
+            dhcpv4_client: None,
             ipv6_accept_ra: true,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
@@ -574,6 +624,7 @@ mod tests {
             name: "eth0".to_string(),
             role: InterfaceRole::WAN,
             enabled: true,
+            description: Some("Main WAN connection".to_string()),
             dhcp_mode: DhcpMode::Ipv4,
             addresses: vec![StaticAddress {
                 address: "192.168.1.1/24".to_string(),
@@ -585,7 +636,19 @@ mod tests {
                 metric: Some(100),
             }],
             dns_servers: vec!["8.8.8.8".to_string(), "8.8.4.4".to_string()],
+            search_domains: vec!["example.com".to_string()],
             gateway: Some("192.168.1.254".to_string()),
+            dhcpv4_client: Some(Dhcpv4ClientConfig {
+                send_hostname: true,
+                hostname: None,
+                use_dns: true,
+                use_ntp: true,
+                use_routes: true,
+                use_gateway: true,
+                use_mtu: true,
+                use_domains: "yes".to_string(),
+                route_metric: Some(100),
+            }),
             ipv6_accept_ra: true,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::Ipv4,

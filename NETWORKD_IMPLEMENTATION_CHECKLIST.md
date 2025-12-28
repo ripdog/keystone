@@ -35,12 +35,12 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `Description=` | string | Human-readable description | P1 | ⬜ TODO |
+| `Description=` | string | Human-readable description | P1 | ✅ DONE |
 | `DHCP=` | enum | DHCP mode: yes/no/ipv4/ipv6 | P1 | ✅ DONE |
 | `Address=` | CIDR | Static IP address(es) | P1 | ✅ DONE |
 | `Gateway=` | IP | Default gateway | P1 | ✅ DONE |
 | `DNS=` | IP list | DNS servers | P1 | ✅ DONE |
-| `Domains=` | string list | Search domains | P2 | ⬜ TODO |
+| `Domains=` | string list | Search domains | P2 | ✅ DONE |
 | `NTP=` | IP list | NTP servers | P3 | ⬜ TODO |
 | `LinkLocalAddressing=` | enum | Link-local config (yes/no/ipv4/ipv6) | P2 | ⬜ TODO |
 | `IPv6AcceptRA=` | bool | Accept Router Advertisements | P1 | ✅ DONE |
@@ -89,15 +89,15 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `SendHostname=` | bool | Send hostname to DHCP server | P2 | ⬜ TODO |
+| `SendHostname=` | bool | Send hostname to DHCP server | P2 | ✅ DONE |
 | `Hostname=` | string | Override hostname sent | P3 | ⬜ TODO |
-| `UseDNS=` | bool | Use DHCP-provided DNS | P1 | ⬜ TODO |
-| `UseNTP=` | bool | Use DHCP-provided NTP | P2 | ⬜ TODO |
-| `UseRoutes=` | bool | Use DHCP-provided routes | P2 | ⬜ TODO |
-| `UseGateway=` | bool | Use DHCP-provided gateway | P2 | ⬜ TODO |
-| `UseMTU=` | bool | Use DHCP-provided MTU | P2 | ⬜ TODO |
+| `UseDNS=` | bool | Use DHCP-provided DNS | P1 | ✅ DONE |
+| `UseNTP=` | bool | Use DHCP-provided NTP | P2 | ✅ DONE |
+| `UseRoutes=` | bool | Use DHCP-provided routes | P2 | ✅ DONE |
+| `UseGateway=` | bool | Use DHCP-provided gateway | P2 | ✅ DONE |
+| `UseMTU=` | bool | Use DHCP-provided MTU | P2 | ✅ DONE |
 | `UseDomains=` | enum | Use DHCP domains (yes/no/route) | P2 | ⬜ TODO |
-| `RouteMetric=` | u32 | Metric for DHCP routes | P2 | ⬜ TODO |
+| `RouteMetric=` | u32 | Metric for DHCP routes | P2 | ✅ DONE |
 | `RequestOptions=` | u8 list | Extra DHCP options to request | P3 | ⬜ TODO |
 | `ClientIdentifier=` | enum | DHCP client ID (mac/duid) | P3 | ⬜ TODO |
 | `VendorClassIdentifier=` | string | DHCP vendor class | P3 | ⬜ TODO |
@@ -840,6 +840,10 @@ pub struct InterfaceConfig {
 2. Keep existing `managed_interfaces` table for backward compatibility initially
 3. Phase implementation to deliver value incrementally
 4. Focus on WAN/LAN router use case first
+5. **Allow static IPs + DHCP simultaneously** (systemd-networkd supports this):
+   - Valid use cases: fallback config, additional addresses, dual-stack
+   - Show contextual warnings in UI when both are configured
+   - Example: "DHCP is enabled. Static addresses will be used in addition to DHCP-assigned addresses."
 
 ---
 

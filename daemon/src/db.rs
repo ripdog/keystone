@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    DhcpMode, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
+    DhcpMode, Dhcpv4ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
     ManagedInterface, StaticAddress, StaticRoute, User, UserInfo,
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
@@ -251,8 +251,8 @@ impl Database {
 
     /// Get all interface configurations
     pub async fn get_interface_configs(&self) -> Result<Vec<InterfaceConfig>> {
-        let rows = sqlx::query_as::<_, (i64, String, String, bool, String, Option<String>, bool, String, String)>(
-            r#"SELECT id, interface_name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade
+        let rows = sqlx::query_as::<_, (i64, String, String, bool, Option<String>, String, Option<String>, bool, String, String)>(
+            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade
                FROM interface_config ORDER BY interface_name"#,
         )
         .fetch_all(&self.pool)
@@ -260,21 +260,26 @@ impl Database {
         .context("Failed to fetch interface configs")?;
 
         let mut configs = Vec::new();
-        for (id, name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade) in rows {
+        for (id, name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade) in rows {
             let addresses = self.get_interface_addresses(id).await?;
             let routes = self.get_interface_routes(id).await?;
             let dns_servers = self.get_interface_dns(id).await?;
+            let search_domains = self.get_interface_domains(id).await?;
+            let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
 
             configs.push(InterfaceConfig {
                 id: Some(id),
                 name,
                 role: role.parse().unwrap_or(InterfaceRole::LAN),
                 enabled,
+                description,
                 dhcp_mode: dhcp_mode.parse().unwrap_or(DhcpMode::No),
                 addresses,
                 routes,
                 dns_servers,
+                search_domains,
                 gateway,
+                dhcpv4_client,
                 ipv6_accept_ra,
                 ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                 ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -286,8 +291,8 @@ impl Database {
 
     /// Get a single interface configuration by name
     pub async fn get_interface_config(&self, name: &str) -> Result<Option<InterfaceConfig>> {
-        let row = sqlx::query_as::<_, (i64, String, String, bool, String, Option<String>, bool, String, String)>(
-            r#"SELECT id, interface_name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade
+        let row = sqlx::query_as::<_, (i64, String, String, bool, Option<String>, String, Option<String>, bool, String, String)>(
+            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade
                FROM interface_config WHERE interface_name = ?"#,
         )
         .bind(name)
@@ -296,21 +301,26 @@ impl Database {
         .context("Failed to fetch interface config")?;
 
         match row {
-            Some((id, name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade)) => {
+            Some((id, name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade)) => {
                 let addresses = self.get_interface_addresses(id).await?;
                 let routes = self.get_interface_routes(id).await?;
                 let dns_servers = self.get_interface_dns(id).await?;
+                let search_domains = self.get_interface_domains(id).await?;
+                let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
 
                 Ok(Some(InterfaceConfig {
                     id: Some(id),
                     name,
                     role: role.parse().unwrap_or(InterfaceRole::LAN),
                     enabled,
+                    description,
                     dhcp_mode: dhcp_mode.parse().unwrap_or(DhcpMode::No),
                     addresses,
                     routes,
                     dns_servers,
+                    search_domains,
                     gateway,
+                    dhcpv4_client,
                     ipv6_accept_ra,
                     ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                     ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -332,12 +342,13 @@ impl Database {
             // Update existing
             sqlx::query(
                 r#"UPDATE interface_config SET
-                   role = ?, enabled = ?, dhcp_mode = ?, gateway = ?,
+                   role = ?, enabled = ?, description = ?, dhcp_mode = ?, gateway = ?,
                    ipv6_accept_ra = ?, ip_forward = ?, ip_masquerade = ?, updated_at = ?
                    WHERE id = ?"#,
             )
             .bind(config.role.to_string())
             .bind(config.enabled)
+            .bind(&config.description)
             .bind(config.dhcp_mode.to_string())
             .bind(&config.gateway)
             .bind(config.ipv6_accept_ra)
@@ -353,12 +364,13 @@ impl Database {
             // Insert new
             let result = sqlx::query(
                 r#"INSERT INTO interface_config 
-                   (interface_name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                   (interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             )
             .bind(&config.name)
             .bind(config.role.to_string())
             .bind(config.enabled)
+            .bind(&config.description)
             .bind(config.dhcp_mode.to_string())
             .bind(&config.gateway)
             .bind(config.ipv6_accept_ra)
@@ -413,6 +425,44 @@ impl Database {
                 .bind(priority as i64)
                 .execute(&mut *tx)
                 .await?;
+        }
+
+        // Clear and re-insert search domains
+        sqlx::query("DELETE FROM interface_domains WHERE interface_config_id = ?")
+            .bind(config_id)
+            .execute(&mut *tx)
+            .await?;
+        for domain in &config.search_domains {
+            sqlx::query("INSERT INTO interface_domains (interface_config_id, domain, is_routing_domain) VALUES (?, ?, 0)")
+                .bind(config_id)
+                .bind(domain)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // Save DHCPv4 client config
+        sqlx::query("DELETE FROM dhcpv4_client_config WHERE interface_config_id = ?")
+            .bind(config_id)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(dhcp_config) = &config.dhcpv4_client {
+            sqlx::query(
+                r#"INSERT INTO dhcpv4_client_config 
+                   (interface_config_id, send_hostname, hostname, use_dns, use_ntp, use_routes, use_gateway, use_mtu, use_domains, route_metric)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#
+            )
+            .bind(config_id)
+            .bind(dhcp_config.send_hostname)
+            .bind(&dhcp_config.hostname)
+            .bind(dhcp_config.use_dns)
+            .bind(dhcp_config.use_ntp)
+            .bind(dhcp_config.use_routes)
+            .bind(dhcp_config.use_gateway)
+            .bind(dhcp_config.use_mtu)
+            .bind(&dhcp_config.use_domains)
+            .bind(dhcp_config.route_metric.map(|m| m as i64))
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await.context("Failed to commit transaction")?;
@@ -478,5 +528,42 @@ impl Database {
         .context("Failed to fetch interface DNS servers")?;
 
         Ok(rows.into_iter().map(|(s,)| s).collect())
+    }
+
+    async fn get_interface_domains(&self, config_id: i64) -> Result<Vec<String>> {
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT domain FROM interface_domains WHERE interface_config_id = ? ORDER BY id",
+        )
+        .bind(config_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch interface domains")?;
+
+        Ok(rows.into_iter().map(|(s,)| s).collect())
+    }
+
+    async fn get_dhcpv4_client_config(&self, config_id: i64) -> Result<Option<Dhcpv4ClientConfig>> {
+        let row = sqlx::query_as::<_, (bool, Option<String>, bool, bool, bool, bool, bool, String, Option<i64>)>(
+            r#"SELECT send_hostname, hostname, use_dns, use_ntp, use_routes, use_gateway, use_mtu, use_domains, route_metric
+               FROM dhcpv4_client_config WHERE interface_config_id = ?"#
+        )
+        .bind(config_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch DHCPv4 client config")?;
+
+        Ok(row.map(|(send_hostname, hostname, use_dns, use_ntp, use_routes, use_gateway, use_mtu, use_domains, route_metric)| {
+            Dhcpv4ClientConfig {
+                send_hostname,
+                hostname,
+                use_dns,
+                use_ntp,
+                use_routes,
+                use_gateway,
+                use_mtu,
+                use_domains,
+                route_metric: route_metric.map(|m| m as u32),
+            }
+        }))
     }
 }

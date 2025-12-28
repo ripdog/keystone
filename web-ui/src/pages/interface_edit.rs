@@ -3,8 +3,8 @@
 use keystone_core::{
     ActivationPolicy, AddressScope, DhcpMode, DhcpServerConfig, DhcpStaticLease,
     Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
-    IpMasqueradeMode, Ipv6RaConfig, Ipv6RaPrefix, LinkLocalMode, RouteType, StaticAddress,
-    StaticRoute,
+    IpMasqueradeMode, Ipv6AcceptRaConfig, Ipv6RaConfig, Ipv6RaPrefix, LinkLocalMode, RouteType,
+    StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -46,6 +46,10 @@ pub fn InterfaceEditPage(
     let (new_route_gw, set_new_route_gw) = signal(String::new());
     let (new_route_metric, set_new_route_metric) = signal(String::new());
     let (ipv6_accept_ra, set_ipv6_accept_ra) = signal(true);
+    let (ipv6_ra_use_dns, set_ipv6_ra_use_dns) = signal(true);
+    let (ipv6_ra_use_gateway, set_ipv6_ra_use_gateway) = signal(true);
+    let (ipv6_ra_use_route_prefix, set_ipv6_ra_use_route_prefix) = signal(true);
+    let (ipv6_ra_use_autonomous, set_ipv6_ra_use_autonomous) = signal(true);
     let (ip_forward, set_ip_forward) = signal(IpForwardMode::No);
     let (ip_masquerade, set_ip_masquerade) = signal(IpMasqueradeMode::No);
     let (link_mtu, set_link_mtu) = signal(String::new());
@@ -124,6 +128,12 @@ pub fn InterfaceEditPage(
                         set_search_domains.set(cfg.search_domains.clone());
                         set_routes.set(cfg.routes.clone());
                         set_ipv6_accept_ra.set(cfg.ipv6_accept_ra);
+                        if let Some(ra_cfg) = &cfg.ipv6_accept_ra_config {
+                            set_ipv6_ra_use_dns.set(ra_cfg.use_dns);
+                            set_ipv6_ra_use_gateway.set(ra_cfg.use_gateway);
+                            set_ipv6_ra_use_route_prefix.set(ra_cfg.use_route_prefix);
+                            set_ipv6_ra_use_autonomous.set(ra_cfg.use_autonomous_prefix);
+                        }
                         set_ip_forward.set(cfg.ip_forward);
                         set_ip_masquerade.set(cfg.ip_masquerade);
                         set_link_mtu.set(cfg.mtu.map(|v| v.to_string()).unwrap_or_default());
@@ -420,7 +430,16 @@ pub fn InterfaceEditPage(
                     dhcpv6_client,
                     dhcp_server,
                     ipv6_accept_ra: ipv6_accept_ra.get(),
-                    ipv6_accept_ra_config: current.ipv6_accept_ra_config.clone(),
+                    ipv6_accept_ra_config: if ipv6_accept_ra.get() {
+                        Some(Ipv6AcceptRaConfig {
+                            use_dns: ipv6_ra_use_dns.get(),
+                            use_gateway: ipv6_ra_use_gateway.get(),
+                            use_route_prefix: ipv6_ra_use_route_prefix.get(),
+                            use_autonomous_prefix: ipv6_ra_use_autonomous.get(),
+                        })
+                    } else {
+                        None
+                    },
                     ipv6_ra,
                     ip_forward: ip_forward.get(),
                     ip_masquerade: ip_masquerade.get(),
@@ -804,6 +823,48 @@ pub fn InterfaceEditPage(
                             />
                             <span class="text-gray-200">"Accept IPv6 Router Advertisements"</span>
                         </label>
+                        
+                        // Show RA client options when enabled
+                        <Show when=move || ipv6_accept_ra.get()>
+                            <div class="mt-3 ml-8 space-y-2 text-sm">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || ipv6_ra_use_dns.get()
+                                        on:change=move |ev| set_ipv6_ra_use_dns.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use DNS from RA (RDNSS)"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || ipv6_ra_use_gateway.get()
+                                        on:change=move |ev| set_ipv6_ra_use_gateway.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use default gateway from RA"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || ipv6_ra_use_route_prefix.get()
+                                        on:change=move |ev| set_ipv6_ra_use_route_prefix.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use route prefixes from RA"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || ipv6_ra_use_autonomous.get()
+                                        on:change=move |ev| set_ipv6_ra_use_autonomous.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use SLAAC addresses"</span>
+                                </label>
+                            </div>
+                        </Show>
                     </div>
 
                     // IP Forwarding

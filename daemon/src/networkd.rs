@@ -153,6 +153,13 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
         output.push_str(&generate_ipv6_ra_section(ra_cfg));
     }
 
+    // [IPv6AcceptRA] section if accepting RAs with custom settings
+    if config.ipv6_accept_ra {
+        if let Some(ra_client_cfg) = &config.ipv6_accept_ra_config {
+            output.push_str(&generate_ipv6_accept_ra_section(ra_client_cfg));
+        }
+    }
+
     output
 }
 
@@ -289,6 +296,17 @@ fn generate_ipv6_ra_section(cfg: &keystone_core::Ipv6RaConfig) -> String {
     output
 }
 
+fn generate_ipv6_accept_ra_section(cfg: &keystone_core::Ipv6AcceptRaConfig) -> String {
+    let mut output = String::new();
+    writeln!(output, "[IPv6AcceptRA]").unwrap();
+    writeln!(output, "UseDNS={}", bool_to_yesno(cfg.use_dns)).unwrap();
+    writeln!(output, "UseGateway={}", bool_to_yesno(cfg.use_gateway)).unwrap();
+    writeln!(output, "UseRoutePrefix={}", bool_to_yesno(cfg.use_route_prefix)).unwrap();
+    writeln!(output, "UseAutonomousPrefix={}", bool_to_yesno(cfg.use_autonomous_prefix)).unwrap();
+    writeln!(output).unwrap();
+    output
+}
+
 fn bool_to_yesno(b: bool) -> &'static str {
     if b { "yes" } else { "no" }
 }
@@ -406,6 +424,7 @@ mod tests {
             dhcpv6_client: None,
             dhcp_server: None,
             ipv6_accept_ra: true,
+            ipv6_accept_ra_config: None,
             ipv6_ra: None,
             mtu: None,
             ip_forward: IpForwardMode::No,
@@ -446,6 +465,7 @@ mod tests {
             dhcpv6_client: None,
             dhcp_server: None,
             ipv6_accept_ra: false,
+            ipv6_accept_ra_config: None,
             ipv6_ra: None,
             mtu: None,
             ip_forward: IpForwardMode::Yes,
@@ -506,6 +526,7 @@ mod tests {
                 ],
             }),
             ipv6_accept_ra: false,
+            ipv6_accept_ra_config: None,
             ipv6_ra: None,
             mtu: None,
             ip_forward: IpForwardMode::No,
@@ -551,6 +572,7 @@ mod tests {
             dhcpv6_client: None,
             dhcp_server: None,
             ipv6_accept_ra: false,
+            ipv6_accept_ra_config: None,
             ipv6_ra: Some(Ipv6RaConfig {
                 enabled: true,
                 router_lifetime_secs: Some(1800),

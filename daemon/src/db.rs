@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use keystone_core::{
     ActivationPolicy, AddressScope, DhcpMode, DhcpServerConfig, DhcpStaticLease,
     Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
-    IpMasqueradeMode, Ipv6RaConfig, Ipv6RaPrefix, LinkLocalMode, ManagedInterface, RouteType,
-    StaticAddress, StaticRoute, User, UserInfo,
+    IpMasqueradeMode, Ipv6AcceptRaConfig, Ipv6RaConfig, Ipv6RaPrefix, LinkLocalMode,
+    ManagedInterface, RouteType, StaticAddress, StaticRoute, User, UserInfo,
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tracing::info;
@@ -271,6 +271,7 @@ impl Database {
             let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
             let dhcp_server = self.get_dhcp_server_config(id).await?;
             let ipv6_ra = self.get_ipv6_ra_config(id).await?;
+            let ipv6_accept_ra_config = self.get_ipv6_accept_ra_config(id).await?;
 
             configs.push(InterfaceConfig {
                 id: Some(id),
@@ -291,6 +292,7 @@ impl Database {
                 dhcpv6_client,
                 dhcp_server,
                 ipv6_accept_ra,
+                ipv6_accept_ra_config,
                 ipv6_ra,
                 ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                 ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -322,6 +324,7 @@ impl Database {
                 let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
                 let dhcp_server = self.get_dhcp_server_config(id).await?;
                 let ipv6_ra = self.get_ipv6_ra_config(id).await?;
+                let ipv6_accept_ra_config = self.get_ipv6_accept_ra_config(id).await?;
 
                 Ok(Some(InterfaceConfig {
                     id: Some(id),
@@ -342,6 +345,7 @@ impl Database {
                     dhcpv6_client,
                     dhcp_server,
                     ipv6_accept_ra,
+                    ipv6_accept_ra_config,
                     ipv6_ra,
                     ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                     ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -523,6 +527,9 @@ impl Database {
 
         // Save IPv6 RA config
         self.save_ipv6_ra_config_tx(&mut tx, config_id, &config.ipv6_ra).await?;
+
+        // Save IPv6 Accept RA config
+        self.save_ipv6_accept_ra_config_tx(&mut tx, config_id, &config.ipv6_accept_ra_config).await?;
 
         tx.commit().await.context("Failed to commit transaction")?;
         info!("Saved interface config for {}", config.name);
@@ -952,6 +959,62 @@ impl Database {
                 .execute(&mut **tx)
                 .await?;
             }
+        }
+
+        Ok(())
+    }
+
+    // ============================================================================
+    // IPv6 Accept RA Configuration
+    // ============================================================================
+
+    async fn get_ipv6_accept_ra_config(&self, config_id: i64) -> Result<Option<Ipv6AcceptRaConfig>> {
+        let row = sqlx::query_as::<_, (bool, bool, bool, bool)>(
+            r#"SELECT use_dns, use_gateway, use_route_prefix, use_autonomous_prefix
+               FROM ipv6_accept_ra_config WHERE interface_config_id = ?"#
+        )
+        .bind(config_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        match row {
+            Some((use_dns, use_gateway, use_route_prefix, use_autonomous_prefix)) => {
+                Ok(Some(Ipv6AcceptRaConfig {
+                    use_dns,
+                    use_gateway,
+                    use_route_prefix,
+                    use_autonomous_prefix,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn save_ipv6_accept_ra_config_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        config_id: i64,
+        ipv6_accept_ra_config: &Option<Ipv6AcceptRaConfig>,
+    ) -> Result<()> {
+        // Clear existing config
+        sqlx::query("DELETE FROM ipv6_accept_ra_config WHERE interface_config_id = ?")
+            .bind(config_id)
+            .execute(&mut **tx)
+            .await?;
+
+        if let Some(cfg) = ipv6_accept_ra_config {
+            sqlx::query(
+                r#"INSERT INTO ipv6_accept_ra_config 
+                   (interface_config_id, use_dns, use_gateway, use_route_prefix, use_autonomous_prefix)
+                   VALUES (?, ?, ?, ?, ?)"#
+            )
+            .bind(config_id)
+            .bind(cfg.use_dns)
+            .bind(cfg.use_gateway)
+            .bind(cfg.use_route_prefix)
+            .bind(cfg.use_autonomous_prefix)
+            .execute(&mut **tx)
+            .await?;
         }
 
         Ok(())

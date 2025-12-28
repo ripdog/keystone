@@ -414,6 +414,31 @@ impl Default for Dhcpv6ClientConfig {
     }
 }
 
+/// IPv6 Accept Router Advertisement client configuration
+/// Controls what information to accept from Router Advertisements
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Ipv6AcceptRaConfig {
+    /// Use DNS servers from RA (RDNSS option)
+    pub use_dns: bool,
+    /// Use default gateway from RA
+    pub use_gateway: bool,
+    /// Use route prefixes from RA
+    pub use_route_prefix: bool,
+    /// Use autonomous prefixes for SLAAC addresses
+    pub use_autonomous_prefix: bool,
+}
+
+impl Default for Ipv6AcceptRaConfig {
+    fn default() -> Self {
+        Self {
+            use_dns: true,
+            use_gateway: true,
+            use_route_prefix: true,
+            use_autonomous_prefix: true,
+        }
+    }
+}
+
 /// DHCP static lease for reserving IP addresses
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DhcpStaticLease {
@@ -592,6 +617,9 @@ pub struct InterfaceConfig {
     // IPv6 settings
     /// Accept IPv6 Router Advertisements
     pub ipv6_accept_ra: bool,
+    /// IPv6 Accept RA client configuration (controls what to accept from RAs)
+    #[serde(default)]
+    pub ipv6_accept_ra_config: Option<Ipv6AcceptRaConfig>,
     /// IPv6 Router Advertisement server configuration (for LAN interfaces)
     #[serde(default)]
     pub ipv6_ra: Option<Ipv6RaConfig>,
@@ -634,6 +662,7 @@ impl Default for InterfaceConfig {
             dhcpv6_client: None,
             dhcp_server: None,
             ipv6_accept_ra: true,
+            ipv6_accept_ra_config: None,
             ipv6_ra: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
@@ -1086,6 +1115,7 @@ mod tests {
                 }],
             }),
             ipv6_accept_ra: true,
+            ipv6_accept_ra_config: None,
             ipv6_ra: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::Ipv4,

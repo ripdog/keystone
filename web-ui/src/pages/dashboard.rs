@@ -38,6 +38,7 @@ pub fn DashboardPage(
                     set_state.set(resp.state.clone());
 
                     let prev = prev_counters.get_untracked();
+                    // Build map of previous counters
                     let mut prev_map: HashMap<String, (u64, u64)> = HashMap::new();
                     for c in prev {
                         prev_map.insert(c.name, (c.rx_bytes, c.tx_bytes));
@@ -45,15 +46,15 @@ pub fn DashboardPage(
 
                     let mut new_rates = Vec::new();
                     for c in resp.interface_counters.iter() {
-                        let (rx_bps, tx_bps) = prev_map
-                            .get(&c.name)
-                            .map(|(rx, tx)| {
-                                (
-                                    c.rx_bytes.saturating_sub(*rx),
-                                    c.tx_bytes.saturating_sub(*tx),
-                                )
-                            })
-                            .unwrap_or((0, 0));
+                        let (rx_bps, tx_bps) = if let Some((prev_rx, prev_tx)) = prev_map.get(&c.name) {
+                            // Calculate bytes transferred since last poll (1 second)
+                            let rx = c.rx_bytes.saturating_sub(*prev_rx);
+                            let tx = c.tx_bytes.saturating_sub(*prev_tx);
+                            (rx, tx)
+                        } else {
+                            // First poll - no previous data, show 0
+                            (0, 0)
+                        };
 
                         new_rates.push(InterfaceRate {
                             name: c.name.clone(),
@@ -86,12 +87,12 @@ pub fn DashboardPage(
     });
 
     let format_rate = |bps: u64| -> String {
-        if bps > 1024 * 1024 {
-            format!("{:.1} MiB/s", (bps as f64) / (1024.0 * 1024.0))
-        } else if bps > 1024 {
-            format!("{:.1} KiB/s", (bps as f64) / 1024.0)
+        if bps >= 1_000_000 {
+            format!("{:>6.1} MB/s", (bps as f64) / 1_000_000.0)
+        } else if bps >= 1_000 {
+            format!("{:>6.1} kB/s", (bps as f64) / 1_000.0)
         } else {
-            format!("{} B/s", bps)
+            format!("{:>6}  B/s", bps)
         }
     };
 
@@ -99,7 +100,7 @@ pub fn DashboardPage(
         <div class="space-y-6">
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"Dashboard"</h1>
-                <p class="text-gray-400">"Live network status (updates every second)"</p>
+                <p class="text-gray-400">"Live network status"</p>
             </div>
 
             <Show when=move || error_msg.get().is_some()>
@@ -161,22 +162,26 @@ pub fn DashboardPage(
                         <thead>
                             <tr class="text-left text-gray-400 border-b border-gray-700">
                                 <th class="py-2 pr-4">"Interface"</th>
-                                <th class="py-2 pr-4">"RX"</th>
-                                <th class="py-2 pr-4">"TX"</th>
+                                <th class="py-2 pr-4 w-32 text-right">"RX"</th>
+                                <th class="py-2 pr-4 w-32 text-right">"TX"</th>
                             </tr>
                         </thead>
                         <tbody>
                             <For
                                 each=move || rates.get()
-                                key=|r| r.name.clone()
+                                key=|r| (r.name.clone(), r.rx_bps, r.tx_bps)
                                 children=move |r| {
                                     let rx = format_rate(r.rx_bps);
                                     let tx = format_rate(r.tx_bps);
                                     view! {
                                         <tr class="border-b border-gray-700/50">
                                             <td class="py-2 pr-4 font-medium">{r.name}</td>
-                                            <td class="py-2 pr-4 text-gray-200">{rx}</td>
-                                            <td class="py-2 pr-4 text-gray-200">{tx}</td>
+                                            <td class="py-2 pr-4 text-gray-200 font-mono w-32 text-right">
+                                                {rx}<span class="text-green-400">" ↓"</span>
+                                            </td>
+                                            <td class="py-2 pr-4 text-gray-200 font-mono w-32 text-right">
+                                                {tx}<span class="text-blue-400">" ↑"</span>
+                                            </td>
                                         </tr>
                                     }
                                 }

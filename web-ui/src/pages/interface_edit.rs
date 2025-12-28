@@ -230,15 +230,15 @@ pub fn InterfaceEditPage(
     };
 
     // Derived signals for For components to avoid complex expressions in view
-    let addresses_indexed = move || {
-        addresses.get().into_iter().enumerate().collect::<Vec<_>>()
-    };
+    let addresses_indexed = move || addresses.get().into_iter().enumerate().collect::<Vec<_>>();
     let dns_indexed = move || {
-        dns_servers.get().into_iter().enumerate().collect::<Vec<_>>()
+        dns_servers
+            .get()
+            .into_iter()
+            .enumerate()
+            .collect::<Vec<_>>()
     };
-    let routes_indexed = move || {
-        routes.get().into_iter().enumerate().collect::<Vec<_>>()
-    };
+    let routes_indexed = move || routes.get().into_iter().enumerate().collect::<Vec<_>>();
 
     view! {
         <div class="space-y-6">

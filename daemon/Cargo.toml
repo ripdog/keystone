@@ -40,7 +40,7 @@ argon2.workspace = true
 jsonwebtoken.workspace = true
 jsonwebtoken.features = ['rust_crypto']
 rand.workspace = true
-toml = "0.9.10+spec-1.1.0"
+toml = "0.9.10"
 libc = "0.2.178"
 
 [[bin]]

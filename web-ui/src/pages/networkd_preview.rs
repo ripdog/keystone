@@ -15,7 +15,7 @@ pub fn NetworkdPreviewPage(
 ) -> impl IntoView {
     let (preview_data, set_preview_data) = signal::<Option<NetworkdPreviewResponse>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
-    let (loading, set_loading) = signal(false);
+    let (loading, set_loading) = signal(true);
 
     // Load preview on mount
     Effect::new(move |_| {
@@ -75,16 +75,14 @@ pub fn NetworkdPreviewPage(
     };
 
     view! {
-        <div class="p-4">
-            <div class="mb-4 flex justify-between items-center">
+        <div class="space-y-6">
+            <div class="flex justify-between items-start">
                 <div>
-                    <h2 class="text-2xl font-bold text-white">"systemd-networkd Configuration Preview"</h2>
-                    <p class="text-gray-400">
-                        "Preview of generated .network files without writing to disk"
-                    </p>
+                    <h1 class="text-2xl font-semibold text-blue-300">"Networkd Configuration Preview"</h1>
+                    <p class="text-gray-400">"Preview of generated .network files without writing to disk"</p>
                 </div>
                 <button
-                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
+                    class="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white px-4 py-2 rounded"
                     on:click=refresh
                     disabled=move || loading.get()
                 >
@@ -92,36 +90,30 @@ pub fn NetworkdPreviewPage(
                 </button>
             </div>
 
-            {move || error.get().map(|err| view! {
-                <div class="mb-4 p-4 bg-red-900/20 border border-red-700 rounded text-red-300">
-                    {err}
+            // Error message
+            <Show when=move || error.get().is_some()>
+                <div class="bg-red-900/50 border border-red-500 text-red-200 px-4 py-2 rounded">
+                    {move || error.get().unwrap_or_default()}
                 </div>
-            })}
+            </Show>
 
             <Show
-                when=move || preview_data.get().is_some()
-                fallback=move || view! {
-                    <div class="text-center py-12">
-                        <Show
-                            when=move || loading.get()
-                            fallback=move || view! { <p class="text-gray-400">"No configuration to preview"</p> }
-                        >
-                            <div class="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                        </Show>
-                    </div>
+                when=move || !loading.get()
+                fallback=|| view! {
+                    <div class="text-gray-400">"Loading preview..."</div>
                 }
             >
                 {move || preview_data.get().map(|data| {
                     if data.files.is_empty() {
                         view! {
-                            <div class="p-4 bg-blue-900/20 border border-blue-700 rounded text-blue-300">
+                            <div class="bg-blue-900/50 border border-blue-500 text-blue-200 px-4 py-2 rounded">
                                 "No enabled interfaces configured. Go to Interfaces page to add configurations."
                             </div>
                         }.into_any()
                     } else {
                         view! {
-                            <div>
-                                <div class="mb-4 p-4 bg-blue-900/20 border border-blue-700 rounded text-blue-300">
+                            <div class="space-y-4">
+                                <div class="bg-green-900/50 border border-green-500 text-green-200 px-4 py-2 rounded">
                                     {format!("Showing {} configuration file(s)", data.files.len())}
                                 </div>
                                 <For
@@ -129,15 +121,15 @@ pub fn NetworkdPreviewPage(
                                     key=|file| file.filename.clone()
                                     children=move |file| {
                                         view! {
-                                            <div class="mb-4 bg-gray-800 rounded-lg overflow-hidden">
-                                                <div class="flex justify-between items-center p-4 bg-gray-700">
-                                                    <h5 class="text-lg font-mono text-white">
+                                            <div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+                                                <div class="px-4 py-3 bg-gray-700 border-b border-gray-600">
+                                                    <h3 class="text-lg font-mono text-blue-300">
                                                         {file.filename.clone()}
-                                                    </h5>
+                                                    </h3>
                                                 </div>
                                                 <div class="p-4">
-                                                    <pre class="bg-gray-900 p-4 rounded overflow-x-auto">
-                                                        <code class="text-gray-300 text-sm">{file.content.clone()}</code>
+                                                    <pre class="bg-gray-900 p-4 rounded overflow-x-auto text-sm font-mono text-gray-300 whitespace-pre">
+                                                        {file.content.clone()}
                                                     </pre>
                                                 </div>
                                             </div>

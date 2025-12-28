@@ -41,47 +41,10 @@ impl Database {
 
     /// Run database migrations
     async fn run_migrations(&self) -> Result<()> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS managed_interfaces (
-                name TEXT PRIMARY KEY,
-                role TEXT NOT NULL,
-                static_ip TEXT,
-                enabled INTEGER NOT NULL DEFAULT 1
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .context("Failed to create managed_interfaces table")?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                email TEXT,
-                password_hash TEXT NOT NULL,
-                created_at INTEGER NOT NULL
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .context("Failed to create users table")?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS jwt_key (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                key_bytes BLOB NOT NULL,
-                created_at INTEGER NOT NULL
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await
-        .context("Failed to create jwt_key table")?;
+        sqlx::migrate!("./migrations")
+            .run(&self.pool)
+            .await
+            .context("Failed to run database migrations")?;
 
         info!("Database migrations complete");
         Ok(())

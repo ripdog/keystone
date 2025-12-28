@@ -33,8 +33,12 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
     writeln!(output, "Name={}", config.name).unwrap();
     writeln!(output).unwrap();
 
-    // [Link] section (if needed)
-    // Currently we don't have MTU in InterfaceConfig but could add it
+    // [Link] section (if MTU is set)
+    if let Some(mtu) = config.mtu {
+        writeln!(output, "[Link]").unwrap();
+        writeln!(output, "MTUBytes={}", mtu).unwrap();
+        writeln!(output).unwrap();
+    }
 
     // [Network] section
     writeln!(output, "[Network]").unwrap();
@@ -403,6 +407,7 @@ mod tests {
             dhcp_server: None,
             ipv6_accept_ra: true,
             ipv6_ra: None,
+            mtu: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
         };
@@ -442,6 +447,7 @@ mod tests {
             dhcp_server: None,
             ipv6_accept_ra: false,
             ipv6_ra: None,
+            mtu: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::No,
         };
@@ -501,6 +507,7 @@ mod tests {
             }),
             ipv6_accept_ra: false,
             ipv6_ra: None,
+            mtu: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
         };
@@ -565,6 +572,7 @@ mod tests {
             }),
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::No,
+            mtu: None,
         };
 
         let output = generate_network_file(&config);

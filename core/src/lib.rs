@@ -601,6 +601,12 @@ pub struct InterfaceConfig {
     pub ip_forward: IpForwardMode,
     /// IP masquerading (NAT) mode
     pub ip_masquerade: IpMasqueradeMode,
+    
+    // Link settings
+    /// Maximum Transmission Unit (MTU) in bytes
+    /// Common values: 1500 (default), 1492 (PPPoE), 9000 (jumbo frames)
+    #[serde(default)]
+    pub mtu: Option<u32>,
 }
 
 fn default_true() -> bool {
@@ -631,6 +637,7 @@ impl Default for InterfaceConfig {
             ipv6_ra: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
+            mtu: None,
         }
     }
 }
@@ -1082,6 +1089,7 @@ mod tests {
             ipv6_ra: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::Ipv4,
+            mtu: Some(1492),
         };
 
         let json = serde_json::to_string(&config).unwrap();

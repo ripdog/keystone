@@ -46,6 +46,7 @@ pub fn InterfaceEditPage(
     let (ipv6_accept_ra, set_ipv6_accept_ra) = signal(true);
     let (ip_forward, set_ip_forward) = signal(IpForwardMode::No);
     let (ip_masquerade, set_ip_masquerade) = signal(IpMasqueradeMode::No);
+    let (link_mtu, set_link_mtu) = signal(String::new());
     
     // DHCPv4 client settings
     let (dhcp_use_dns, set_dhcp_use_dns) = signal(true);
@@ -123,6 +124,7 @@ pub fn InterfaceEditPage(
                         set_ipv6_accept_ra.set(cfg.ipv6_accept_ra);
                         set_ip_forward.set(cfg.ip_forward);
                         set_ip_masquerade.set(cfg.ip_masquerade);
+                        set_link_mtu.set(cfg.mtu.map(|v| v.to_string()).unwrap_or_default());
                         
                         // DHCPv4 client settings
                         if let Some(dhcp_cfg) = &cfg.dhcpv4_client {
@@ -199,6 +201,7 @@ pub fn InterfaceEditPage(
                             ipv6_ra: None,
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
+                            mtu: None,
                         };
                         set_dhcp_mode.set(DhcpMode::Ipv4);
                         set_config.set(Some(new_cfg));
@@ -417,6 +420,7 @@ pub fn InterfaceEditPage(
                     ipv6_ra,
                     ip_forward: ip_forward.get(),
                     ip_masquerade: ip_masquerade.get(),
+                    mtu: link_mtu.get().parse().ok(),
                 };
 
                 match api::save_interface_config(&token, updated.clone()).await {
@@ -740,6 +744,8 @@ pub fn InterfaceEditPage(
                                         show_dhcp_warnings=true
                                         dhcp_use_dns=dhcp_use_dns
                                         dhcp_use_gateway=dhcp_use_gateway
+                                        link_mtu=link_mtu
+                                        set_link_mtu=set_link_mtu
                                     />
                                 </div>
                             </Show>
@@ -778,6 +784,8 @@ pub fn InterfaceEditPage(
                             show_dhcp_warnings=false
                             dhcp_use_dns=dhcp_use_dns
                             dhcp_use_gateway=dhcp_use_gateway
+                            link_mtu=link_mtu
+                            set_link_mtu=set_link_mtu
                         />
                     </Show>
 
@@ -1474,6 +1482,8 @@ fn StaticIpSettings(
     #[prop(default = false)] show_dhcp_warnings: bool,
     dhcp_use_dns: ReadSignal<bool>,
     dhcp_use_gateway: ReadSignal<bool>,
+    link_mtu: ReadSignal<String>,
+    set_link_mtu: WriteSignal<String>,
 ) -> impl IntoView {
     view! {
         <>
@@ -1537,6 +1547,21 @@ fn StaticIpSettings(
                         "⚠ DHCP gateway is enabled. This static gateway will be used if DHCP doesn't provide one."
                     </p>
                 </Show>
+            </div>
+
+            // MTU
+            <div>
+                <label class="block text-gray-300 mb-2 font-medium">"MTU (bytes)"</label>
+                <input
+                    type="text"
+                    placeholder="1500 (default)"
+                    prop:value=move || link_mtu.get()
+                    on:input=move |ev| set_link_mtu.set(event_target_value(&ev))
+                    class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
+                />
+                <p class="text-gray-400 text-sm mt-1">
+                    "Common values: 1500 (default), 1492 (PPPoE), 9000 (jumbo). Leave empty for default."
+                </p>
             </div>
 
             // DNS Servers

@@ -473,6 +473,72 @@ impl Default for DhcpServerConfig {
     }
 }
 
+/// IPv6 prefix to advertise via Router Advertisement
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Ipv6RaPrefix {
+    /// IPv6 prefix in CIDR notation (e.g., "2001:db8::/64")
+    pub prefix: String,
+    /// Preferred lifetime in seconds (None = infinite)
+    pub preferred_lifetime_secs: Option<u32>,
+    /// Valid lifetime in seconds (None = infinite)
+    pub valid_lifetime_secs: Option<u32>,
+    /// On-link flag (prefix is on-link)
+    pub on_link: bool,
+    /// Autonomous flag (use for SLAAC)
+    pub autonomous: bool,
+}
+
+impl Default for Ipv6RaPrefix {
+    fn default() -> Self {
+        Self {
+            prefix: String::new(),
+            preferred_lifetime_secs: None,
+            valid_lifetime_secs: None,
+            on_link: true,
+            autonomous: true,
+        }
+    }
+}
+
+/// IPv6 Router Advertisement configuration for LAN interfaces
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Ipv6RaConfig {
+    /// Whether to send Router Advertisements
+    pub enabled: bool,
+    /// Router lifetime in seconds
+    pub router_lifetime_secs: Option<u32>,
+    /// Router preference (low, medium, high)
+    pub router_preference: Option<String>,
+    /// Managed flag - clients should use DHCPv6 for addresses
+    pub managed: bool,
+    /// Other information flag - clients should use DHCPv6 for other config
+    pub other_information: bool,
+    /// Whether to include DNS servers in RA
+    pub emit_dns: bool,
+    /// DNS servers to advertise (RDNSS)
+    pub dns_servers: Vec<String>,
+    /// DNS search domains to advertise (DNSSL)
+    pub search_domains: Vec<String>,
+    /// Prefixes to advertise
+    pub prefixes: Vec<Ipv6RaPrefix>,
+}
+
+impl Default for Ipv6RaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            router_lifetime_secs: Some(1800),
+            router_preference: Some("medium".to_string()),
+            managed: false,
+            other_information: false,
+            emit_dns: true,
+            dns_servers: Vec::new(),
+            search_domains: Vec::new(),
+            prefixes: Vec::new(),
+        }
+    }
+}
+
 /// Complete interface configuration for systemd-networkd
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InterfaceConfig {
@@ -526,6 +592,9 @@ pub struct InterfaceConfig {
     // IPv6 settings
     /// Accept IPv6 Router Advertisements
     pub ipv6_accept_ra: bool,
+    /// IPv6 Router Advertisement server configuration (for LAN interfaces)
+    #[serde(default)]
+    pub ipv6_ra: Option<Ipv6RaConfig>,
     
     // Forwarding & NAT (typically for WAN interfaces)
     /// IP forwarding mode
@@ -559,6 +628,7 @@ impl Default for InterfaceConfig {
             dhcpv6_client: None,
             dhcp_server: None,
             ipv6_accept_ra: true,
+            ipv6_ra: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
         }
@@ -1009,6 +1079,7 @@ mod tests {
                 }],
             }),
             ipv6_accept_ra: true,
+            ipv6_ra: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::Ipv4,
         };

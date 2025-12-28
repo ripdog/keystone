@@ -165,6 +165,7 @@ pub fn InterfaceEditPage(
                             dhcpv6_client: None,
                             dhcp_server: None,
                             ipv6_accept_ra: true,
+                            ipv6_ra: None,
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
                         };
@@ -366,6 +367,7 @@ pub fn InterfaceEditPage(
                     dhcpv6_client,
                     dhcp_server,
                     ipv6_accept_ra: ipv6_accept_ra.get(),
+                    ipv6_ra: current.ipv6_ra.clone(),  // Preserve existing IPv6 RA config
                     ip_forward: ip_forward.get(),
                     ip_masquerade: ip_masquerade.get(),
                 };

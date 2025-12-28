@@ -142,6 +142,13 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
         output.push_str(&generate_dhcp_server_section(dhcp_srv));
     }
 
+    // [IPv6SendRA] section if IPv6 RA is enabled
+    if let Some(ra_cfg) = &config.ipv6_ra
+        && ra_cfg.enabled
+    {
+        output.push_str(&generate_ipv6_ra_section(ra_cfg));
+    }
+
     output
 }
 
@@ -227,6 +234,54 @@ fn generate_dhcp_server_section(cfg: &DhcpServerConfig) -> String {
         writeln!(output).unwrap();
     }
 
+    output
+}
+
+fn generate_ipv6_ra_section(cfg: &keystone_core::Ipv6RaConfig) -> String {
+    let mut output = String::new();
+    writeln!(output, "[IPv6SendRA]").unwrap();
+    
+    if let Some(lifetime) = cfg.router_lifetime_secs {
+        writeln!(output, "RouterLifetimeSec={}", lifetime).unwrap();
+    }
+    
+    if let Some(pref) = &cfg.router_preference {
+        writeln!(output, "RouterPreference={}", pref).unwrap();
+    }
+    
+    writeln!(output, "Managed={}", bool_to_yesno(cfg.managed)).unwrap();
+    writeln!(output, "OtherInformation={}", bool_to_yesno(cfg.other_information)).unwrap();
+    
+    if cfg.emit_dns {
+        for dns in &cfg.dns_servers {
+            writeln!(output, "DNS={}", dns).unwrap();
+        }
+    }
+    
+    if !cfg.search_domains.is_empty() {
+        writeln!(output, "Domains={}", cfg.search_domains.join(" ")).unwrap();
+    }
+    
+    writeln!(output).unwrap();
+    
+    // [IPv6Prefix] sections for each prefix
+    for prefix_cfg in &cfg.prefixes {
+        writeln!(output, "[IPv6Prefix]").unwrap();
+        writeln!(output, "Prefix={}", prefix_cfg.prefix).unwrap();
+        
+        if let Some(preferred) = prefix_cfg.preferred_lifetime_secs {
+            writeln!(output, "PreferredLifetimeSec={}", preferred).unwrap();
+        }
+        
+        if let Some(valid) = prefix_cfg.valid_lifetime_secs {
+            writeln!(output, "ValidLifetimeSec={}", valid).unwrap();
+        }
+        
+        writeln!(output, "OnLink={}", bool_to_yesno(prefix_cfg.on_link)).unwrap();
+        writeln!(output, "Assign={}", bool_to_yesno(prefix_cfg.autonomous)).unwrap();
+        writeln!(output).unwrap();
+    }
+    
     output
 }
 
@@ -347,6 +402,7 @@ mod tests {
             dhcpv6_client: None,
             dhcp_server: None,
             ipv6_accept_ra: true,
+            ipv6_ra: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
         };
@@ -385,6 +441,7 @@ mod tests {
             dhcpv6_client: None,
             dhcp_server: None,
             ipv6_accept_ra: false,
+            ipv6_ra: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::No,
         };
@@ -443,6 +500,7 @@ mod tests {
                 ],
             }),
             ipv6_accept_ra: false,
+            ipv6_ra: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
         };
@@ -455,6 +513,74 @@ mod tests {
         assert!(output.contains("[DHCPServerStaticLease]"));
         assert!(output.contains("MACAddress=00:11:22:33:44:55"));
         assert!(output.contains("Address=192.168.1.200"));
+    }
+
+    #[test]
+    fn test_ipv6_ra_config() {
+        use keystone_core::{Ipv6RaConfig, Ipv6RaPrefix};
+
+        let config = InterfaceConfig {
+            id: Some(4),
+            name: "eth3".to_string(),
+            role: InterfaceRole::LAN,
+            enabled: true,
+            description: Some("IPv6 LAN".to_string()),
+            dhcp_mode: DhcpMode::No,
+            addresses: vec![
+                StaticAddress {
+                    address: "2001:db8::1/64".to_string(),
+                    label: None,
+                    scope: AddressScope::Global,
+                },
+            ],
+            routes: vec![],
+            dns_servers: vec![],
+            search_domains: vec![],
+            gateway: None,
+            link_local: LinkLocalMode::Yes,
+            required_for_online: true,
+            activation_policy: ActivationPolicy::Up,
+            dhcpv4_client: None,
+            dhcpv6_client: None,
+            dhcp_server: None,
+            ipv6_accept_ra: false,
+            ipv6_ra: Some(Ipv6RaConfig {
+                enabled: true,
+                router_lifetime_secs: Some(1800),
+                router_preference: Some("high".to_string()),
+                managed: false,
+                other_information: true,
+                emit_dns: true,
+                dns_servers: vec!["2001:db8::1".to_string()],
+                search_domains: vec!["example.com".to_string()],
+                prefixes: vec![
+                    Ipv6RaPrefix {
+                        prefix: "2001:db8::/64".to_string(),
+                        preferred_lifetime_secs: Some(604800),
+                        valid_lifetime_secs: Some(2592000),
+                        on_link: true,
+                        autonomous: true,
+                    },
+                ],
+            }),
+            ip_forward: IpForwardMode::Yes,
+            ip_masquerade: IpMasqueradeMode::No,
+        };
+
+        let output = generate_network_file(&config);
+        assert!(output.contains("[IPv6SendRA]"));
+        assert!(output.contains("RouterLifetimeSec=1800"));
+        assert!(output.contains("RouterPreference=high"));
+        assert!(output.contains("Managed=no"));
+        assert!(output.contains("OtherInformation=yes"));
+        assert!(output.contains("DNS=2001:db8::1"));
+        assert!(output.contains("Domains=example.com"));
+        assert!(output.contains("[IPv6Prefix]"));
+        assert!(output.contains("Prefix=2001:db8::/64"));
+        assert!(output.contains("PreferredLifetimeSec=604800"));
+        assert!(output.contains("ValidLifetimeSec=2592000"));
+        assert!(output.contains("OnLink=yes"));
+        assert!(output.contains("Assign=yes"));
     }
 
     #[test]

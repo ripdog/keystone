@@ -1,0 +1,33 @@
+[package]
+name = "keystonectl"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Command-line interface for Keystone router/firewall manager"
+
+[dependencies]
+keystone-core = { path = "../core" }
+
+# Async runtime
+tokio.workspace = true
+
+# HTTP client over Unix socket
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util = "0.1"
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+anyhow.workspace = true
+
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+rpassword = "7.3"
+
+[[bin]]
+name = "keystonectl"
+path = "src/main.rs"

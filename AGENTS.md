@@ -21,6 +21,7 @@ This document contains technical instructions for AI agents working on the Keyst
 ```
 keystone/
 ├── core/          # Shared types (Interface, FirewallRule, SystemState)
+├── ctl/           # CLI tool (keystonectl) for scripting and automation
 ├── daemon/        # Root-privileged backend (Unix socket server)
 └── web-ui/        # Unprivileged frontend (HTTP proxy + Leptos WASM)
 ```
@@ -409,6 +410,78 @@ curl -X POST http://localhost:8080/api/users \
 4. **Argon2 Hashing**: Industry-standard password hashing (resistant to GPU attacks)
 5. **No Network Exposure**: Daemon only accessible via Unix socket
 6. **Database Security**: SQLite database at `/var/lib/keystone/keystone.db` with restricted permissions
+
+## keystonectl - Command Line Interface
+
+`keystonectl` provides a command-line interface for scripting and automation. It communicates directly with the daemon over the Unix socket.
+
+### Installation & Access
+
+In production, Keystone typically runs with a dedicated user and group:
+- The daemon runs as root but sets the socket group to allow authorized access
+- Add yourself to the keystone group to use keystonectl without sudo
+- Or use sudo to access the socket directly
+
+### Commands
+
+```bash
+# Check daemon health (no auth required)
+keystonectl health
+
+# Login to get a JWT token (prompts for password securely)
+keystonectl login -u admin
+# Token is automatically saved to ~/.local/state/keystone/token (mode 0600)
+# ✓ Token saved to /home/user/.local/state/keystone/token
+#   You can now run commands without specifying a token
+
+# Get system state (automatically uses saved token)
+keystonectl state
+
+# Get dashboard with interface counters
+keystonectl dashboard
+
+# Apply configuration from file
+keystonectl apply -f config.json
+
+# Apply configuration from stdin
+cat config.json | keystonectl apply
+
+# User management (all use saved token)
+keystonectl users list
+keystonectl users create -U newuser -e user@example.com  # prompts for password
+keystonectl users update --id 2 -U newname
+keystonectl users delete --id 2
+
+# Interface management
+keystonectl interfaces list
+keystonectl interfaces save -f interfaces.json
+
+# Override saved token with -t flag or KEYSTONE_TOKEN env var
+export KEYSTONE_TOKEN="different_token"
+keystonectl state  # uses env var
+keystonectl state -t "explicit_token"  # uses -t flag
+```
+
+### JSON Output Mode
+
+Use `--json` (or `-j`) for machine-readable output:
+
+```bash
+# Get state as raw JSON for scripting
+keystonectl state --json | jq '.interfaces[].name'
+
+# Check health in scripts
+if keystonectl health --json | jq -e '.status == "healthy"' > /dev/null; then
+    echo "Daemon is healthy"
+fi
+```
+
+### Custom Socket Path
+
+```bash
+# Use alternate socket location
+keystonectl -s /custom/path/keystone.sock health
+```
 
 ### Leptos Reactivity Lessons Learned
 

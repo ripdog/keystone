@@ -45,9 +45,8 @@ impl Config {
     fn create_default(path: &str) -> Result<Self> {
         use argon2::{
             Argon2,
-            password_hash::{PasswordHasher, SaltString},
+            password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
         };
-        use rand::rngs::OsRng;
 
         warn!("Creating default config with password 'admin' - CHANGE THIS IMMEDIATELY!");
 
@@ -114,14 +113,12 @@ mod tests {
     fn test_load_config() {
         use argon2::{
             Argon2,
-            password_hash::{PasswordHasher, SaltString},
+            password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
         };
-        use rand::rngs::OsRng;
 
         let temp_dir = env::temp_dir();
         let config_path = temp_dir.join("test_keystone_load.toml");
         let config_path_str = config_path.to_str().unwrap();
-
         // Create a test config
         let password = "test123";
         let salt = SaltString::generate(&mut OsRng);

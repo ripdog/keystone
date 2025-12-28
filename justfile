@@ -136,6 +136,10 @@ build-web:
     cargo build -p keystone-web-ui --release
     cp -r web-ui/dist target/release/
 
+# Build keystonectl only
+build-ctl:
+    cargo build -p keystonectl --release
+
 # Test core library only
 test-core:
     cargo test -p keystone-core
@@ -226,7 +230,7 @@ vagrant-run-all: vagrant-run-daemon
 
 # Install Keystone binaries to /usr/local/bin in VM
 vagrant-install:
-    vagrant ssh -c "cd /src && sudo cp target/release/keystone-daemon /usr/local/bin/ && sudo cp target/release/keystone-web-ui /usr/local/bin/ && sudo chmod 755 /usr/local/bin/keystone-*"
+    vagrant ssh -c "cd /src && sudo cp target/release/keystone-daemon target/release/keystonectl /usr/local/bin/ && sudo cp target/release/keystone-web-ui /usr/local/bin/ && sudo chmod 755 /usr/local/bin/keystone-* /usr/local/bin/keystonectl"
     @echo "✅ Binaries installed to /usr/local/bin"
 
 # Check if services are running

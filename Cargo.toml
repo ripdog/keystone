@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "daemon", "web-ui"]
+members = ["core", "daemon", "web-ui", "ctl"]
 resolver = "2"
 
 [workspace.package]

@@ -591,6 +591,19 @@ pub struct InterfaceConfigsResponse {
     pub configs: Vec<InterfaceConfig>,
 }
 
+/// Single networkd file preview
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkdFilePreview {
+    pub filename: String,
+    pub content: String,
+}
+
+/// Response containing networkd file previews
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkdPreviewResponse {
+    pub files: Vec<NetworkdFilePreview>,
+}
+
 // ============================================================================
 // Legacy Types (kept for compatibility)
 // ============================================================================

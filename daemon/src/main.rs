@@ -114,6 +114,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard", get(get_dashboard))
         .route("/apply", post(apply_config))
         .route("/apply-networkd", post(apply_networkd))
+        .route("/networkd-preview", get(networkd_preview))
         .route("/managed-interfaces", get(get_managed_interfaces))
         .route("/managed-interfaces", post(save_managed_interfaces))
         .route("/interface-config", get(get_interface_configs))
@@ -582,6 +583,28 @@ async fn delete_interface_config(
         message: format!("Interface configuration '{}' deleted", name),
         config_id: None,
     }))
+}
+
+/// GET /networkd-preview - Preview networkd files without writing to disk
+async fn networkd_preview(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<keystone_core::NetworkdPreviewResponse>, AppError> {
+    info!("Generating networkd preview");
+
+    // Get all interface configs from database
+    let configs = state.db.get_interface_configs().await?;
+
+    // Generate preview for all enabled configs
+    let files: Vec<keystone_core::NetworkdFilePreview> = configs
+        .iter()
+        .filter(|config| config.enabled)
+        .map(|config| keystone_core::NetworkdFilePreview {
+            filename: networkd::get_network_filename(&config.name),
+            content: networkd::generate_network_file(config),
+        })
+        .collect();
+
+    Ok(Json(keystone_core::NetworkdPreviewResponse { files }))
 }
 
 /// POST /apply-networkd - Write interface configs to networkd and reload

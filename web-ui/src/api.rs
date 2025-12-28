@@ -3,9 +3,9 @@
 use keystone_core::{
     ApplyConfigResponse, DashboardResponse, DeleteUserRequest, DeleteUserResponse,
     InterfaceConfig, InterfaceConfigResponse, InterfaceConfigsResponse, LoginRequest,
-    LoginResponse, ManagedInterface, ManagedInterfacesResponse, SaveInterfaceConfigRequest,
-    SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
-    SaveUserRequest, SaveUserResponse, UserInfo, UsersResponse,
+    LoginResponse, ManagedInterface, ManagedInterfacesResponse, NetworkdPreviewResponse,
+    SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
+    SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse, UserInfo, UsersResponse,
 };
 
 /// Login to the API and get a JWT token
@@ -303,6 +303,28 @@ pub async fn apply_networkd(token: &str) -> Result<ApplyConfigResponse, String> 
         .header("Content-Type", "application/json")
         .body("{}")
         .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Get networkd configuration preview without writing to disk
+pub async fn get_networkd_preview(token: &str) -> Result<NetworkdPreviewResponse, String> {
+    let response = gloo_net::http::Request::get("/api/networkd-preview")
+        .header("Authorization", &format!("Bearer {}", token))
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;

@@ -4,7 +4,7 @@
 //! and run in the browser as a Single Page Application.
 
 use crate::components::{clear_stored_token, get_stored_token, AppLayout, LoginPage};
-use crate::pages::{DashboardPage, FirewallPage, InterfaceEditPage, InterfacesPage, SettingsPage};
+use crate::pages::{DashboardPage, FirewallPage, InterfaceEditPage, InterfacesPage, NetworkdPreviewPage, SettingsPage};
 use keystone_core::SystemState;
 use leptos::prelude::*;
 use leptos_router::{
@@ -69,6 +69,15 @@ pub fn App() -> impl IntoView {
                             path=path!("/firewall")
                             view=move || view! {
                                 <FirewallPage state=state/>
+                            }
+                        />
+                        <Route
+                            path=path!("/networkd-preview")
+                            view=move || view! {
+                                <NetworkdPreviewPage
+                                    auth_token=auth_token
+                                    on_unauthorized=on_unauthorized
+                                />
                             }
                         />
                         <Route

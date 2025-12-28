@@ -37,6 +37,7 @@ pub fn AppLayout(on_logout: Callback<()>, children: Children) -> impl IntoView {
                         <nav class="space-y-1">
                             <A href="/" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Dashboard"</A>
                             <A href="/interfaces" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Interfaces"</A>
+                            <A href="/networkd-preview" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Networkd Preview"</A>
                             <A href="/firewall" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Firewall"</A>
                             <A href="/settings" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Settings"</A>
                         </nav>
@@ -68,6 +69,7 @@ pub fn AppLayout(on_logout: Callback<()>, children: Children) -> impl IntoView {
                             <nav class="space-y-1">
                                 <A href="/" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Dashboard"</A>
                                 <A href="/interfaces" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Interfaces"</A>
+                                <A href="/networkd-preview" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Networkd Preview"</A>
                                 <A href="/firewall" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Firewall"</A>
                                 <A href="/settings" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Settings"</A>
                             </nav>

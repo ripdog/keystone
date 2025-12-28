@@ -1121,298 +1121,297 @@ pub fn InterfaceEditPage(
                         </div>
                     </Show>
 
+
                     // IPv6 Router Advertisement Settings (only shown for LAN interfaces)
                     <Show when=move || role.get() == InterfaceRole::LAN>
-                        <div class="bg-gray-800 rounded-lg p-6 mb-4">
+                        <div class="border border-gray-600 rounded-lg overflow-hidden">
                             <button
-                                class="w-full flex justify-between items-center text-left"
+                                type="button"
+                                class="w-full flex items-center justify-between px-4 py-3 bg-gray-700/50 hover:bg-gray-700 text-left"
                                 on:click=move |_| set_show_ipv6_ra.update(|v| *v = !*v)
                             >
-                                <div>
+                                <div class="flex items-center gap-3">
                                     <span class="text-gray-200 font-medium">"IPv6 Router Advertisement"</span>
-                                    <p class="text-sm text-gray-400 mt-1">
-                                        "Advertise IPv6 prefixes and act as an IPv6 gateway (SLAAC)"
-                                    </p>
+                                    <Show when=move || ipv6_ra_enabled.get()>
+                                        <span class="text-xs bg-green-600 text-white px-2 py-0.5 rounded">"Enabled"</span>
+                                    </Show>
                                 </div>
-                                <span class="text-gray-400">
-                                    {move || if show_ipv6_ra.get() { "▼" } else { "▶" }}
-                                </span>
+                                <svg
+                                    class="w-5 h-5 text-gray-400 transition-transform"
+                                    class:rotate-180=move || show_ipv6_ra.get()
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
                             </button>
-
                             <Show when=move || show_ipv6_ra.get()>
-                                <div class="mt-4 space-y-4 pt-4 border-t border-gray-700">
+                                <div class="p-4 space-y-4 border-t border-gray-600">
                                     // Enable IPv6 RA
-                                    <label class="flex items-center gap-3 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            class="w-4 h-4"
-                                            prop:checked=move || ipv6_ra_enabled.get()
-                                            on:change=move |e| set_ipv6_ra_enabled.set(event_target_checked(&e))
-                                        />
-                                        <span class="text-gray-200">"Send Router Advertisements"</span>
-                                    </label>
+                                    <div>
+                                        <label class="flex items-center gap-3 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked=move || ipv6_ra_enabled.get()
+                                                on:change=move |ev| set_ipv6_ra_enabled.set(event_target_checked(&ev))
+                                                class="w-5 h-5 rounded"
+                                            />
+                                            <span class="text-gray-200 font-medium">"Send Router Advertisements"</span>
+                                        </label>
+                                        <p class="text-gray-500 text-sm mt-1 ml-8">"Advertise IPv6 prefixes for SLAAC and act as IPv6 gateway"</p>
+                                    </div>
 
                                     <Show when=move || ipv6_ra_enabled.get()>
-                                        <div class="space-y-4 pl-7">
-                                            // Router Lifetime
+                                        // Router Settings
+                                        <div class="grid grid-cols-2 gap-4">
                                             <div>
-                                                <label class="block text-sm text-gray-300 mb-1">"Router Lifetime (seconds)"</label>
+                                                <label class="block text-gray-300 mb-2 text-sm">"Router Lifetime (seconds)"</label>
                                                 <input
                                                     type="text"
-                                                    class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-200"
                                                     placeholder="1800"
                                                     prop:value=move || ipv6_ra_router_lifetime.get()
-                                                    on:input=move |e| set_ipv6_ra_router_lifetime.set(event_target_value(&e))
+                                                    on:input=move |ev| set_ipv6_ra_router_lifetime.set(event_target_value(&ev))
+                                                    class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
                                                 />
                                             </div>
-
-                                            // Router Preference
                                             <div>
-                                                <label class="block text-sm text-gray-300 mb-1">"Router Preference"</label>
+                                                <label class="block text-gray-300 mb-2 text-sm">"Router Preference"</label>
                                                 <select
-                                                    class="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-200"
-                                                    on:change=move |e| set_ipv6_ra_router_pref.set(event_target_value(&e))
+                                                    class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                                                    on:change=move |ev| set_ipv6_ra_router_pref.set(event_target_value(&ev))
                                                 >
                                                     <option value="low" selected=move || ipv6_ra_router_pref.get() == "low">"Low"</option>
                                                     <option value="medium" selected=move || ipv6_ra_router_pref.get() == "medium">"Medium"</option>
                                                     <option value="high" selected=move || ipv6_ra_router_pref.get() == "high">"High"</option>
                                                 </select>
                                             </div>
+                                        </div>
 
-                                            // Managed/Other flags
-                                            <div class="space-y-2">
+                                        // DHCPv6 Flags
+                                        <div class="space-y-3">
+                                            <label class="block text-gray-300 text-sm font-medium">"DHCPv6 Flags"</label>
+                                            <div class="space-y-2 ml-4">
                                                 <label class="flex items-center gap-3 cursor-pointer">
                                                     <input
                                                         type="checkbox"
-                                                        class="w-4 h-4"
-                                                        prop:checked=move || ipv6_ra_managed.get()
-                                                        on:change=move |e| set_ipv6_ra_managed.set(event_target_checked(&e))
+                                                        checked=move || ipv6_ra_managed.get()
+                                                        on:change=move |ev| set_ipv6_ra_managed.set(event_target_checked(&ev))
+                                                        class="w-4 h-4 rounded"
                                                     />
                                                     <div>
                                                         <span class="text-gray-200">"Managed (M flag)"</span>
-                                                        <p class="text-xs text-gray-400">"Clients should use DHCPv6 for addresses"</p>
+                                                        <span class="text-gray-500 text-sm ml-2">"Use DHCPv6 for addresses"</span>
                                                     </div>
                                                 </label>
                                                 <label class="flex items-center gap-3 cursor-pointer">
                                                     <input
                                                         type="checkbox"
-                                                        class="w-4 h-4"
-                                                        prop:checked=move || ipv6_ra_other_info.get()
-                                                        on:change=move |e| set_ipv6_ra_other_info.set(event_target_checked(&e))
+                                                        checked=move || ipv6_ra_other_info.get()
+                                                        on:change=move |ev| set_ipv6_ra_other_info.set(event_target_checked(&ev))
+                                                        class="w-4 h-4 rounded"
                                                     />
                                                     <div>
-                                                        <span class="text-gray-200">"Other Information (O flag)"</span>
-                                                        <p class="text-xs text-gray-400">"Clients should use DHCPv6 for other config (DNS, etc)"</p>
+                                                        <span class="text-gray-200">"Other Info (O flag)"</span>
+                                                        <span class="text-gray-500 text-sm ml-2">"Use DHCPv6 for DNS/other config"</span>
                                                     </div>
                                                 </label>
                                             </div>
+                                        </div>
 
-                                            // Emit DNS
-                                            <label class="flex items-center gap-3 cursor-pointer">
+                                        // DNS in RA
+                                        <div>
+                                            <label class="flex items-center gap-3 cursor-pointer mb-3">
                                                 <input
                                                     type="checkbox"
-                                                    class="w-4 h-4"
-                                                    prop:checked=move || ipv6_ra_emit_dns.get()
-                                                    on:change=move |e| set_ipv6_ra_emit_dns.set(event_target_checked(&e))
+                                                    checked=move || ipv6_ra_emit_dns.get()
+                                                    on:change=move |ev| set_ipv6_ra_emit_dns.set(event_target_checked(&ev))
+                                                    class="w-4 h-4 rounded"
                                                 />
-                                                <span class="text-gray-200">"Advertise DNS servers in RA"</span>
+                                                <span class="text-gray-200">"Advertise DNS in Router Advertisements"</span>
                                             </label>
 
-                                            // DNS servers for RA
                                             <Show when=move || ipv6_ra_emit_dns.get()>
-                                                <div>
-                                                    <label class="block text-sm text-gray-300 mb-2">"DNS Servers (RDNSS)"</label>
-                                                    <div class="space-y-2">
-                                                        <For
-                                                            each=move || ipv6_ra_dns_servers.get().into_iter().enumerate()
-                                                            key=|(i, dns)| (*i, dns.clone())
-                                                            children=move |(i, dns)| {
-                                                                view! {
-                                                                    <div class="flex gap-2">
-                                                                        <input
-                                                                            type="text"
-                                                                            class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-200"
-                                                                            value=dns.clone()
-                                                                            disabled=true
-                                                                        />
-                                                                        <button
-                                                                            class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
-                                                                            on:click=move |_| {
-                                                                                set_ipv6_ra_dns_servers.update(|servers| {
-                                                                                    servers.remove(i);
-                                                                                });
-                                                                            }
-                                                                        >
-                                                                            "Remove"
-                                                                        </button>
-                                                                    </div>
-                                                                }
-                                                            }
-                                                        />
-                                                        <div class="flex gap-2">
-                                                            <input
-                                                                type="text"
-                                                                class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-200"
-                                                                placeholder="2001:db8::1"
-                                                                prop:value=move || new_ra_dns.get()
-                                                                on:input=move |e| set_new_ra_dns.set(event_target_value(&e))
-                                                            />
-                                                            <button
-                                                                class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                                                on:click=move |_| {
-                                                                    let dns = new_ra_dns.get().trim().to_string();
-                                                                    if !dns.is_empty() {
-                                                                        set_ipv6_ra_dns_servers.update(|servers| servers.push(dns));
-                                                                        set_new_ra_dns.set(String::new());
+                                                <div class="ml-7 space-y-3">
+                                                    // DNS Servers
+                                                    <div>
+                                                        <label class="block text-gray-300 mb-2 text-sm">"DNS Servers (RDNSS)"</label>
+                                                        <div class="space-y-2">
+                                                            <For
+                                                                each=move || ipv6_ra_dns_servers.get().into_iter().enumerate()
+                                                                key=|(i, dns)| (*i, dns.clone())
+                                                                children=move |(i, dns)| {
+                                                                    view! {
+                                                                        <div class="flex gap-2">
+                                                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{dns}</span>
+                                                                            <button
+                                                                                type="button"
+                                                                                class="text-red-400 hover:text-red-300 px-2"
+                                                                                on:click=move |_| {
+                                                                                    set_ipv6_ra_dns_servers.update(|servers| { servers.remove(i); });
+                                                                                }
+                                                                            >
+                                                                                "✕"
+                                                                            </button>
+                                                                        </div>
                                                                     }
                                                                 }
-                                                            >
-                                                                "Add"
-                                                            </button>
+                                                            />
+                                                            <div class="flex gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="2001:db8::1"
+                                                                    prop:value=move || new_ra_dns.get()
+                                                                    on:input=move |ev| set_new_ra_dns.set(event_target_value(&ev))
+                                                                    class="flex-1 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                                                                    on:click=move |_| {
+                                                                        let dns = new_ra_dns.get().trim().to_string();
+                                                                        if !dns.is_empty() {
+                                                                            set_ipv6_ra_dns_servers.update(|servers| servers.push(dns));
+                                                                            set_new_ra_dns.set(String::new());
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    "Add"
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    // Search Domains
+                                                    <div>
+                                                        <label class="block text-gray-300 mb-2 text-sm">"Search Domains (DNSSL)"</label>
+                                                        <div class="space-y-2">
+                                                            <For
+                                                                each=move || ipv6_ra_search_domains.get().into_iter().enumerate()
+                                                                key=|(i, domain)| (*i, domain.clone())
+                                                                children=move |(i, domain)| {
+                                                                    view! {
+                                                                        <div class="flex gap-2">
+                                                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{domain}</span>
+                                                                            <button
+                                                                                type="button"
+                                                                                class="text-red-400 hover:text-red-300 px-2"
+                                                                                on:click=move |_| {
+                                                                                    set_ipv6_ra_search_domains.update(|domains| { domains.remove(i); });
+                                                                                }
+                                                                            >
+                                                                                "✕"
+                                                                            </button>
+                                                                        </div>
+                                                                    }
+                                                                }
+                                                            />
+                                                            <div class="flex gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    placeholder="example.com"
+                                                                    prop:value=move || new_ra_domain.get()
+                                                                    on:input=move |ev| set_new_ra_domain.set(event_target_value(&ev))
+                                                                    class="flex-1 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                                                                    on:click=move |_| {
+                                                                        let domain = new_ra_domain.get().trim().to_string();
+                                                                        if !domain.is_empty() {
+                                                                            set_ipv6_ra_search_domains.update(|domains| domains.push(domain));
+                                                                            set_new_ra_domain.set(String::new());
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    "Add"
+                                                                </button>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 </div>
                                             </Show>
+                                        </div>
 
-                                            // Search domains for RA
-                                            <div>
-                                                <label class="block text-sm text-gray-300 mb-2">"Search Domains (DNSSL)"</label>
-                                                <div class="space-y-2">
-                                                    <For
-                                                        each=move || ipv6_ra_search_domains.get().into_iter().enumerate()
-                                                        key=|(i, domain)| (*i, domain.clone())
-                                                        children=move |(i, domain)| {
-                                                            view! {
-                                                                <div class="flex gap-2">
-                                                                    <input
-                                                                        type="text"
-                                                                        class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-200"
-                                                                        value=domain.clone()
-                                                                        disabled=true
-                                                                    />
-                                                                    <button
-                                                                        class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
-                                                                        on:click=move |_| {
-                                                                            set_ipv6_ra_search_domains.update(|domains| {
-                                                                                domains.remove(i);
-                                                                            });
-                                                                        }
-                                                                    >
-                                                                        "Remove"
-                                                                    </button>
-                                                                </div>
-                                                            }
+                                        // IPv6 Prefixes
+                                        <div>
+                                            <label class="block text-gray-300 mb-2 text-sm font-medium">"IPv6 Prefixes"</label>
+                                            <div class="space-y-2">
+                                                <For
+                                                    each=move || ipv6_ra_prefixes.get().into_iter().enumerate()
+                                                    key=|(i, prefix)| (*i, prefix.prefix.clone())
+                                                    children=move |(i, prefix)| {
+                                                        view! {
+                                                            <div class="flex items-center gap-2 bg-gray-700 rounded px-3 py-2">
+                                                                <span class="flex-1 text-white font-mono text-sm">{prefix.prefix.clone()}</span>
+                                                                <span class="text-gray-400 text-xs">
+                                                                    {prefix.preferred_lifetime_secs.map(|s| format!("pref: {}s", s)).unwrap_or_default()}
+                                                                    " "
+                                                                    {prefix.valid_lifetime_secs.map(|s| format!("valid: {}s", s)).unwrap_or_default()}
+                                                                </span>
+                                                                <button
+                                                                    type="button"
+                                                                    class="text-red-400 hover:text-red-300 px-2"
+                                                                    on:click=move |_| {
+                                                                        set_ipv6_ra_prefixes.update(|prefixes| { prefixes.remove(i); });
+                                                                    }
+                                                                >
+                                                                    "✕"
+                                                                </button>
+                                                            </div>
                                                         }
+                                                    }
+                                                />
+                                                <div class="bg-gray-700/50 rounded p-3 space-y-2">
+                                                    <input
+                                                        type="text"
+                                                        placeholder="2001:db8::/64"
+                                                        prop:value=move || new_prefix.get()
+                                                        on:input=move |ev| set_new_prefix.set(event_target_value(&ev))
+                                                        class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
                                                     />
-                                                    <div class="flex gap-2">
+                                                    <div class="grid grid-cols-2 gap-2">
                                                         <input
                                                             type="text"
-                                                            class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-gray-200"
-                                                            placeholder="example.com"
-                                                            prop:value=move || new_ra_domain.get()
-                                                            on:input=move |e| set_new_ra_domain.set(event_target_value(&e))
+                                                            placeholder="Preferred lifetime (s)"
+                                                            prop:value=move || new_prefix_preferred.get()
+                                                            on:input=move |ev| set_new_prefix_preferred.set(event_target_value(&ev))
+                                                            class="bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
                                                         />
-                                                        <button
-                                                            class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                                            on:click=move |_| {
-                                                                let domain = new_ra_domain.get().trim().to_string();
-                                                                if !domain.is_empty() {
-                                                                    set_ipv6_ra_search_domains.update(|domains| domains.push(domain));
-                                                                    set_new_ra_domain.set(String::new());
-                                                                }
-                                                            }
-                                                        >
-                                                            "Add"
-                                                        </button>
+                                                        <input
+                                                            type="text"
+                                                            placeholder="Valid lifetime (s)"
+                                                            prop:value=move || new_prefix_valid.get()
+                                                            on:input=move |ev| set_new_prefix_valid.set(event_target_value(&ev))
+                                                            class="bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                                                        />
                                                     </div>
-                                                </div>
-                                            </div>
-
-                                            // IPv6 Prefixes
-                                            <div>
-                                                <label class="block text-sm text-gray-300 mb-2">"IPv6 Prefixes to Advertise"</label>
-                                                <div class="space-y-2">
-                                                    <For
-                                                        each=move || ipv6_ra_prefixes.get().into_iter().enumerate()
-                                                        key=|(i, prefix)| (*i, prefix.prefix.clone())
-                                                        children=move |(i, prefix)| {
-                                                            view! {
-                                                                <div class="bg-gray-900 rounded p-3">
-                                                                    <div class="flex justify-between items-start mb-2">
-                                                                        <span class="text-gray-200 font-mono">{prefix.prefix.clone()}</span>
-                                                                        <button
-                                                                            class="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-sm"
-                                                                            on:click=move |_| {
-                                                                                set_ipv6_ra_prefixes.update(|prefixes| {
-                                                                                    prefixes.remove(i);
-                                                                                });
-                                                                            }
-                                                                        >
-                                                                            "Remove"
-                                                                        </button>
-                                                                    </div>
-                                                                    <div class="text-xs text-gray-400 space-y-1">
-                                                                        {prefix.preferred_lifetime_secs.map(|s| format!("Preferred: {}s", s))}
-                                                                        " | "
-                                                                        {prefix.valid_lifetime_secs.map(|s| format!("Valid: {}s", s))}
-                                                                        <br/>
-                                                                        {if prefix.on_link { "On-link" } else { "" }}
-                                                                        " "
-                                                                        {if prefix.autonomous { "Autonomous (SLAAC)" } else { "" }}
-                                                                    </div>
-                                                                </div>
-                                                            }
-                                                        }
-                                                    />
-                                                    <div class="bg-gray-900 rounded p-3 space-y-2">
-                                                        <input
-                                                            type="text"
-                                                            class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200"
-                                                            placeholder="2001:db8::/64"
-                                                            prop:value=move || new_prefix.get()
-                                                            on:input=move |e| set_new_prefix.set(event_target_value(&e))
-                                                        />
-                                                        <div class="grid grid-cols-2 gap-2">
-                                                            <input
-                                                                type="text"
-                                                                class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200"
-                                                                placeholder="Preferred lifetime (s)"
-                                                                prop:value=move || new_prefix_preferred.get()
-                                                                on:input=move |e| set_new_prefix_preferred.set(event_target_value(&e))
-                                                            />
-                                                            <input
-                                                                type="text"
-                                                                class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-gray-200"
-                                                                placeholder="Valid lifetime (s)"
-                                                                prop:value=move || new_prefix_valid.get()
-                                                                on:input=move |e| set_new_prefix_valid.set(event_target_value(&e))
-                                                            />
-                                                        </div>
-                                                        <button
-                                                            class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                                            on:click=move |_| {
-                                                                let prefix_str = new_prefix.get().trim().to_string();
-                                                                if !prefix_str.is_empty() {
-                                                                    let preferred = new_prefix_preferred.get().parse().ok();
-                                                                    let valid = new_prefix_valid.get().parse().ok();
-                                                                    set_ipv6_ra_prefixes.update(|prefixes| {
-                                                                        prefixes.push(Ipv6RaPrefix {
-                                                                            prefix: prefix_str,
-                                                                            preferred_lifetime_secs: preferred,
-                                                                            valid_lifetime_secs: valid,
-                                                                            on_link: true,
-                                                                            autonomous: true,
-                                                                        });
+                                                    <button
+                                                        type="button"
+                                                        class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                                                        on:click=move |_| {
+                                                            let prefix_str = new_prefix.get().trim().to_string();
+                                                            if !prefix_str.is_empty() {
+                                                                let preferred = new_prefix_preferred.get().parse().ok();
+                                                                let valid = new_prefix_valid.get().parse().ok();
+                                                                set_ipv6_ra_prefixes.update(|prefixes| {
+                                                                    prefixes.push(Ipv6RaPrefix {
+                                                                        prefix: prefix_str,
+                                                                        preferred_lifetime_secs: preferred,
+                                                                        valid_lifetime_secs: valid,
+                                                                        on_link: true,
+                                                                        autonomous: true,
                                                                     });
-                                                                    set_new_prefix.set(String::new());
-                                                                    set_new_prefix_preferred.set(String::new());
-                                                                    set_new_prefix_valid.set(String::new());
-                                                                }
+                                                                });
+                                                                set_new_prefix.set(String::new());
+                                                                set_new_prefix_preferred.set(String::new());
+                                                                set_new_prefix_valid.set(String::new());
                                                             }
-                                                        >
-                                                            "Add Prefix"
-                                                        </button>
-                                                    </div>
+                                                        }
+                                                    >
+                                                        "Add Prefix"
+                                                    </button>
                                                 </div>
                                             </div>
                                         </div>
@@ -1421,6 +1420,7 @@ pub fn InterfaceEditPage(
                             </Show>
                         </div>
                     </Show>
+
 
                     // Save/Cancel buttons
                     <div class="flex gap-3 pt-4 border-t border-gray-700">

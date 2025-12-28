@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    DhcpMode, Dhcpv4ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
-    ManagedInterface, StaticAddress, StaticRoute, User, UserInfo,
+    DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole,
+    IpForwardMode, IpMasqueradeMode, ManagedInterface, StaticAddress, StaticRoute, User, UserInfo,
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tracing::info;
@@ -266,6 +266,7 @@ impl Database {
             let dns_servers = self.get_interface_dns(id).await?;
             let search_domains = self.get_interface_domains(id).await?;
             let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
+            let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
 
             configs.push(InterfaceConfig {
                 id: Some(id),
@@ -280,6 +281,7 @@ impl Database {
                 search_domains,
                 gateway,
                 dhcpv4_client,
+                dhcpv6_client,
                 ipv6_accept_ra,
                 ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                 ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -307,6 +309,7 @@ impl Database {
                 let dns_servers = self.get_interface_dns(id).await?;
                 let search_domains = self.get_interface_domains(id).await?;
                 let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
+                let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
 
                 Ok(Some(InterfaceConfig {
                     id: Some(id),
@@ -321,6 +324,7 @@ impl Database {
                     search_domains,
                     gateway,
                     dhcpv4_client,
+                    dhcpv6_client,
                     ipv6_accept_ra,
                     ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                     ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -465,6 +469,28 @@ impl Database {
             .await?;
         }
 
+        // Save DHCPv6 client config
+        sqlx::query("DELETE FROM dhcpv6_client_config WHERE interface_config_id = ?")
+            .bind(config_id)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(dhcp_config) = &config.dhcpv6_client {
+            sqlx::query(
+                r#"INSERT INTO dhcpv6_client_config 
+                   (interface_config_id, use_dns, use_ntp, use_domains, prefix_delegation_hint, rapid_commit, without_ra)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)"#
+            )
+            .bind(config_id)
+            .bind(dhcp_config.use_dns)
+            .bind(dhcp_config.use_ntp)
+            .bind(&dhcp_config.use_domains)
+            .bind(&dhcp_config.prefix_delegation_hint)
+            .bind(dhcp_config.rapid_commit)
+            .bind(&dhcp_config.without_ra)
+            .execute(&mut *tx)
+            .await?;
+        }
+
         tx.commit().await.context("Failed to commit transaction")?;
         info!("Saved interface config for {}", config.name);
         Ok(config_id)
@@ -563,6 +589,28 @@ impl Database {
                 use_mtu,
                 use_domains,
                 route_metric: route_metric.map(|m| m as u32),
+            }
+        }))
+    }
+
+    async fn get_dhcpv6_client_config(&self, config_id: i64) -> Result<Option<Dhcpv6ClientConfig>> {
+        let row = sqlx::query_as::<_, (bool, bool, String, Option<String>, bool, String)>(
+            r#"SELECT use_dns, use_ntp, use_domains, prefix_delegation_hint, rapid_commit, without_ra
+               FROM dhcpv6_client_config WHERE interface_config_id = ?"#
+        )
+        .bind(config_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch DHCPv6 client config")?;
+
+        Ok(row.map(|(use_dns, use_ntp, use_domains, prefix_delegation_hint, rapid_commit, without_ra)| {
+            Dhcpv6ClientConfig {
+                use_dns,
+                use_ntp,
+                use_domains,
+                prefix_delegation_hint,
+                rapid_commit,
+                without_ra,
             }
         }))
     }

@@ -186,6 +186,37 @@ impl Default for Dhcpv4ClientConfig {
     }
 }
 
+/// DHCPv6 client configuration options
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Dhcpv6ClientConfig {
+    /// Use DNS servers provided by DHCPv6
+    pub use_dns: bool,
+    /// Use NTP servers provided by DHCPv6
+    pub use_ntp: bool,
+    /// Use domains provided by DHCPv6 (yes/no/route)
+    pub use_domains: String,
+    /// Request specific prefix for prefix delegation (CIDR notation, e.g., "::1/64")
+    pub prefix_delegation_hint: Option<String>,
+    /// Use DHCPv6 rapid commit (2-message exchange instead of 4)
+    pub rapid_commit: bool,
+    /// DHCPv6 operation mode without Router Advertisement
+    /// Values: "no" (wait for RA), "solicit" (send solicit immediately), "information-request"
+    pub without_ra: String,
+}
+
+impl Default for Dhcpv6ClientConfig {
+    fn default() -> Self {
+        Self {
+            use_dns: true,
+            use_ntp: true,
+            use_domains: "yes".to_string(),
+            prefix_delegation_hint: None,
+            rapid_commit: true,
+            without_ra: "no".to_string(),
+        }
+    }
+}
+
 /// Complete interface configuration for systemd-networkd
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InterfaceConfig {
@@ -217,6 +248,8 @@ pub struct InterfaceConfig {
     // DHCP client settings
     /// DHCPv4 client configuration (only used when dhcp_mode includes IPv4)
     pub dhcpv4_client: Option<Dhcpv4ClientConfig>,
+    /// DHCPv6 client configuration (only used when dhcp_mode includes IPv6)
+    pub dhcpv6_client: Option<Dhcpv6ClientConfig>,
     
     // IPv6 settings
     /// Accept IPv6 Router Advertisements
@@ -244,6 +277,7 @@ impl Default for InterfaceConfig {
             search_domains: Vec::new(),
             gateway: None,
             dhcpv4_client: None,
+            dhcpv6_client: None,
             ipv6_accept_ra: true,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
@@ -648,6 +682,14 @@ mod tests {
                 use_mtu: true,
                 use_domains: "yes".to_string(),
                 route_metric: Some(100),
+            }),
+            dhcpv6_client: Some(Dhcpv6ClientConfig {
+                use_dns: true,
+                use_ntp: true,
+                use_domains: "yes".to_string(),
+                prefix_delegation_hint: Some("::1/64".to_string()),
+                rapid_commit: true,
+                without_ra: "no".to_string(),
             }),
             ipv6_accept_ra: true,
             ip_forward: IpForwardMode::Yes,

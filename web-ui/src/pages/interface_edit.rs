@@ -1,8 +1,8 @@
 //! Interface edit page for configuring individual interface settings
 
 use keystone_core::{
-    DhcpMode, Dhcpv4ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
-    StaticAddress, StaticRoute,
+    DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole,
+    IpForwardMode, IpMasqueradeMode, StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -53,6 +53,12 @@ pub fn InterfaceEditPage(
     let (dhcp_use_mtu, set_dhcp_use_mtu) = signal(true);
     let (dhcp_send_hostname, set_dhcp_send_hostname) = signal(true);
     let (dhcp_route_metric, set_dhcp_route_metric) = signal(String::new());
+    
+    // DHCPv6 client settings
+    let (dhcp6_use_dns, set_dhcp6_use_dns) = signal(true);
+    let (dhcp6_use_ntp, set_dhcp6_use_ntp) = signal(true);
+    let (dhcp6_rapid_commit, set_dhcp6_rapid_commit) = signal(true);
+    let (dhcp6_prefix_hint, set_dhcp6_prefix_hint) = signal(String::new());
 
     // Load interface configuration
     Effect::new(move |_| {
@@ -88,6 +94,14 @@ pub fn InterfaceEditPage(
                             set_dhcp_route_metric.set(dhcp_cfg.route_metric.map(|m| m.to_string()).unwrap_or_default());
                         }
                         
+                        // DHCPv6 client settings
+                        if let Some(dhcp6_cfg) = &cfg.dhcpv6_client {
+                            set_dhcp6_use_dns.set(dhcp6_cfg.use_dns);
+                            set_dhcp6_use_ntp.set(dhcp6_cfg.use_ntp);
+                            set_dhcp6_rapid_commit.set(dhcp6_cfg.rapid_commit);
+                            set_dhcp6_prefix_hint.set(dhcp6_cfg.prefix_delegation_hint.clone().unwrap_or_default());
+                        }
+                        
                         set_config.set(Some(cfg));
                         set_is_new.set(false);
                     }
@@ -106,6 +120,7 @@ pub fn InterfaceEditPage(
                             search_domains: vec![],
                             gateway: None,
                             dhcpv4_client: None,
+                            dhcpv6_client: None,
                             ipv6_accept_ra: true,
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
@@ -251,6 +266,21 @@ pub fn InterfaceEditPage(
                     None
                 };
                 
+                // Build DHCPv6 client config if DHCP includes IPv6
+                let dhcpv6_client = if current_dhcp_mode == DhcpMode::Yes || current_dhcp_mode == DhcpMode::Ipv6 {
+                    let hint = dhcp6_prefix_hint.get();
+                    Some(Dhcpv6ClientConfig {
+                        use_dns: dhcp6_use_dns.get(),
+                        use_ntp: dhcp6_use_ntp.get(),
+                        use_domains: "yes".to_string(),
+                        prefix_delegation_hint: if hint.is_empty() { None } else { Some(hint) },
+                        rapid_commit: dhcp6_rapid_commit.get(),
+                        without_ra: "no".to_string(),
+                    })
+                } else {
+                    None
+                };
+                
                 let updated = InterfaceConfig {
                     id: current.id,
                     name: current.name.clone(),
@@ -264,6 +294,7 @@ pub fn InterfaceEditPage(
                     search_domains: search_domains.get(),
                     gateway: if gw.is_empty() { None } else { Some(gw) },
                     dhcpv4_client,
+                    dhcpv6_client,
                     ipv6_accept_ra: ipv6_accept_ra.get(),
                     ip_forward: ip_forward.get(),
                     ip_masquerade: ip_masquerade.get(),
@@ -478,6 +509,53 @@ pub fn InterfaceEditPage(
                                     on:input=move |ev| set_dhcp_route_metric.set(event_target_value(&ev))
                                     class="w-32 bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
                                 />
+                            </div>
+                        </div>
+                    </Show>
+
+                    // DHCPv6 Client Settings (only show when DHCP includes IPv6)
+                    <Show when=move || dhcp_mode.get() == DhcpMode::Yes || dhcp_mode.get() == DhcpMode::Ipv6>
+                        <div class="bg-gray-700/50 rounded-lg p-4 space-y-4">
+                            <h3 class="text-gray-200 font-medium">"DHCPv6 Client Options"</h3>
+                            <div class="grid grid-cols-2 gap-4">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp6_use_dns.get()
+                                        on:change=move |ev| set_dhcp6_use_dns.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use DHCPv6 DNS"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp6_use_ntp.get()
+                                        on:change=move |ev| set_dhcp6_use_ntp.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Use DHCPv6 NTP"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || dhcp6_rapid_commit.get()
+                                        on:change=move |ev| set_dhcp6_rapid_commit.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Rapid Commit"</span>
+                                </label>
+                            </div>
+                            <div>
+                                <label class="block text-gray-400 text-sm mb-1">"Prefix Delegation Hint (optional)"</label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g., ::1/64"
+                                    prop:value=move || dhcp6_prefix_hint.get()
+                                    on:input=move |ev| set_dhcp6_prefix_hint.set(event_target_value(&ev))
+                                    class="w-48 bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
+                                />
+                                <p class="text-gray-500 text-xs mt-1">"Request specific prefix for prefix delegation"</p>
                             </div>
                         </div>
                     </Show>

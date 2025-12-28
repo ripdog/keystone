@@ -107,12 +107,12 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `UseDNS=` | bool | Use DHCPv6 DNS | P2 | ⬜ TODO |
-| `UseNTP=` | bool | Use DHCPv6 NTP | P2 | ⬜ TODO |
-| `UseDomains=` | enum | Use DHCPv6 domains | P2 | ⬜ TODO |
-| `WithoutRA=` | enum | DHCPv6 without RA | P3 | ⬜ TODO |
-| `PrefixDelegationHint=` | CIDR | Request specific prefix | P2 | ⬜ TODO |
-| `RapidCommit=` | bool | Use rapid commit | P3 | ⬜ TODO |
+| `UseDNS=` | bool | Use DHCPv6 DNS | P2 | ✅ DONE |
+| `UseNTP=` | bool | Use DHCPv6 NTP | P2 | ✅ DONE |
+| `UseDomains=` | enum | Use DHCPv6 domains | P2 | ✅ DONE |
+| `WithoutRA=` | enum | DHCPv6 without RA | P3 | ✅ DONE |
+| `PrefixDelegationHint=` | CIDR | Request specific prefix | P2 | ✅ DONE |
+| `RapidCommit=` | bool | Use rapid commit | P3 | ✅ DONE |
 
 ### [IPv6AcceptRA] Section
 

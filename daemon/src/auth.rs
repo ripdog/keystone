@@ -30,7 +30,7 @@ impl AuthManager {
 
     /// Hash a password using Argon2
     pub fn hash_password(password: &str) -> Result<String> {
-        use rand::rngs::OsRng;
+        use argon2::password_hash::rand_core::OsRng;
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
         let hash = argon2

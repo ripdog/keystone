@@ -4,9 +4,10 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    ActivationPolicy, AddressScope, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
-    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, LinkLocalMode,
-    ManagedInterface, RouteType, StaticAddress, StaticRoute, User, UserInfo,
+    ActivationPolicy, AddressScope, DhcpMode, DhcpServerConfig, DhcpStaticLease,
+    Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
+    IpMasqueradeMode, LinkLocalMode, ManagedInterface, RouteType, StaticAddress, StaticRoute,
+    User, UserInfo,
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tracing::info;
@@ -252,8 +253,8 @@ impl Database {
 
     /// Get all interface configurations
     pub async fn get_interface_configs(&self) -> Result<Vec<InterfaceConfig>> {
-        let rows = sqlx::query_as::<_, (i64, String, String, bool, Option<String>, String, Option<String>, bool, String, String)>(
-            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade
+        let rows = sqlx::query_as::<_, (i64, String, String, bool, Option<String>, String, Option<String>, bool, String, String, String, bool, String)>(
+            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy
                FROM interface_config ORDER BY interface_name"#,
         )
         .fetch_all(&self.pool)
@@ -261,13 +262,14 @@ impl Database {
         .context("Failed to fetch interface configs")?;
 
         let mut configs = Vec::new();
-        for (id, name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade) in rows {
+        for (id, name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy) in rows {
             let addresses = self.get_interface_addresses(id).await?;
             let routes = self.get_interface_routes(id).await?;
             let dns_servers = self.get_interface_dns(id).await?;
             let search_domains = self.get_interface_domains(id).await?;
             let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
             let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
+            let dhcp_server = self.get_dhcp_server_config(id).await?;
 
             configs.push(InterfaceConfig {
                 id: Some(id),
@@ -281,12 +283,12 @@ impl Database {
                 dns_servers,
                 search_domains,
                 gateway,
-                link_local: LinkLocalMode::default(),
-                required_for_online: true,
-                activation_policy: ActivationPolicy::default(),
+                link_local: link_local.parse().unwrap_or(LinkLocalMode::default()),
+                required_for_online,
+                activation_policy: activation_policy.parse().unwrap_or(ActivationPolicy::default()),
                 dhcpv4_client,
                 dhcpv6_client,
-                dhcp_server: None, // TODO: Load from database
+                dhcp_server,
                 ipv6_accept_ra,
                 ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                 ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -298,8 +300,8 @@ impl Database {
 
     /// Get a single interface configuration by name
     pub async fn get_interface_config(&self, name: &str) -> Result<Option<InterfaceConfig>> {
-        let row = sqlx::query_as::<_, (i64, String, String, bool, Option<String>, String, Option<String>, bool, String, String)>(
-            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade
+        let row = sqlx::query_as::<_, (i64, String, String, bool, Option<String>, String, Option<String>, bool, String, String, String, bool, String)>(
+            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy
                FROM interface_config WHERE interface_name = ?"#,
         )
         .bind(name)
@@ -308,13 +310,14 @@ impl Database {
         .context("Failed to fetch interface config")?;
 
         match row {
-            Some((id, name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade)) => {
+            Some((id, name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy)) => {
                 let addresses = self.get_interface_addresses(id).await?;
                 let routes = self.get_interface_routes(id).await?;
                 let dns_servers = self.get_interface_dns(id).await?;
                 let search_domains = self.get_interface_domains(id).await?;
                 let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
                 let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
+                let dhcp_server = self.get_dhcp_server_config(id).await?;
 
                 Ok(Some(InterfaceConfig {
                     id: Some(id),
@@ -328,12 +331,12 @@ impl Database {
                     dns_servers,
                     search_domains,
                     gateway,
-                    link_local: LinkLocalMode::default(),
-                    required_for_online: true,
-                    activation_policy: ActivationPolicy::default(),
+                    link_local: link_local.parse().unwrap_or(LinkLocalMode::default()),
+                    required_for_online,
+                    activation_policy: activation_policy.parse().unwrap_or(ActivationPolicy::default()),
                     dhcpv4_client,
                     dhcpv6_client,
-                    dhcp_server: None, // TODO: Load from database
+                    dhcp_server,
                     ipv6_accept_ra,
                     ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                     ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
@@ -356,7 +359,8 @@ impl Database {
             sqlx::query(
                 r#"UPDATE interface_config SET
                    role = ?, enabled = ?, description = ?, dhcp_mode = ?, gateway = ?,
-                   ipv6_accept_ra = ?, ip_forward = ?, ip_masquerade = ?, updated_at = ?
+                   ipv6_accept_ra = ?, ip_forward = ?, ip_masquerade = ?,
+                   link_local = ?, required_for_online = ?, activation_policy = ?, updated_at = ?
                    WHERE id = ?"#,
             )
             .bind(config.role.to_string())
@@ -367,6 +371,9 @@ impl Database {
             .bind(config.ipv6_accept_ra)
             .bind(config.ip_forward.to_string())
             .bind(config.ip_masquerade.to_string())
+            .bind(config.link_local.to_string())
+            .bind(config.required_for_online)
+            .bind(config.activation_policy.to_string())
             .bind(now)
             .bind(id)
             .execute(&mut *tx)
@@ -377,8 +384,8 @@ impl Database {
             // Insert new
             let result = sqlx::query(
                 r#"INSERT INTO interface_config 
-                   (interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                   (interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             )
             .bind(&config.name)
             .bind(config.role.to_string())
@@ -389,6 +396,9 @@ impl Database {
             .bind(config.ipv6_accept_ra)
             .bind(config.ip_forward.to_string())
             .bind(config.ip_masquerade.to_string())
+            .bind(config.link_local.to_string())
+            .bind(config.required_for_online)
+            .bind(config.activation_policy.to_string())
             .bind(now)
             .bind(now)
             .execute(&mut *tx)
@@ -499,6 +509,9 @@ impl Database {
             .execute(&mut *tx)
             .await?;
         }
+
+        // Save DHCP server config
+        self.save_dhcp_server_config_tx(&mut tx, config_id, &config.dhcp_server).await?;
 
         tx.commit().await.context("Failed to commit transaction")?;
         info!("Saved interface config for {}", config.name);
@@ -628,5 +641,155 @@ impl Database {
                 without_ra,
             }
         }))
+    }
+
+    async fn get_dhcp_server_config(&self, config_id: i64) -> Result<Option<DhcpServerConfig>> {
+        let row = sqlx::query_as::<_, (bool, Option<i64>, Option<i64>, Option<i64>, Option<i64>, bool, bool, bool, Option<String>)>(
+            r#"SELECT enabled, pool_offset, pool_size, default_lease_time_secs, max_lease_time_secs, emit_dns, emit_ntp, emit_router, router_address
+               FROM dhcp_server_config WHERE interface_config_id = ?"#
+        )
+        .bind(config_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch DHCP server config")?;
+
+        match row {
+            Some((enabled, pool_offset, pool_size, default_lease_time_secs, max_lease_time_secs, emit_dns, emit_ntp, emit_router, router_address)) => {
+                // Get DNS servers for DHCP server
+                let dns_servers = sqlx::query_as::<_, (String,)>(
+                    "SELECT server FROM dhcp_server_dns WHERE dhcp_server_id = ? ORDER BY priority"
+                )
+                .bind(config_id)
+                .fetch_all(&self.pool)
+                .await
+                .context("Failed to fetch DHCP server DNS")?
+                .into_iter()
+                .map(|(s,)| s)
+                .collect();
+
+                // Get NTP servers for DHCP server
+                let ntp_servers = sqlx::query_as::<_, (String,)>(
+                    "SELECT server FROM dhcp_server_ntp WHERE dhcp_server_id = ? ORDER BY priority"
+                )
+                .bind(config_id)
+                .fetch_all(&self.pool)
+                .await
+                .context("Failed to fetch DHCP server NTP")?
+                .into_iter()
+                .map(|(s,)| s)
+                .collect();
+
+                // Get static leases
+                let static_leases = sqlx::query_as::<_, (String, String, Option<String>)>(
+                    "SELECT mac_address, ip_address, hostname FROM dhcp_static_leases WHERE dhcp_server_id = ? ORDER BY id"
+                )
+                .bind(config_id)
+                .fetch_all(&self.pool)
+                .await
+                .context("Failed to fetch DHCP static leases")?
+                .into_iter()
+                .map(|(mac_address, ip_address, hostname)| DhcpStaticLease {
+                    mac_address,
+                    ip_address,
+                    hostname,
+                })
+                .collect();
+
+                Ok(Some(DhcpServerConfig {
+                    enabled,
+                    pool_offset: pool_offset.map(|v| v as u32),
+                    pool_size: pool_size.map(|v| v as u32),
+                    default_lease_time_secs: default_lease_time_secs.map(|v| v as u32),
+                    max_lease_time_secs: max_lease_time_secs.map(|v| v as u32),
+                    emit_dns,
+                    dns_servers,
+                    emit_ntp,
+                    ntp_servers,
+                    emit_router,
+                    router_address,
+                    static_leases,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn save_dhcp_server_config_tx(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        config_id: i64,
+        dhcp_server: &Option<DhcpServerConfig>,
+    ) -> Result<()> {
+        // Clear existing DHCP server config and related tables
+        sqlx::query("DELETE FROM dhcp_static_leases WHERE dhcp_server_id = ?")
+            .bind(config_id)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM dhcp_server_ntp WHERE dhcp_server_id = ?")
+            .bind(config_id)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM dhcp_server_dns WHERE dhcp_server_id = ?")
+            .bind(config_id)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query("DELETE FROM dhcp_server_config WHERE interface_config_id = ?")
+            .bind(config_id)
+            .execute(&mut **tx)
+            .await?;
+
+        if let Some(dhcp) = dhcp_server {
+            // Insert main config
+            sqlx::query(
+                r#"INSERT INTO dhcp_server_config 
+                   (interface_config_id, enabled, pool_offset, pool_size, default_lease_time_secs, max_lease_time_secs, emit_dns, emit_ntp, emit_router, router_address)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#
+            )
+            .bind(config_id)
+            .bind(dhcp.enabled)
+            .bind(dhcp.pool_offset.map(|v| v as i64))
+            .bind(dhcp.pool_size.map(|v| v as i64))
+            .bind(dhcp.default_lease_time_secs.map(|v| v as i64))
+            .bind(dhcp.max_lease_time_secs.map(|v| v as i64))
+            .bind(dhcp.emit_dns)
+            .bind(dhcp.emit_ntp)
+            .bind(dhcp.emit_router)
+            .bind(&dhcp.router_address)
+            .execute(&mut **tx)
+            .await?;
+
+            // Insert DNS servers
+            for (priority, dns) in dhcp.dns_servers.iter().enumerate() {
+                sqlx::query("INSERT INTO dhcp_server_dns (dhcp_server_id, server, priority) VALUES (?, ?, ?)")
+                    .bind(config_id)
+                    .bind(dns)
+                    .bind(priority as i64)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+
+            // Insert NTP servers
+            for (priority, ntp) in dhcp.ntp_servers.iter().enumerate() {
+                sqlx::query("INSERT INTO dhcp_server_ntp (dhcp_server_id, server, priority) VALUES (?, ?, ?)")
+                    .bind(config_id)
+                    .bind(ntp)
+                    .bind(priority as i64)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+
+            // Insert static leases
+            for lease in &dhcp.static_leases {
+                sqlx::query("INSERT INTO dhcp_static_leases (dhcp_server_id, mac_address, ip_address, hostname) VALUES (?, ?, ?, ?)")
+                    .bind(config_id)
+                    .bind(&lease.mac_address)
+                    .bind(&lease.ip_address)
+                    .bind(&lease.hostname)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+        }
+
+        Ok(())
     }
 }

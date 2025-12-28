@@ -6,6 +6,7 @@
 mod auth;
 mod config;
 mod db;
+mod networkd;
 
 use auth::AuthManager;
 use axum::{
@@ -112,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/state", get(get_state))
         .route("/dashboard", get(get_dashboard))
         .route("/apply", post(apply_config))
+        .route("/apply-networkd", post(apply_networkd))
         .route("/managed-interfaces", get(get_managed_interfaces))
         .route("/managed-interfaces", post(save_managed_interfaces))
         .route("/interface-config", get(get_interface_configs))
@@ -570,10 +572,73 @@ async fn delete_interface_config(
 
     state.db.delete_interface_config(&name).await?;
 
+    // Also remove the networkd file if it exists
+    if let Err(e) = networkd::remove_network_file(&name) {
+        warn!("Failed to remove network file for {}: {}", name, e);
+    }
+
     Ok(Json(SaveInterfaceConfigResponse {
         success: true,
         message: format!("Interface configuration '{}' deleted", name),
         config_id: None,
+    }))
+}
+
+/// POST /apply-networkd - Write interface configs to networkd and reload
+async fn apply_networkd(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<ApplyConfigResponse>, AppError> {
+    info!("Applying networkd configuration");
+
+    // Get all interface configs from database
+    let configs = state.db.get_interface_configs().await?;
+
+    // Ensure networkd directory exists
+    networkd::ensure_networkd_dir()?;
+
+    // Write all enabled configs to disk
+    let mut written = Vec::new();
+    let mut errors = Vec::new();
+
+    for config in &configs {
+        if config.enabled {
+            match networkd::write_network_file(config) {
+                Ok(()) => {
+                    written.push(config.name.clone());
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", config.name, e));
+                }
+            }
+        } else {
+            // Remove disabled interface configs
+            if let Err(e) = networkd::remove_network_file(&config.name) {
+                warn!("Failed to remove network file for disabled interface {}: {}", config.name, e);
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        return Ok(Json(ApplyConfigResponse {
+            success: false,
+            message: "Failed to write some config files".to_string(),
+            errors,
+        }));
+    }
+
+    // Reload networkd to apply changes
+    if let Err(e) = networkd::reload_networkd() {
+        return Ok(Json(ApplyConfigResponse {
+            success: false,
+            message: format!("Config files written but reload failed: {}", e),
+            errors: vec![e.to_string()],
+        }));
+    }
+
+    Ok(Json(ApplyConfigResponse {
+        success: true,
+        message: format!("Applied networkd config for {} interfaces", written.len()),
+        errors: Vec::new(),
     }))
 }
 

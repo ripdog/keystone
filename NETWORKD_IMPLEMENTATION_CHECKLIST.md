@@ -784,28 +784,31 @@ pub struct InterfaceConfig {
 
 ## Implementation Order
 
-### Sprint 1: Core Foundation
-1. [ ] Create new database schema migration
-2. [ ] Implement new core types in `keystone-core`
-3. [ ] Create database CRUD operations in daemon
-4. [ ] Basic API endpoints for interface config
+### Sprint 1: Core Foundation ✅ COMPLETED
+1. [x] Create new database schema migration
+2. [x] Implement new core types in `keystone-core`
+3. [x] Create database CRUD operations in daemon
+4. [x] Basic API endpoints for interface config
+5. [x] Networkd file generation module
+6. [x] Apply-to-system API endpoint
 
-### Sprint 2: Basic UI
-5. [ ] InterfaceBasicSettings component
-6. [ ] Static address management
-7. [ ] Static route management
-8. [ ] Save/apply functionality
+### Sprint 2: Basic UI ✅ COMPLETED
+5. [x] InterfaceBasicSettings component
+6. [x] Static address management
+7. [x] Static route management
+8. [x] Save/apply functionality
+9. [x] Apply to System button in UI
 
-### Sprint 3: DHCP
-9. [ ] DHCP client settings UI
-10. [ ] DHCP server settings UI
-11. [ ] Static lease management
-12. [ ] Config file generation
+### Sprint 3: DHCP ✅ COMPLETED
+9. [x] DHCP client settings UI
+10. [x] DHCP server settings UI
+11. [x] Static lease management
+12. [x] Config file generation
 
-### Sprint 4: IPv6
-13. [ ] IPv6 RA settings
-14. [ ] DHCPv6 client settings
-15. [ ] IPv6 prefix delegation
+### Sprint 4: IPv6 ✅ PARTIALLY COMPLETE
+13. [ ] IPv6 RA settings (server-side for LAN)
+14. [x] DHCPv6 client settings
+15. [x] IPv6 prefix delegation hint
 
 ### Sprint 5: Advanced
 16. [ ] VLAN configuration
@@ -849,3 +852,4 @@ pub struct InterfaceConfig {
 
 *Last Updated: 2024-12-28*
 *Author: AI Agent (Claude)*
+*Status: Sprints 1-3 Complete, Sprint 4 Partially Complete*

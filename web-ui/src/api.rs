@@ -1,9 +1,9 @@
 //! API client functions for communicating with the Keystone daemon
 
 use keystone_core::{
-    DashboardResponse, DeleteUserRequest, DeleteUserResponse, InterfaceConfig,
-    InterfaceConfigResponse, InterfaceConfigsResponse, LoginRequest, LoginResponse,
-    ManagedInterface, ManagedInterfacesResponse, SaveInterfaceConfigRequest,
+    ApplyConfigResponse, DashboardResponse, DeleteUserRequest, DeleteUserResponse,
+    InterfaceConfig, InterfaceConfigResponse, InterfaceConfigsResponse, LoginRequest,
+    LoginResponse, ManagedInterface, ManagedInterfacesResponse, SaveInterfaceConfigRequest,
     SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
     SaveUserRequest, SaveUserResponse, UserInfo, UsersResponse,
 };
@@ -278,6 +278,31 @@ pub async fn delete_interface_config(
 ) -> Result<SaveInterfaceConfigResponse, String> {
     let response = gloo_net::http::Request::delete(&format!("/api/interface-config/{}", name))
         .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Apply networkd configuration - writes .network files and reloads systemd-networkd
+pub async fn apply_networkd(token: &str) -> Result<ApplyConfigResponse, String> {
+    let response = gloo_net::http::Request::post("/api/apply-networkd")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .map_err(|e| format!("Failed to build request: {}", e))?
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;

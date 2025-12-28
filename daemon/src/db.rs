@@ -3,7 +3,10 @@
 //! Uses SQLite via sqlx for persistent configuration storage.
 
 use anyhow::{Context, Result};
-use keystone_core::{InterfaceRole, ManagedInterface, User, UserInfo};
+use keystone_core::{
+    DhcpMode, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
+    ManagedInterface, StaticAddress, StaticRoute, User, UserInfo,
+};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tracing::info;
 
@@ -240,5 +243,240 @@ impl Database {
 
         info!("Deleted user id: {}", id);
         Ok(())
+    }
+
+    // ========================================================================
+    // Interface Configuration Methods
+    // ========================================================================
+
+    /// Get all interface configurations
+    pub async fn get_interface_configs(&self) -> Result<Vec<InterfaceConfig>> {
+        let rows = sqlx::query_as::<_, (i64, String, String, bool, String, Option<String>, bool, String, String)>(
+            r#"SELECT id, interface_name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade
+               FROM interface_config ORDER BY interface_name"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch interface configs")?;
+
+        let mut configs = Vec::new();
+        for (id, name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade) in rows {
+            let addresses = self.get_interface_addresses(id).await?;
+            let routes = self.get_interface_routes(id).await?;
+            let dns_servers = self.get_interface_dns(id).await?;
+
+            configs.push(InterfaceConfig {
+                id: Some(id),
+                name,
+                role: role.parse().unwrap_or(InterfaceRole::LAN),
+                enabled,
+                dhcp_mode: dhcp_mode.parse().unwrap_or(DhcpMode::No),
+                addresses,
+                routes,
+                dns_servers,
+                gateway,
+                ipv6_accept_ra,
+                ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
+                ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
+            });
+        }
+
+        Ok(configs)
+    }
+
+    /// Get a single interface configuration by name
+    pub async fn get_interface_config(&self, name: &str) -> Result<Option<InterfaceConfig>> {
+        let row = sqlx::query_as::<_, (i64, String, String, bool, String, Option<String>, bool, String, String)>(
+            r#"SELECT id, interface_name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade
+               FROM interface_config WHERE interface_name = ?"#,
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch interface config")?;
+
+        match row {
+            Some((id, name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade)) => {
+                let addresses = self.get_interface_addresses(id).await?;
+                let routes = self.get_interface_routes(id).await?;
+                let dns_servers = self.get_interface_dns(id).await?;
+
+                Ok(Some(InterfaceConfig {
+                    id: Some(id),
+                    name,
+                    role: role.parse().unwrap_or(InterfaceRole::LAN),
+                    enabled,
+                    dhcp_mode: dhcp_mode.parse().unwrap_or(DhcpMode::No),
+                    addresses,
+                    routes,
+                    dns_servers,
+                    gateway,
+                    ipv6_accept_ra,
+                    ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
+                    ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Save an interface configuration (insert or update)
+    pub async fn save_interface_config(&self, config: &InterfaceConfig) -> Result<i64> {
+        let mut tx = self.pool.begin().await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let config_id: i64 = if let Some(id) = config.id {
+            // Update existing
+            sqlx::query(
+                r#"UPDATE interface_config SET
+                   role = ?, enabled = ?, dhcp_mode = ?, gateway = ?,
+                   ipv6_accept_ra = ?, ip_forward = ?, ip_masquerade = ?, updated_at = ?
+                   WHERE id = ?"#,
+            )
+            .bind(config.role.to_string())
+            .bind(config.enabled)
+            .bind(config.dhcp_mode.to_string())
+            .bind(&config.gateway)
+            .bind(config.ipv6_accept_ra)
+            .bind(config.ip_forward.to_string())
+            .bind(config.ip_masquerade.to_string())
+            .bind(now)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to update interface config")?;
+            id
+        } else {
+            // Insert new
+            let result = sqlx::query(
+                r#"INSERT INTO interface_config 
+                   (interface_name, role, enabled, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            )
+            .bind(&config.name)
+            .bind(config.role.to_string())
+            .bind(config.enabled)
+            .bind(config.dhcp_mode.to_string())
+            .bind(&config.gateway)
+            .bind(config.ipv6_accept_ra)
+            .bind(config.ip_forward.to_string())
+            .bind(config.ip_masquerade.to_string())
+            .bind(now)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to insert interface config")?;
+            result.last_insert_rowid()
+        };
+
+        // Clear and re-insert addresses
+        sqlx::query("DELETE FROM interface_addresses WHERE interface_config_id = ?")
+            .bind(config_id)
+            .execute(&mut *tx)
+            .await?;
+        for addr in &config.addresses {
+            sqlx::query("INSERT INTO interface_addresses (interface_config_id, address, label) VALUES (?, ?, ?)")
+                .bind(config_id)
+                .bind(&addr.address)
+                .bind(&addr.label)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // Clear and re-insert routes
+        sqlx::query("DELETE FROM interface_routes WHERE interface_config_id = ?")
+            .bind(config_id)
+            .execute(&mut *tx)
+            .await?;
+        for route in &config.routes {
+            sqlx::query("INSERT INTO interface_routes (interface_config_id, destination, gateway, metric) VALUES (?, ?, ?, ?)")
+                .bind(config_id)
+                .bind(&route.destination)
+                .bind(&route.gateway)
+                .bind(route.metric.map(|m| m as i64))
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        // Clear and re-insert DNS servers
+        sqlx::query("DELETE FROM interface_dns WHERE interface_config_id = ?")
+            .bind(config_id)
+            .execute(&mut *tx)
+            .await?;
+        for (priority, dns) in config.dns_servers.iter().enumerate() {
+            sqlx::query("INSERT INTO interface_dns (interface_config_id, server, priority) VALUES (?, ?, ?)")
+                .bind(config_id)
+                .bind(dns)
+                .bind(priority as i64)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await.context("Failed to commit transaction")?;
+        info!("Saved interface config for {}", config.name);
+        Ok(config_id)
+    }
+
+    /// Delete an interface configuration
+    pub async fn delete_interface_config(&self, name: &str) -> Result<()> {
+        sqlx::query("DELETE FROM interface_config WHERE interface_name = ?")
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete interface config")?;
+
+        info!("Deleted interface config: {}", name);
+        Ok(())
+    }
+
+    // Helper methods for fetching related data
+
+    async fn get_interface_addresses(&self, config_id: i64) -> Result<Vec<StaticAddress>> {
+        let rows = sqlx::query_as::<_, (String, Option<String>)>(
+            "SELECT address, label FROM interface_addresses WHERE interface_config_id = ? ORDER BY id",
+        )
+        .bind(config_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch interface addresses")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(address, label)| StaticAddress { address, label })
+            .collect())
+    }
+
+    async fn get_interface_routes(&self, config_id: i64) -> Result<Vec<StaticRoute>> {
+        let rows = sqlx::query_as::<_, (Option<String>, String, Option<i64>)>(
+            "SELECT destination, gateway, metric FROM interface_routes WHERE interface_config_id = ? ORDER BY id",
+        )
+        .bind(config_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch interface routes")?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(destination, gateway, metric)| StaticRoute {
+                destination,
+                gateway,
+                metric: metric.map(|m| m as u32),
+            })
+            .collect())
+    }
+
+    async fn get_interface_dns(&self, config_id: i64) -> Result<Vec<String>> {
+        let rows = sqlx::query_as::<_, (String,)>(
+            "SELECT server FROM interface_dns WHERE interface_config_id = ? ORDER BY priority",
+        )
+        .bind(config_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch interface DNS servers")?;
+
+        Ok(rows.into_iter().map(|(s,)| s).collect())
     }
 }

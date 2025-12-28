@@ -6,6 +6,231 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+// ============================================================================
+// Network Configuration Types (systemd-networkd compatible)
+// ============================================================================
+
+/// DHCP client mode for an interface
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DhcpMode {
+    /// DHCP disabled
+    #[default]
+    No,
+    /// Both IPv4 and IPv6 DHCP enabled
+    Yes,
+    /// Only IPv4 DHCP enabled
+    Ipv4,
+    /// Only IPv6 DHCP enabled
+    Ipv6,
+}
+
+impl std::fmt::Display for DhcpMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DhcpMode::No => write!(f, "no"),
+            DhcpMode::Yes => write!(f, "yes"),
+            DhcpMode::Ipv4 => write!(f, "ipv4"),
+            DhcpMode::Ipv6 => write!(f, "ipv6"),
+        }
+    }
+}
+
+impl std::str::FromStr for DhcpMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "no" | "false" => Ok(DhcpMode::No),
+            "yes" | "true" => Ok(DhcpMode::Yes),
+            "ipv4" => Ok(DhcpMode::Ipv4),
+            "ipv6" => Ok(DhcpMode::Ipv6),
+            _ => Err(format!("Unknown DHCP mode: {}", s)),
+        }
+    }
+}
+
+/// IP forwarding mode
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IpForwardMode {
+    /// Forwarding disabled
+    #[default]
+    No,
+    /// Both IPv4 and IPv6 forwarding enabled
+    Yes,
+    /// Only IPv4 forwarding enabled
+    Ipv4,
+    /// Only IPv6 forwarding enabled
+    Ipv6,
+}
+
+impl std::fmt::Display for IpForwardMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IpForwardMode::No => write!(f, "no"),
+            IpForwardMode::Yes => write!(f, "yes"),
+            IpForwardMode::Ipv4 => write!(f, "ipv4"),
+            IpForwardMode::Ipv6 => write!(f, "ipv6"),
+        }
+    }
+}
+
+impl std::str::FromStr for IpForwardMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "no" | "false" => Ok(IpForwardMode::No),
+            "yes" | "true" => Ok(IpForwardMode::Yes),
+            "ipv4" => Ok(IpForwardMode::Ipv4),
+            "ipv6" => Ok(IpForwardMode::Ipv6),
+            _ => Err(format!("Unknown IP forward mode: {}", s)),
+        }
+    }
+}
+
+/// IP masquerade (NAT) mode
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum IpMasqueradeMode {
+    /// Masquerading disabled
+    #[default]
+    No,
+    /// Both IPv4 and IPv6 masquerading enabled
+    Both,
+    /// Only IPv4 masquerading enabled
+    Ipv4,
+    /// Only IPv6 masquerading enabled
+    Ipv6,
+}
+
+impl std::fmt::Display for IpMasqueradeMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IpMasqueradeMode::No => write!(f, "no"),
+            IpMasqueradeMode::Both => write!(f, "both"),
+            IpMasqueradeMode::Ipv4 => write!(f, "ipv4"),
+            IpMasqueradeMode::Ipv6 => write!(f, "ipv6"),
+        }
+    }
+}
+
+impl std::str::FromStr for IpMasqueradeMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "no" | "false" => Ok(IpMasqueradeMode::No),
+            "both" | "yes" | "true" => Ok(IpMasqueradeMode::Both),
+            "ipv4" => Ok(IpMasqueradeMode::Ipv4),
+            "ipv6" => Ok(IpMasqueradeMode::Ipv6),
+            _ => Err(format!("Unknown IP masquerade mode: {}", s)),
+        }
+    }
+}
+
+/// A static IP address configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StaticAddress {
+    /// IP address with CIDR prefix (e.g., "192.168.1.1/24")
+    pub address: String,
+    /// Optional label for the address (max 15 chars)
+    pub label: Option<String>,
+}
+
+/// A static route configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StaticRoute {
+    /// Destination network (CIDR notation), None for default route
+    pub destination: Option<String>,
+    /// Gateway IP address
+    pub gateway: String,
+    /// Route metric (lower = higher priority)
+    pub metric: Option<u32>,
+}
+
+/// Complete interface configuration for systemd-networkd
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InterfaceConfig {
+    /// Database ID (None for new configs)
+    pub id: Option<i64>,
+    /// Interface name (e.g., "eth0", "enp3s0")
+    pub name: String,
+    /// Role (WAN or LAN)
+    pub role: InterfaceRole,
+    /// Whether this interface is enabled
+    pub enabled: bool,
+    
+    // Basic IP configuration
+    /// DHCP mode
+    pub dhcp_mode: DhcpMode,
+    /// Static IP addresses
+    pub addresses: Vec<StaticAddress>,
+    /// Static routes
+    pub routes: Vec<StaticRoute>,
+    /// DNS servers
+    pub dns_servers: Vec<String>,
+    /// Default gateway (convenience field, also creates a route)
+    pub gateway: Option<String>,
+    
+    // IPv6 settings
+    /// Accept IPv6 Router Advertisements
+    pub ipv6_accept_ra: bool,
+    
+    // Forwarding & NAT (typically for WAN interfaces)
+    /// IP forwarding mode
+    pub ip_forward: IpForwardMode,
+    /// IP masquerading (NAT) mode
+    pub ip_masquerade: IpMasqueradeMode,
+}
+
+impl Default for InterfaceConfig {
+    fn default() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            role: InterfaceRole::LAN,
+            enabled: true,
+            dhcp_mode: DhcpMode::No,
+            addresses: Vec::new(),
+            routes: Vec::new(),
+            dns_servers: Vec::new(),
+            gateway: None,
+            ipv6_accept_ra: true,
+            ip_forward: IpForwardMode::No,
+            ip_masquerade: IpMasqueradeMode::No,
+        }
+    }
+}
+
+/// Request to save an interface configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveInterfaceConfigRequest {
+    pub config: InterfaceConfig,
+}
+
+/// Response from saving interface configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveInterfaceConfigResponse {
+    pub success: bool,
+    pub message: String,
+    pub config_id: Option<i64>,
+}
+
+/// Response containing a single interface configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterfaceConfigResponse {
+    pub config: Option<InterfaceConfig>,
+}
+
+/// Response containing all interface configurations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterfaceConfigsResponse {
+    pub configs: Vec<InterfaceConfig>,
+}
+
+// ============================================================================
+// Legacy Types (kept for compatibility)
+// ============================================================================
+
 /// Errors that can occur in the Keystone system
 #[derive(Debug, Error, Serialize, Deserialize, Clone)]
 pub enum KeystoneError {
@@ -340,5 +565,59 @@ mod tests {
             dashboard.interface_counters,
             deserialized.interface_counters
         );
+    }
+
+    #[test]
+    fn test_interface_config_serialization() {
+        let config = InterfaceConfig {
+            id: Some(1),
+            name: "eth0".to_string(),
+            role: InterfaceRole::WAN,
+            enabled: true,
+            dhcp_mode: DhcpMode::Ipv4,
+            addresses: vec![StaticAddress {
+                address: "192.168.1.1/24".to_string(),
+                label: Some("primary".to_string()),
+            }],
+            routes: vec![StaticRoute {
+                destination: None,
+                gateway: "192.168.1.254".to_string(),
+                metric: Some(100),
+            }],
+            dns_servers: vec!["8.8.8.8".to_string(), "8.8.4.4".to_string()],
+            gateway: Some("192.168.1.254".to_string()),
+            ipv6_accept_ra: true,
+            ip_forward: IpForwardMode::Yes,
+            ip_masquerade: IpMasqueradeMode::Ipv4,
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: InterfaceConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_dhcp_mode_parsing() {
+        assert_eq!("no".parse::<DhcpMode>().unwrap(), DhcpMode::No);
+        assert_eq!("yes".parse::<DhcpMode>().unwrap(), DhcpMode::Yes);
+        assert_eq!("ipv4".parse::<DhcpMode>().unwrap(), DhcpMode::Ipv4);
+        assert_eq!("ipv6".parse::<DhcpMode>().unwrap(), DhcpMode::Ipv6);
+        assert_eq!(DhcpMode::Ipv4.to_string(), "ipv4");
+    }
+
+    #[test]
+    fn test_ip_forward_mode_parsing() {
+        assert_eq!("no".parse::<IpForwardMode>().unwrap(), IpForwardMode::No);
+        assert_eq!("yes".parse::<IpForwardMode>().unwrap(), IpForwardMode::Yes);
+        assert_eq!(IpForwardMode::Ipv6.to_string(), "ipv6");
+    }
+
+    #[test]
+    fn test_ip_masquerade_mode_parsing() {
+        assert_eq!("no".parse::<IpMasqueradeMode>().unwrap(), IpMasqueradeMode::No);
+        assert_eq!("both".parse::<IpMasqueradeMode>().unwrap(), IpMasqueradeMode::Both);
+        assert_eq!("ipv4".parse::<IpMasqueradeMode>().unwrap(), IpMasqueradeMode::Ipv4);
+        assert_eq!(IpMasqueradeMode::Both.to_string(), "both");
     }
 }

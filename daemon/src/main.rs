@@ -20,8 +20,10 @@ use config::Config;
 use db::Database;
 use keystone_core::{
     ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
-    DeleteUserResponse, InterfaceCounters, KeystoneError, LoginRequest, LoginResponse,
-    ManagedInterfacesResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
+    DeleteUserResponse, InterfaceConfigResponse, InterfaceConfigsResponse,
+    InterfaceCounters, KeystoneError, LoginRequest, LoginResponse,
+    ManagedInterfacesResponse, SaveInterfaceConfigRequest, SaveInterfaceConfigResponse,
+    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
     SaveUserRequest, SaveUserResponse, SystemState, UsersResponse,
 };
 use serde::Deserialize;
@@ -112,6 +114,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/apply", post(apply_config))
         .route("/managed-interfaces", get(get_managed_interfaces))
         .route("/managed-interfaces", post(save_managed_interfaces))
+        .route("/interface-config", get(get_interface_configs))
+        .route("/interface-config/{name}", get(get_interface_config))
+        .route("/interface-config", post(save_interface_config))
+        .route("/interface-config/{name}", delete(delete_interface_config))
         .route("/users", get(get_users))
         .route("/users", post(save_user))
         .route("/users", delete(delete_user))
@@ -489,6 +495,85 @@ async fn save_managed_interfaces(
     Ok(Json(SaveManagedInterfacesResponse {
         success: true,
         message: format!("Saved {} managed interfaces", request.interfaces.len()),
+    }))
+}
+
+// ============================================================================
+// Interface Configuration Endpoints
+// ============================================================================
+
+/// GET /interface-config - Get all interface configurations
+async fn get_interface_configs(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<InterfaceConfigsResponse>, AppError> {
+    info!("Retrieving interface configurations");
+
+    let configs = state.db.get_interface_configs().await?;
+
+    Ok(Json(InterfaceConfigsResponse { configs }))
+}
+
+/// GET /interface-config/:name - Get a single interface configuration
+async fn get_interface_config(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<InterfaceConfigResponse>, AppError> {
+    info!("Retrieving interface config for: {}", name);
+
+    let config = state.db.get_interface_config(&name).await?;
+
+    Ok(Json(InterfaceConfigResponse { config }))
+}
+
+/// POST /interface-config - Save an interface configuration
+async fn save_interface_config(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SaveInterfaceConfigRequest>,
+) -> Result<Json<SaveInterfaceConfigResponse>, AppError> {
+    info!("Saving interface config for: {}", request.config.name);
+
+    // Validate interface name
+    if request.config.name.is_empty() {
+        return Ok(Json(SaveInterfaceConfigResponse {
+            success: false,
+            message: "Interface name is required".to_string(),
+            config_id: None,
+        }));
+    }
+
+    // Validate addresses format (basic CIDR check)
+    for addr in &request.config.addresses {
+        if !addr.address.contains('/') {
+            return Ok(Json(SaveInterfaceConfigResponse {
+                success: false,
+                message: format!("Address '{}' must be in CIDR notation (e.g., 192.168.1.1/24)", addr.address),
+                config_id: None,
+            }));
+        }
+    }
+
+    let config_id = state.db.save_interface_config(&request.config).await?;
+
+    Ok(Json(SaveInterfaceConfigResponse {
+        success: true,
+        message: "Interface configuration saved".to_string(),
+        config_id: Some(config_id),
+    }))
+}
+
+/// DELETE /interface-config/:name - Delete an interface configuration
+async fn delete_interface_config(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<SaveInterfaceConfigResponse>, AppError> {
+    info!("Deleting interface config for: {}", name);
+
+    state.db.delete_interface_config(&name).await?;
+
+    Ok(Json(SaveInterfaceConfigResponse {
+        success: true,
+        message: format!("Interface configuration '{}' deleted", name),
+        config_id: None,
     }))
 }
 

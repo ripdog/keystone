@@ -42,7 +42,7 @@ Advanced features for complex deployments.
 | `DNS=` | IP list | DNS servers | P1 | ✅ DONE |
 | `Domains=` | string list | Search domains | P2 | ✅ DONE |
 | `NTP=` | IP list | NTP servers | P3 | ⬜ TODO |
-| `LinkLocalAddressing=` | enum | Link-local config (yes/no/ipv4/ipv6) | P2 | ⬜ TODO |
+| `LinkLocalAddressing=` | enum | Link-local config (yes/no/ipv4/ipv6) | P2 | ✅ DONE |
 | `IPv6AcceptRA=` | bool | Accept Router Advertisements | P1 | ✅ DONE |
 | `IPForward=` | enum | IP forwarding (yes/no/ipv4/ipv6) | P1 | ✅ DONE |
 | `IPMasquerade=` | enum | NAT/masquerade (yes/no/ipv4/ipv6/both) | P1 | ✅ DONE |
@@ -51,8 +51,8 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `RequiredForOnline=` | bool/enum | Wait for this interface in boot | P2 | ⬜ TODO |
-| `ActivationPolicy=` | enum | How to manage link state | P2 | ⬜ TODO |
+| `RequiredForOnline=` | bool/enum | Wait for this interface in boot | P2 | ✅ DONE |
+| `ActivationPolicy=` | enum | How to manage link state | P2 | ✅ DONE |
 | `ConfigureWithoutCarrier=` | bool | Configure without cable | P3 | ⬜ TODO |
 
 ### [Address] Section
@@ -64,7 +64,7 @@ Advanced features for complex deployments.
 | `Peer=` | CIDR | Peer address (point-to-point) | P3 | ⬜ TODO |
 | `Broadcast=` | IP/bool | Broadcast address | P3 | ⬜ TODO |
 | `Label=` | string | Address label (15 chars max) | P3 | ⬜ TODO |
-| `Scope=` | enum | Address scope (global/link/host) | P2 | ⬜ TODO |
+| `Scope=` | enum | Address scope (global/link/host) | P2 | 🔄 TYPES DONE |
 | `PreferredLifetime=` | duration | Address lifetime | P3 | ⬜ TODO |
 
 ### [Route] Section
@@ -76,9 +76,9 @@ Advanced features for complex deployments.
 | `Destination=` | CIDR | Route destination | P1 | ✅ DONE |
 | `Source=` | CIDR | Source-based routing | P3 | ⬜ TODO |
 | `Metric=` | u32 | Route metric/priority | P1 | ✅ DONE |
-| `Table=` | string/u32 | Routing table | P2 | ⬜ TODO |
+| `Table=` | string/u32 | Routing table | P2 | 🔄 TYPES DONE |
 | `Scope=` | enum | Route scope | P3 | ⬜ TODO |
-| `Type=` | enum | Route type (unicast/blackhole/etc.) | P2 | ⬜ TODO |
+| `Type=` | enum | Route type (unicast/blackhole/etc.) | P2 | 🔄 TYPES DONE |
 | `GatewayOnLink=` | bool | Gateway on link | P3 | ⬜ TODO |
 
 ---

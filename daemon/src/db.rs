@@ -4,8 +4,9 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole,
-    IpForwardMode, IpMasqueradeMode, ManagedInterface, StaticAddress, StaticRoute, User, UserInfo,
+    ActivationPolicy, AddressScope, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
+    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, LinkLocalMode,
+    ManagedInterface, RouteType, StaticAddress, StaticRoute, User, UserInfo,
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tracing::info;
@@ -280,6 +281,9 @@ impl Database {
                 dns_servers,
                 search_domains,
                 gateway,
+                link_local: LinkLocalMode::default(),
+                required_for_online: true,
+                activation_policy: ActivationPolicy::default(),
                 dhcpv4_client,
                 dhcpv6_client,
                 ipv6_accept_ra,
@@ -323,6 +327,9 @@ impl Database {
                     dns_servers,
                     search_domains,
                     gateway,
+                    link_local: LinkLocalMode::default(),
+                    required_for_online: true,
+                    activation_policy: ActivationPolicy::default(),
                     dhcpv4_client,
                     dhcpv6_client,
                     ipv6_accept_ra,
@@ -521,7 +528,11 @@ impl Database {
 
         Ok(rows
             .into_iter()
-            .map(|(address, label)| StaticAddress { address, label })
+            .map(|(address, label)| StaticAddress {
+                address,
+                label,
+                scope: AddressScope::default(),
+            })
             .collect())
     }
 
@@ -540,6 +551,8 @@ impl Database {
                 destination,
                 gateway,
                 metric: metric.map(|m| m as u32),
+                table: None,
+                route_type: RouteType::default(),
             })
             .collect())
     }

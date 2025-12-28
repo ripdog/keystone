@@ -1,8 +1,9 @@
 //! Interface edit page for configuring individual interface settings
 
 use keystone_core::{
-    DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole,
-    IpForwardMode, IpMasqueradeMode, StaticAddress, StaticRoute,
+    ActivationPolicy, AddressScope, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
+    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, LinkLocalMode, RouteType,
+    StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -59,6 +60,15 @@ pub fn InterfaceEditPage(
     let (dhcp6_use_ntp, set_dhcp6_use_ntp) = signal(true);
     let (dhcp6_rapid_commit, set_dhcp6_rapid_commit) = signal(true);
     let (dhcp6_prefix_hint, set_dhcp6_prefix_hint) = signal(String::new());
+    
+    // Interface state settings (P2)
+    let (link_local, set_link_local) = signal(LinkLocalMode::default());
+    let (required_for_online, set_required_for_online) = signal(true);
+    let (activation_policy, set_activation_policy) = signal(ActivationPolicy::default());
+    
+    // UI state
+    let (show_advanced, set_show_advanced) = signal(false);
+    let (show_interface_state, set_show_interface_state) = signal(false);
 
     // Load interface configuration
     Effect::new(move |_| {
@@ -102,6 +112,11 @@ pub fn InterfaceEditPage(
                             set_dhcp6_prefix_hint.set(dhcp6_cfg.prefix_delegation_hint.clone().unwrap_or_default());
                         }
                         
+                        // Interface state settings (P2)
+                        set_link_local.set(cfg.link_local);
+                        set_required_for_online.set(cfg.required_for_online);
+                        set_activation_policy.set(cfg.activation_policy);
+                        
                         set_config.set(Some(cfg));
                         set_is_new.set(false);
                     }
@@ -119,6 +134,9 @@ pub fn InterfaceEditPage(
                             dns_servers: vec![],
                             search_domains: vec![],
                             gateway: None,
+                            link_local: LinkLocalMode::default(),
+                            required_for_online: true,
+                            activation_policy: ActivationPolicy::default(),
                             dhcpv4_client: None,
                             dhcpv6_client: None,
                             ipv6_accept_ra: true,
@@ -150,6 +168,7 @@ pub fn InterfaceEditPage(
                 list.push(StaticAddress {
                     address: addr,
                     label: None,
+                    scope: AddressScope::default(),
                 });
             });
             set_new_address.set(String::new());
@@ -198,6 +217,8 @@ pub fn InterfaceEditPage(
                     destination: if dest.is_empty() { None } else { Some(dest) },
                     gateway: gw,
                     metric,
+                    table: None,
+                    route_type: RouteType::default(),
                 });
             });
             set_new_route_dest.set(String::new());
@@ -293,6 +314,9 @@ pub fn InterfaceEditPage(
                     dns_servers: dns_servers.get(),
                     search_domains: search_domains.get(),
                     gateway: if gw.is_empty() { None } else { Some(gw) },
+                    link_local: link_local.get(),
+                    required_for_online: required_for_online.get(),
+                    activation_policy: activation_policy.get(),
                     dhcpv4_client,
                     dhcpv6_client,
                     ipv6_accept_ra: ipv6_accept_ra.get(),
@@ -560,235 +584,100 @@ pub fn InterfaceEditPage(
                         </div>
                     </Show>
 
-                    // Static Addresses
-                    <div>
-                        <label class="block text-gray-300 mb-2 font-medium">"Static IP Addresses"</label>
-                        
-                        // Warning when DHCP is enabled
-                        <Show when=move || dhcp_mode.get() != DhcpMode::No>
-                            <div class="bg-yellow-900/30 border border-yellow-600 text-yellow-200 px-3 py-2 rounded mb-2 text-sm">
-                                <strong>"Note:"</strong> " DHCP is enabled. Static addresses will be used in addition to DHCP-assigned addresses."
-                            </div>
-                        </Show>
-                        
-                        <div class="space-y-2">
-                            <For
-                                each=addresses_indexed
-                                key=|(i, addr)| (*i, addr.address.clone())
-                                children=move |(i, addr)| {
-                                    view! {
-                                        <div class="flex items-center gap-2">
-                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{addr.address}</span>
-                                            <button
-                                                class="text-red-400 hover:text-red-300 px-2"
-                                                on:click=move |_| remove_address(i)
-                                            >
-                                                "✕"
-                                            </button>
-                                        </div>
-                                    }
-                                }
-                            />
-                            <div class="flex gap-2">
-                                <input
-                                    type="text"
-                                    placeholder="192.168.1.1/24"
-                                    prop:value=move || new_address.get()
-                                    on:input=move |ev| set_new_address.set(event_target_value(&ev))
-                                    on:keydown=move |ev| {
-                                        if ev.key() == "Enter" {
-                                            ev.prevent_default();
-                                            do_add_address();
-                                        }
-                                    }
-                                    class="flex-1 bg-gray-700 text-white rounded px-4 py-2 border border-gray-600"
-                                />
-                                <button
-                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                    on:click=move |_| do_add_address()
+                    // Advanced Options expando when DHCP is enabled
+                    <Show when=move || dhcp_mode.get() != DhcpMode::No>
+                        <div class="border border-gray-600 rounded-lg overflow-hidden">
+                            <button
+                                type="button"
+                                class="w-full flex items-center justify-between px-4 py-3 bg-gray-700/50 hover:bg-gray-700 text-left"
+                                on:click=move |_| set_show_advanced.update(|v| *v = !*v)
+                            >
+                                <span class="text-gray-200 font-medium">"Advanced Options (Static IPs, DNS, Routes)"</span>
+                                <svg
+                                    class="w-5 h-5 text-gray-400 transition-transform"
+                                    class:rotate-180=move || show_advanced.get()
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
                                 >
-                                    "Add"
-                                </button>
-                            </div>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                            <Show when=move || show_advanced.get()>
+                                <div class="p-4 space-y-6 border-t border-gray-600">
+                                    <div class="bg-yellow-900/30 border border-yellow-600 text-yellow-200 px-3 py-2 rounded text-sm">
+                                        <strong>"Note:"</strong> " DHCP is enabled. These static settings will be used in addition to DHCP-assigned values."
+                                    </div>
+                                    <StaticIpSettings
+                                        addresses_indexed=addresses_indexed
+                                        new_address=new_address
+                                        set_new_address=set_new_address
+                                        add_address=do_add_address
+                                        remove_address=remove_address
+                                        gateway=gateway
+                                        set_gateway=set_gateway
+                                        dns_indexed=dns_indexed
+                                        new_dns=new_dns
+                                        set_new_dns=set_new_dns
+                                        add_dns=do_add_dns
+                                        remove_dns=remove_dns
+                                        domains_indexed=domains_indexed
+                                        new_domain=new_domain
+                                        set_new_domain=set_new_domain
+                                        add_domain=do_add_domain
+                                        remove_domain=remove_domain
+                                        routes_indexed=routes_indexed
+                                        new_route_dest=new_route_dest
+                                        set_new_route_dest=set_new_route_dest
+                                        new_route_gw=new_route_gw
+                                        set_new_route_gw=set_new_route_gw
+                                        new_route_metric=new_route_metric
+                                        set_new_route_metric=set_new_route_metric
+                                        add_route=do_add_route
+                                        remove_route=remove_route
+                                        show_dhcp_warnings=true
+                                        dhcp_use_dns=dhcp_use_dns
+                                        dhcp_use_gateway=dhcp_use_gateway
+                                    />
+                                </div>
+                            </Show>
                         </div>
-                    </div>
+                    </Show>
 
-                    // Gateway
-                    <div>
-                        <label class="block text-gray-300 mb-2 font-medium">"Default Gateway"</label>
-                        <input
-                            type="text"
-                            placeholder="192.168.1.254"
-                            prop:value=move || gateway.get()
-                            on:input=move |ev| set_gateway.set(event_target_value(&ev))
-                            class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
+                    // Static IP settings shown directly when DHCP is off
+                    <Show when=move || dhcp_mode.get() == DhcpMode::No>
+                        <StaticIpSettings
+                            addresses_indexed=addresses_indexed
+                            new_address=new_address
+                            set_new_address=set_new_address
+                            add_address=do_add_address
+                            remove_address=remove_address
+                            gateway=gateway
+                            set_gateway=set_gateway
+                            dns_indexed=dns_indexed
+                            new_dns=new_dns
+                            set_new_dns=set_new_dns
+                            add_dns=do_add_dns
+                            remove_dns=remove_dns
+                            domains_indexed=domains_indexed
+                            new_domain=new_domain
+                            set_new_domain=set_new_domain
+                            add_domain=do_add_domain
+                            remove_domain=remove_domain
+                            routes_indexed=routes_indexed
+                            new_route_dest=new_route_dest
+                            set_new_route_dest=set_new_route_dest
+                            new_route_gw=new_route_gw
+                            set_new_route_gw=set_new_route_gw
+                            new_route_metric=new_route_metric
+                            set_new_route_metric=set_new_route_metric
+                            add_route=do_add_route
+                            remove_route=remove_route
+                            show_dhcp_warnings=false
+                            dhcp_use_dns=dhcp_use_dns
+                            dhcp_use_gateway=dhcp_use_gateway
                         />
-                        <Show when=move || {
-                            let mode = dhcp_mode.get();
-                            (mode == DhcpMode::Yes || mode == DhcpMode::Ipv4) && dhcp_use_gateway.get()
-                        }>
-                            <p class="text-yellow-400 text-sm mt-1">
-                                "⚠ DHCP gateway is enabled. This static gateway will be used if DHCP doesn't provide one."
-                            </p>
-                        </Show>
-                    </div>
-
-                    // DNS Servers
-                    <div>
-                        <label class="block text-gray-300 mb-2 font-medium">"DNS Servers"</label>
-                        
-                        <Show when=move || {
-                            let mode = dhcp_mode.get();
-                            (mode == DhcpMode::Yes || mode == DhcpMode::Ipv4) && dhcp_use_dns.get()
-                        }>
-                            <div class="bg-blue-900/30 border border-blue-600 text-blue-200 px-3 py-2 rounded mb-2 text-sm">
-                                "DHCP DNS is enabled. Static DNS servers will be used in addition to DHCP-provided servers."
-                            </div>
-                        </Show>
-                        
-                        <div class="space-y-2">
-                            <For
-                                each=dns_indexed
-                                key=|(i, dns)| (*i, dns.clone())
-                                children=move |(i, dns)| {
-                                    view! {
-                                        <div class="flex items-center gap-2">
-                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{dns}</span>
-                                            <button
-                                                class="text-red-400 hover:text-red-300 px-2"
-                                                on:click=move |_| remove_dns(i)
-                                            >
-                                                "✕"
-                                            </button>
-                                        </div>
-                                    }
-                                }
-                            />
-                            <div class="flex gap-2">
-                                <input
-                                    type="text"
-                                    placeholder="8.8.8.8"
-                                    prop:value=move || new_dns.get()
-                                    on:input=move |ev| set_new_dns.set(event_target_value(&ev))
-                                    on:keydown=move |ev| {
-                                        if ev.key() == "Enter" {
-                                            ev.prevent_default();
-                                            do_add_dns();
-                                        }
-                                    }
-                                    class="flex-1 bg-gray-700 text-white rounded px-4 py-2 border border-gray-600"
-                                />
-                                <button
-                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                    on:click=move |_| do_add_dns()
-                                >
-                                    "Add"
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    // Search Domains
-                    <div>
-                        <label class="block text-gray-300 mb-2 font-medium">"Search Domains"</label>
-                        <div class="space-y-2">
-                            <For
-                                each=domains_indexed
-                                key=|(i, domain)| (*i, domain.clone())
-                                children=move |(i, domain)| {
-                                    view! {
-                                        <div class="flex items-center gap-2">
-                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{domain}</span>
-                                            <button
-                                                class="text-red-400 hover:text-red-300 px-2"
-                                                on:click=move |_| remove_domain(i)
-                                            >
-                                                "✕"
-                                            </button>
-                                        </div>
-                                    }
-                                }
-                            />
-                            <div class="flex gap-2">
-                                <input
-                                    type="text"
-                                    placeholder="example.com"
-                                    prop:value=move || new_domain.get()
-                                    on:input=move |ev| set_new_domain.set(event_target_value(&ev))
-                                    on:keydown=move |ev| {
-                                        if ev.key() == "Enter" {
-                                            ev.prevent_default();
-                                            do_add_domain();
-                                        }
-                                    }
-                                    class="flex-1 bg-gray-700 text-white rounded px-4 py-2 border border-gray-600"
-                                />
-                                <button
-                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                    on:click=move |_| do_add_domain()
-                                >
-                                    "Add"
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-
-                    // Static Routes
-                    <div>
-                        <label class="block text-gray-300 mb-2 font-medium">"Static Routes"</label>
-                        <div class="space-y-2">
-                            <For
-                                each=routes_indexed
-                                key=|(i, r)| (*i, r.gateway.clone(), r.destination.clone())
-                                children=move |(i, route)| {
-                                    let dest = route.destination.clone().unwrap_or_else(|| "default".to_string());
-                                    let metric_str = route.metric.map(|m| format!(" (metric {})", m)).unwrap_or_default();
-                                    view! {
-                                        <div class="flex items-center gap-2">
-                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">
-                                                {dest} " via " {route.gateway} {metric_str}
-                                            </span>
-                                            <button
-                                                class="text-red-400 hover:text-red-300 px-2"
-                                                on:click=move |_| remove_route(i)
-                                            >
-                                                "✕"
-                                            </button>
-                                        </div>
-                                    }
-                                }
-                            />
-                            <div class="flex gap-2 flex-wrap">
-                                <input
-                                    type="text"
-                                    placeholder="Destination (e.g., 10.0.0.0/8)"
-                                    prop:value=move || new_route_dest.get()
-                                    on:input=move |ev| set_new_route_dest.set(event_target_value(&ev))
-                                    class="flex-1 min-w-32 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                />
-                                <input
-                                    type="text"
-                                    placeholder="Gateway"
-                                    prop:value=move || new_route_gw.get()
-                                    on:input=move |ev| set_new_route_gw.set(event_target_value(&ev))
-                                    class="flex-1 min-w-32 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                />
-                                <input
-                                    type="text"
-                                    placeholder="Metric"
-                                    prop:value=move || new_route_metric.get()
-                                    on:input=move |ev| set_new_route_metric.set(event_target_value(&ev))
-                                    class="w-24 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                />
-                                <button
-                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                    on:click=move |_| do_add_route()
-                                >
-                                    "Add"
-                                </button>
-                            </div>
-                        </div>
-                    </div>
+                    </Show>
 
                     // IPv6 Accept RA
                     <div>
@@ -845,6 +734,91 @@ pub fn InterfaceEditPage(
                         </select>
                     </div>
 
+                    // Interface State Settings (collapsible advanced section)
+                    <div class="border border-gray-600 rounded-lg overflow-hidden">
+                        <button
+                            type="button"
+                            class="w-full flex items-center justify-between px-4 py-3 bg-gray-700/50 hover:bg-gray-700 text-left"
+                            on:click=move |_| set_show_interface_state.update(|v| *v = !*v)
+                        >
+                            <span class="text-gray-200 font-medium">"Interface State Settings"</span>
+                            <svg
+                                class="w-5 h-5 text-gray-400 transition-transform"
+                                class:rotate-180=move || show_interface_state.get()
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                            </svg>
+                        </button>
+                        <Show when=move || show_interface_state.get()>
+                            <div class="p-4 space-y-4 border-t border-gray-600">
+                                // Link-Local Addressing
+                                <div>
+                                    <label class="block text-gray-300 mb-2 font-medium">"Link-Local Addressing"</label>
+                                    <select
+                                        class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
+                                        on:change=move |ev| {
+                                            set_link_local.set(match event_target_value(&ev).as_str() {
+                                                "no" => LinkLocalMode::No,
+                                                "ipv4" => LinkLocalMode::Ipv4,
+                                                "ipv6" => LinkLocalMode::Ipv6,
+                                                _ => LinkLocalMode::Yes,
+                                            });
+                                        }
+                                    >
+                                        <option value="yes" selected=move || link_local.get() == LinkLocalMode::Yes>"IPv4 + IPv6"</option>
+                                        <option value="ipv6" selected=move || link_local.get() == LinkLocalMode::Ipv6>"IPv6 Only"</option>
+                                        <option value="ipv4" selected=move || link_local.get() == LinkLocalMode::Ipv4>"IPv4 Only"</option>
+                                        <option value="no" selected=move || link_local.get() == LinkLocalMode::No>"Disabled"</option>
+                                    </select>
+                                    <p class="text-gray-500 text-sm mt-1">"Configure link-local address assignment"</p>
+                                </div>
+
+                                // Required for Online
+                                <div>
+                                    <label class="flex items-center gap-3 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked=move || required_for_online.get()
+                                            on:change=move |ev| set_required_for_online.set(event_target_checked(&ev))
+                                            class="w-5 h-5 rounded"
+                                        />
+                                        <span class="text-gray-200">"Required for Online"</span>
+                                    </label>
+                                    <p class="text-gray-500 text-sm mt-1 ml-8">"Wait for this interface before system is considered online"</p>
+                                </div>
+
+                                // Activation Policy
+                                <div>
+                                    <label class="block text-gray-300 mb-2 font-medium">"Activation Policy"</label>
+                                    <select
+                                        class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
+                                        on:change=move |ev| {
+                                            set_activation_policy.set(match event_target_value(&ev).as_str() {
+                                                "always-up" => ActivationPolicy::AlwaysUp,
+                                                "manual" => ActivationPolicy::Manual,
+                                                "always-down" => ActivationPolicy::AlwaysDown,
+                                                "down" => ActivationPolicy::Down,
+                                                "bound" => ActivationPolicy::Bound,
+                                                _ => ActivationPolicy::Up,
+                                            });
+                                        }
+                                    >
+                                        <option value="up" selected=move || activation_policy.get() == ActivationPolicy::Up>"Up (default)"</option>
+                                        <option value="always-up" selected=move || activation_policy.get() == ActivationPolicy::AlwaysUp>"Always Up"</option>
+                                        <option value="manual" selected=move || activation_policy.get() == ActivationPolicy::Manual>"Manual"</option>
+                                        <option value="bound" selected=move || activation_policy.get() == ActivationPolicy::Bound>"Bound to Carrier"</option>
+                                        <option value="down" selected=move || activation_policy.get() == ActivationPolicy::Down>"Down"</option>
+                                        <option value="always-down" selected=move || activation_policy.get() == ActivationPolicy::AlwaysDown>"Always Down"</option>
+                                    </select>
+                                    <p class="text-gray-500 text-sm mt-1">"How to manage the interface state at boot and runtime"</p>
+                                </div>
+                            </div>
+                        </Show>
+                    </div>
+
                     // Save/Cancel buttons
                     <div class="flex gap-3 pt-4 border-t border-gray-700">
                         <button
@@ -873,4 +847,258 @@ fn event_target_checked(ev: &web_sys::Event) -> bool {
         .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
         .map(|e| e.checked())
         .unwrap_or(false)
+}
+
+/// Component for static IP, gateway, DNS, search domains, and routes settings
+#[component]
+fn StaticIpSettings(
+    addresses_indexed: impl Fn() -> Vec<(usize, StaticAddress)> + Copy + Send + 'static,
+    new_address: ReadSignal<String>,
+    set_new_address: WriteSignal<String>,
+    add_address: impl Fn() + Copy + Send + 'static,
+    remove_address: impl Fn(usize) + Copy + Send + 'static,
+    gateway: ReadSignal<String>,
+    set_gateway: WriteSignal<String>,
+    dns_indexed: impl Fn() -> Vec<(usize, String)> + Copy + Send + 'static,
+    new_dns: ReadSignal<String>,
+    set_new_dns: WriteSignal<String>,
+    add_dns: impl Fn() + Copy + Send + 'static,
+    remove_dns: impl Fn(usize) + Copy + Send + 'static,
+    domains_indexed: impl Fn() -> Vec<(usize, String)> + Copy + Send + 'static,
+    new_domain: ReadSignal<String>,
+    set_new_domain: WriteSignal<String>,
+    add_domain: impl Fn() + Copy + Send + 'static,
+    remove_domain: impl Fn(usize) + Copy + Send + 'static,
+    routes_indexed: impl Fn() -> Vec<(usize, StaticRoute)> + Copy + Send + 'static,
+    new_route_dest: ReadSignal<String>,
+    set_new_route_dest: WriteSignal<String>,
+    new_route_gw: ReadSignal<String>,
+    set_new_route_gw: WriteSignal<String>,
+    new_route_metric: ReadSignal<String>,
+    set_new_route_metric: WriteSignal<String>,
+    add_route: impl Fn() + Copy + Send + 'static,
+    remove_route: impl Fn(usize) + Copy + Send + 'static,
+    #[prop(default = false)] show_dhcp_warnings: bool,
+    dhcp_use_dns: ReadSignal<bool>,
+    dhcp_use_gateway: ReadSignal<bool>,
+) -> impl IntoView {
+    view! {
+        <>
+            // Static Addresses
+            <div>
+                <label class="block text-gray-300 mb-2 font-medium">"Static IP Addresses"</label>
+                <div class="space-y-2">
+                    <For
+                        each=addresses_indexed
+                        key=|(i, addr)| (*i, addr.address.clone())
+                        children=move |(i, addr)| {
+                            view! {
+                                <div class="flex items-center gap-2">
+                                    <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{addr.address}</span>
+                                    <button
+                                        class="text-red-400 hover:text-red-300 px-2"
+                                        on:click=move |_| remove_address(i)
+                                    >
+                                        "✕"
+                                    </button>
+                                </div>
+                            }
+                        }
+                    />
+                    <div class="flex gap-2">
+                        <input
+                            type="text"
+                            placeholder="192.168.1.1/24"
+                            prop:value=move || new_address.get()
+                            on:input=move |ev| set_new_address.set(event_target_value(&ev))
+                            on:keydown=move |ev| {
+                                if ev.key() == "Enter" {
+                                    ev.prevent_default();
+                                    add_address();
+                                }
+                            }
+                            class="flex-1 bg-gray-700 text-white rounded px-4 py-2 border border-gray-600"
+                        />
+                        <button
+                            class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                            on:click=move |_| add_address()
+                        >
+                            "Add"
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            // Gateway
+            <div>
+                <label class="block text-gray-300 mb-2 font-medium">"Default Gateway"</label>
+                <input
+                    type="text"
+                    placeholder="192.168.1.254"
+                    prop:value=move || gateway.get()
+                    on:input=move |ev| set_gateway.set(event_target_value(&ev))
+                    class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
+                />
+                <Show when=move || show_dhcp_warnings && dhcp_use_gateway.get()>
+                    <p class="text-yellow-400 text-sm mt-1">
+                        "⚠ DHCP gateway is enabled. This static gateway will be used if DHCP doesn't provide one."
+                    </p>
+                </Show>
+            </div>
+
+            // DNS Servers
+            <div>
+                <label class="block text-gray-300 mb-2 font-medium">"DNS Servers"</label>
+                
+                <Show when=move || show_dhcp_warnings && dhcp_use_dns.get()>
+                    <div class="bg-blue-900/30 border border-blue-600 text-blue-200 px-3 py-2 rounded mb-2 text-sm">
+                        "DHCP DNS is enabled. Static DNS servers will be used in addition to DHCP-provided servers."
+                    </div>
+                </Show>
+                
+                <div class="space-y-2">
+                    <For
+                        each=dns_indexed
+                        key=|(i, dns)| (*i, dns.clone())
+                        children=move |(i, dns)| {
+                            view! {
+                                <div class="flex items-center gap-2">
+                                    <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{dns}</span>
+                                    <button
+                                        class="text-red-400 hover:text-red-300 px-2"
+                                        on:click=move |_| remove_dns(i)
+                                    >
+                                        "✕"
+                                    </button>
+                                </div>
+                            }
+                        }
+                    />
+                    <div class="flex gap-2">
+                        <input
+                            type="text"
+                            placeholder="8.8.8.8"
+                            prop:value=move || new_dns.get()
+                            on:input=move |ev| set_new_dns.set(event_target_value(&ev))
+                            on:keydown=move |ev| {
+                                if ev.key() == "Enter" {
+                                    ev.prevent_default();
+                                    add_dns();
+                                }
+                            }
+                            class="flex-1 bg-gray-700 text-white rounded px-4 py-2 border border-gray-600"
+                        />
+                        <button
+                            class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                            on:click=move |_| add_dns()
+                        >
+                            "Add"
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            // Search Domains
+            <div>
+                <label class="block text-gray-300 mb-2 font-medium">"Search Domains"</label>
+                <div class="space-y-2">
+                    <For
+                        each=domains_indexed
+                        key=|(i, domain)| (*i, domain.clone())
+                        children=move |(i, domain)| {
+                            view! {
+                                <div class="flex items-center gap-2">
+                                    <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{domain}</span>
+                                    <button
+                                        class="text-red-400 hover:text-red-300 px-2"
+                                        on:click=move |_| remove_domain(i)
+                                    >
+                                        "✕"
+                                    </button>
+                                </div>
+                            }
+                        }
+                    />
+                    <div class="flex gap-2">
+                        <input
+                            type="text"
+                            placeholder="example.com"
+                            prop:value=move || new_domain.get()
+                            on:input=move |ev| set_new_domain.set(event_target_value(&ev))
+                            on:keydown=move |ev| {
+                                if ev.key() == "Enter" {
+                                    ev.prevent_default();
+                                    add_domain();
+                                }
+                            }
+                            class="flex-1 bg-gray-700 text-white rounded px-4 py-2 border border-gray-600"
+                        />
+                        <button
+                            class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                            on:click=move |_| add_domain()
+                        >
+                            "Add"
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            // Static Routes
+            <div>
+                <label class="block text-gray-300 mb-2 font-medium">"Static Routes"</label>
+                <div class="space-y-2">
+                    <For
+                        each=routes_indexed
+                        key=|(i, r)| (*i, r.gateway.clone(), r.destination.clone())
+                        children=move |(i, route)| {
+                            let dest = route.destination.clone().unwrap_or_else(|| "default".to_string());
+                            let metric_str = route.metric.map(|m| format!(" (metric {})", m)).unwrap_or_default();
+                            view! {
+                                <div class="flex items-center gap-2">
+                                    <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">
+                                        {dest} " via " {route.gateway} {metric_str}
+                                    </span>
+                                    <button
+                                        class="text-red-400 hover:text-red-300 px-2"
+                                        on:click=move |_| remove_route(i)
+                                    >
+                                        "✕"
+                                    </button>
+                                </div>
+                            }
+                        }
+                    />
+                    <div class="flex gap-2 flex-wrap">
+                        <input
+                            type="text"
+                            placeholder="Destination (e.g., 10.0.0.0/8)"
+                            prop:value=move || new_route_dest.get()
+                            on:input=move |ev| set_new_route_dest.set(event_target_value(&ev))
+                            class="flex-1 min-w-32 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                        />
+                        <input
+                            type="text"
+                            placeholder="Gateway"
+                            prop:value=move || new_route_gw.get()
+                            on:input=move |ev| set_new_route_gw.set(event_target_value(&ev))
+                            class="flex-1 min-w-32 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                        />
+                        <input
+                            type="text"
+                            placeholder="Metric"
+                            prop:value=move || new_route_metric.get()
+                            on:input=move |ev| set_new_route_metric.set(event_target_value(&ev))
+                            class="w-24 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                        />
+                        <button
+                            class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
+                            on:click=move |_| add_route()
+                        >
+                            "Add"
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </>
+    }
 }

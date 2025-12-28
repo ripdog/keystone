@@ -127,6 +127,194 @@ impl std::str::FromStr for IpMasqueradeMode {
     }
 }
 
+/// Link-local addressing mode
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LinkLocalMode {
+    /// Link-local disabled
+    No,
+    /// Both IPv4 and IPv6 link-local enabled
+    #[default]
+    Yes,
+    /// Only IPv4 link-local enabled
+    Ipv4,
+    /// Only IPv6 link-local enabled (most common default)
+    Ipv6,
+}
+
+impl std::fmt::Display for LinkLocalMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LinkLocalMode::No => write!(f, "no"),
+            LinkLocalMode::Yes => write!(f, "yes"),
+            LinkLocalMode::Ipv4 => write!(f, "ipv4"),
+            LinkLocalMode::Ipv6 => write!(f, "ipv6"),
+        }
+    }
+}
+
+impl std::str::FromStr for LinkLocalMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "no" | "false" => Ok(LinkLocalMode::No),
+            "yes" | "true" => Ok(LinkLocalMode::Yes),
+            "ipv4" => Ok(LinkLocalMode::Ipv4),
+            "ipv6" => Ok(LinkLocalMode::Ipv6),
+            _ => Err(format!("Unknown link-local mode: {}", s)),
+        }
+    }
+}
+
+/// Activation policy for interface management
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ActivationPolicy {
+    /// Bring up interface automatically
+    #[default]
+    Up,
+    /// Start with interface down, allow manual activation
+    AlwaysUp,
+    /// Keep interface in current state
+    Manual,
+    /// Always keep interface down
+    AlwaysDown,
+    /// Bring interface down
+    Down,
+    /// Bound to carrier state
+    Bound,
+}
+
+impl std::fmt::Display for ActivationPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ActivationPolicy::Up => write!(f, "up"),
+            ActivationPolicy::AlwaysUp => write!(f, "always-up"),
+            ActivationPolicy::Manual => write!(f, "manual"),
+            ActivationPolicy::AlwaysDown => write!(f, "always-down"),
+            ActivationPolicy::Down => write!(f, "down"),
+            ActivationPolicy::Bound => write!(f, "bound"),
+        }
+    }
+}
+
+impl std::str::FromStr for ActivationPolicy {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "up" => Ok(ActivationPolicy::Up),
+            "always-up" => Ok(ActivationPolicy::AlwaysUp),
+            "manual" => Ok(ActivationPolicy::Manual),
+            "always-down" => Ok(ActivationPolicy::AlwaysDown),
+            "down" => Ok(ActivationPolicy::Down),
+            "bound" => Ok(ActivationPolicy::Bound),
+            _ => Err(format!("Unknown activation policy: {}", s)),
+        }
+    }
+}
+
+/// Address scope for static addresses
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AddressScope {
+    /// Global scope (routable)
+    #[default]
+    Global,
+    /// Link-local scope
+    Link,
+    /// Host-local scope
+    Host,
+}
+
+impl std::fmt::Display for AddressScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AddressScope::Global => write!(f, "global"),
+            AddressScope::Link => write!(f, "link"),
+            AddressScope::Host => write!(f, "host"),
+        }
+    }
+}
+
+impl std::str::FromStr for AddressScope {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "global" => Ok(AddressScope::Global),
+            "link" => Ok(AddressScope::Link),
+            "host" => Ok(AddressScope::Host),
+            _ => Err(format!("Unknown address scope: {}", s)),
+        }
+    }
+}
+
+/// Route type for static routes
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RouteType {
+    /// Standard unicast route
+    #[default]
+    Unicast,
+    /// Local route (to local interface)
+    Local,
+    /// Broadcast route
+    Broadcast,
+    /// Anycast route
+    Anycast,
+    /// Multicast route
+    Multicast,
+    /// Silently drop packets
+    Blackhole,
+    /// Drop with ICMP unreachable
+    Unreachable,
+    /// Drop with ICMP prohibited
+    Prohibit,
+    /// Continue routing table lookup
+    Throw,
+    /// NAT route (rarely used)
+    Nat,
+    /// External route (for multipath)
+    Xresolve,
+}
+
+impl std::fmt::Display for RouteType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RouteType::Unicast => write!(f, "unicast"),
+            RouteType::Local => write!(f, "local"),
+            RouteType::Broadcast => write!(f, "broadcast"),
+            RouteType::Anycast => write!(f, "anycast"),
+            RouteType::Multicast => write!(f, "multicast"),
+            RouteType::Blackhole => write!(f, "blackhole"),
+            RouteType::Unreachable => write!(f, "unreachable"),
+            RouteType::Prohibit => write!(f, "prohibit"),
+            RouteType::Throw => write!(f, "throw"),
+            RouteType::Nat => write!(f, "nat"),
+            RouteType::Xresolve => write!(f, "xresolve"),
+        }
+    }
+}
+
+impl std::str::FromStr for RouteType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "unicast" => Ok(RouteType::Unicast),
+            "local" => Ok(RouteType::Local),
+            "broadcast" => Ok(RouteType::Broadcast),
+            "anycast" => Ok(RouteType::Anycast),
+            "multicast" => Ok(RouteType::Multicast),
+            "blackhole" => Ok(RouteType::Blackhole),
+            "unreachable" => Ok(RouteType::Unreachable),
+            "prohibit" => Ok(RouteType::Prohibit),
+            "throw" => Ok(RouteType::Throw),
+            "nat" => Ok(RouteType::Nat),
+            "xresolve" => Ok(RouteType::Xresolve),
+            _ => Err(format!("Unknown route type: {}", s)),
+        }
+    }
+}
+
 /// A static IP address configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StaticAddress {
@@ -134,6 +322,9 @@ pub struct StaticAddress {
     pub address: String,
     /// Optional label for the address (max 15 chars)
     pub label: Option<String>,
+    /// Address scope (global, link, host)
+    #[serde(default)]
+    pub scope: AddressScope,
 }
 
 /// A static route configuration
@@ -145,6 +336,12 @@ pub struct StaticRoute {
     pub gateway: String,
     /// Route metric (lower = higher priority)
     pub metric: Option<u32>,
+    /// Routing table (main, local, or custom name/number)
+    #[serde(default)]
+    pub table: Option<String>,
+    /// Route type
+    #[serde(default)]
+    pub route_type: RouteType,
 }
 
 /// DHCPv4 client configuration options
@@ -245,6 +442,17 @@ pub struct InterfaceConfig {
     /// Default gateway (convenience field, also creates a route)
     pub gateway: Option<String>,
     
+    // Link-local and interface state settings
+    /// Link-local addressing mode
+    #[serde(default)]
+    pub link_local: LinkLocalMode,
+    /// Whether interface is required for network-online.target
+    #[serde(default = "default_true")]
+    pub required_for_online: bool,
+    /// Interface activation policy
+    #[serde(default)]
+    pub activation_policy: ActivationPolicy,
+    
     // DHCP client settings
     /// DHCPv4 client configuration (only used when dhcp_mode includes IPv4)
     pub dhcpv4_client: Option<Dhcpv4ClientConfig>,
@@ -262,6 +470,10 @@ pub struct InterfaceConfig {
     pub ip_masquerade: IpMasqueradeMode,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for InterfaceConfig {
     fn default() -> Self {
         Self {
@@ -276,6 +488,9 @@ impl Default for InterfaceConfig {
             dns_servers: Vec::new(),
             search_domains: Vec::new(),
             gateway: None,
+            link_local: LinkLocalMode::default(),
+            required_for_online: true,
+            activation_policy: ActivationPolicy::default(),
             dhcpv4_client: None,
             dhcpv6_client: None,
             ipv6_accept_ra: true,
@@ -663,15 +878,21 @@ mod tests {
             addresses: vec![StaticAddress {
                 address: "192.168.1.1/24".to_string(),
                 label: Some("primary".to_string()),
+                scope: AddressScope::Global,
             }],
             routes: vec![StaticRoute {
                 destination: None,
                 gateway: "192.168.1.254".to_string(),
                 metric: Some(100),
+                table: None,
+                route_type: RouteType::Unicast,
             }],
             dns_servers: vec!["8.8.8.8".to_string(), "8.8.4.4".to_string()],
             search_domains: vec!["example.com".to_string()],
             gateway: Some("192.168.1.254".to_string()),
+            link_local: LinkLocalMode::Ipv6,
+            required_for_online: true,
+            activation_policy: ActivationPolicy::Up,
             dhcpv4_client: Some(Dhcpv4ClientConfig {
                 send_hostname: true,
                 hostname: None,

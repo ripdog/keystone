@@ -118,10 +118,10 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `UseDNS=` | bool | Use RA-provided DNS | P2 | ⬜ TODO |
-| `UseGateway=` | bool | Use RA-provided gateway | P2 | ⬜ TODO |
-| `UseRoutePrefix=` | bool | Use RA route prefixes | P2 | ⬜ TODO |
-| `UseAutonomousPrefix=` | bool | Use SLAAC | P2 | ⬜ TODO |
+| `UseDNS=` | bool | Use RA-provided DNS | P2 | ✅ DONE |
+| `UseGateway=` | bool | Use RA-provided gateway | P2 | ✅ DONE |
+| `UseRoutePrefix=` | bool | Use RA route prefixes | P2 | ✅ DONE |
+| `UseAutonomousPrefix=` | bool | Use SLAAC | P2 | ✅ DONE |
 | `Token=` | enum/addr | IPv6 address token | P3 | ⬜ TODO |
 
 ### [DHCPServer] Section
@@ -156,7 +156,7 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `MTUBytes=` | size | Maximum Transmission Unit | P1 | ⬜ TODO |
+| `MTUBytes=` | size | Maximum Transmission Unit | P1 | ✅ DONE |
 | `MACAddress=` | MAC | Override MAC address | P3 | ⬜ TODO |
 | `ARP=` | bool | Enable ARP | P3 | ⬜ TODO |
 | `Multicast=` | bool | Enable multicast | P3 | ⬜ TODO |

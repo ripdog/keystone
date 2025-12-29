@@ -68,7 +68,10 @@ pub fn App() -> impl IntoView {
                         <Route
                             path=path!("/firewall")
                             view=move || view! {
-                                <FirewallPage/>
+                                <FirewallPage
+                                    auth_token=auth_token
+                                    on_unauthorized=on_unauthorized
+                                />
                             }
                         />
                         <Route

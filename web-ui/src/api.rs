@@ -3,12 +3,16 @@
 use keystone_core::{
     ApplyConfigResponse, BridgeConfig, BridgeConfigsResponse,
     DashboardResponse, DeleteBridgeResponse, DeleteUserRequest, DeleteUserResponse,
-    DeleteVlanResponse, InterfaceConfig, InterfaceConfigResponse, InterfaceConfigsResponse,
+    DeleteVlanResponse, DhcpLease, DhcpLeasesResponse, DnsmasqAddressOverride,
+    DnsmasqApplyResponse, DnsmasqConfig, DnsmasqCnameRecord, DnsmasqDhcpOption,
+    DnsmasqDhcpRange, DnsmasqHostRecord, DnsmasqPreviewResponse, DnsmasqStateResponse,
+    DnsmasqStaticLease, InterfaceConfig, InterfaceConfigResponse, InterfaceConfigsResponse,
     LoginRequest, LoginResponse, ManagedInterface, ManagedInterfacesResponse,
     NetworkdPreviewResponse, SaveBridgeConfigRequest, SaveBridgeConfigResponse,
     SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
     SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest,
-    SaveVlanConfigResponse, UserInfo, UsersResponse, VlanConfig, VlanConfigResponse,
+    SaveVlanConfigResponse, UserInfo, UsersResponse,
+    VlanConfig, VlanConfigResponse,
     VlanConfigsResponse,
 };
 
@@ -1078,6 +1082,455 @@ pub async fn save_firewall_global_settings(
         .header("Authorization", &format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .body(serde_json::to_string(&request).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+// ============================================================================
+// Dnsmasq API
+// ============================================================================
+
+/// Fetch complete dnsmasq state
+pub async fn fetch_dnsmasq_state(token: &str) -> Result<DnsmasqStateResponse, String> {
+    let response = gloo_net::http::Request::get("/api/dnsmasq")
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save global dnsmasq configuration
+pub async fn save_dnsmasq_config(token: &str, config: DnsmasqConfig) -> Result<(), String> {
+    let response = gloo_net::http::Request::put("/api/dnsmasq/config")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&config).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save a DHCP range
+pub async fn save_dhcp_range(token: &str, range: DnsmasqDhcpRange) -> Result<i64, String> {
+    let response = gloo_net::http::Request::post("/api/dnsmasq/ranges")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&range).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        #[derive(serde::Deserialize)]
+        struct SaveResponse {
+            success: bool,
+            message: String,
+            range_id: Option<i64>,
+        }
+        let data: SaveResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        if data.success {
+            Ok(data.range_id.unwrap_or(0))
+        } else {
+            Err(data.message)
+        }
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Delete a DHCP range
+pub async fn delete_dhcp_range(token: &str, id: i64) -> Result<(), String> {
+    let response = gloo_net::http::Request::delete(&format!("/api/dnsmasq/ranges/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save a static lease
+pub async fn save_static_lease(token: &str, lease: DnsmasqStaticLease) -> Result<i64, String> {
+    let response = gloo_net::http::Request::post("/api/dnsmasq/leases")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&lease).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        #[derive(serde::Deserialize)]
+        struct SaveResponse {
+            success: bool,
+            message: String,
+            lease_id: Option<i64>,
+        }
+        let data: SaveResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        if data.success {
+            Ok(data.lease_id.unwrap_or(0))
+        } else {
+            Err(data.message)
+        }
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Delete a static lease
+pub async fn delete_static_lease(token: &str, id: i64) -> Result<(), String> {
+    let response = gloo_net::http::Request::delete(&format!("/api/dnsmasq/leases/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Fetch active DHCP leases
+pub async fn fetch_active_leases(token: &str) -> Result<Vec<DhcpLease>, String> {
+    let response = gloo_net::http::Request::get("/api/dnsmasq/active-leases")
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        let data: DhcpLeasesResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(data.leases)
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save a DHCP option
+pub async fn save_dhcp_option(token: &str, option: DnsmasqDhcpOption) -> Result<i64, String> {
+    let response = gloo_net::http::Request::post("/api/dnsmasq/options")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&option).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        #[derive(serde::Deserialize)]
+        struct SaveResponse {
+            success: bool,
+            message: String,
+            option_id: Option<i64>,
+        }
+        let data: SaveResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        if data.success {
+            Ok(data.option_id.unwrap_or(0))
+        } else {
+            Err(data.message)
+        }
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Delete a DHCP option
+pub async fn delete_dhcp_option(token: &str, id: i64) -> Result<(), String> {
+    let response = gloo_net::http::Request::delete(&format!("/api/dnsmasq/options/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save a host record
+pub async fn save_host_record(token: &str, record: DnsmasqHostRecord) -> Result<i64, String> {
+    let response = gloo_net::http::Request::post("/api/dnsmasq/hosts")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&record).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        #[derive(serde::Deserialize)]
+        struct SaveResponse {
+            success: bool,
+            message: String,
+            record_id: Option<i64>,
+        }
+        let data: SaveResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        if data.success {
+            Ok(data.record_id.unwrap_or(0))
+        } else {
+            Err(data.message)
+        }
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Delete a host record
+pub async fn delete_host_record(token: &str, id: i64) -> Result<(), String> {
+    let response = gloo_net::http::Request::delete(&format!("/api/dnsmasq/hosts/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save a CNAME record
+pub async fn save_cname_record(token: &str, record: DnsmasqCnameRecord) -> Result<i64, String> {
+    let response = gloo_net::http::Request::post("/api/dnsmasq/cnames")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&record).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        #[derive(serde::Deserialize)]
+        struct SaveResponse {
+            success: bool,
+            message: String,
+            record_id: Option<i64>,
+        }
+        let data: SaveResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        if data.success {
+            Ok(data.record_id.unwrap_or(0))
+        } else {
+            Err(data.message)
+        }
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Delete a CNAME record
+pub async fn delete_cname_record(token: &str, id: i64) -> Result<(), String> {
+    let response = gloo_net::http::Request::delete(&format!("/api/dnsmasq/cnames/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save an address override
+pub async fn save_address_override(token: &str, override_entry: DnsmasqAddressOverride) -> Result<i64, String> {
+    let response = gloo_net::http::Request::post("/api/dnsmasq/overrides")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&override_entry).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        #[derive(serde::Deserialize)]
+        struct SaveResponse {
+            success: bool,
+            message: String,
+            override_id: Option<i64>,
+        }
+        let data: SaveResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        if data.success {
+            Ok(data.override_id.unwrap_or(0))
+        } else {
+            Err(data.message)
+        }
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Delete an address override
+pub async fn delete_address_override(token: &str, id: i64) -> Result<(), String> {
+    let response = gloo_net::http::Request::delete(&format!("/api/dnsmasq/overrides/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        Ok(())
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Fetch dnsmasq config preview
+pub async fn fetch_dnsmasq_preview(token: &str) -> Result<String, String> {
+    let response = gloo_net::http::Request::get("/api/dnsmasq/preview")
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        let data: DnsmasqPreviewResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(data.config_content)
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Apply dnsmasq configuration
+pub async fn apply_dnsmasq(token: &str) -> Result<DnsmasqApplyResponse, String> {
+    let response = gloo_net::http::Request::post("/api/dnsmasq/apply")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body("{}")
         .map_err(|e| format!("Failed to build request: {}", e))?
         .send()
         .await

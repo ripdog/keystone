@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    DhcpMode, DhcpServerConfig, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig,
+    DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig,
     IpForwardMode, IpMasqueradeMode, VlanConfig,
 };
 use std::fmt::Write;
@@ -144,20 +144,6 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
         output.push_str(&generate_dhcpv6_section(dhcp_cfg));
     }
 
-    // [DHCPServer] sections if DHCP server is enabled
-    if let Some(dhcp_srv) = &config.dhcp_server
-        && dhcp_srv.enabled
-    {
-        output.push_str(&generate_dhcp_server_section(dhcp_srv));
-    }
-
-    // [IPv6SendRA] section if IPv6 RA is enabled
-    if let Some(ra_cfg) = &config.ipv6_ra
-        && ra_cfg.enabled
-    {
-        output.push_str(&generate_ipv6_ra_section(ra_cfg));
-    }
-
     // [IPv6AcceptRA] section if accepting RAs with custom settings
     if config.ipv6_accept_ra {
         if let Some(ra_client_cfg) = &config.ipv6_accept_ra_config {
@@ -206,98 +192,6 @@ fn generate_dhcpv6_section(cfg: &Dhcpv6ClientConfig) -> String {
         writeln!(output, "WithoutRA={}", cfg.without_ra).unwrap();
     }
     writeln!(output).unwrap();
-    output
-}
-
-fn generate_dhcp_server_section(cfg: &DhcpServerConfig) -> String {
-    let mut output = String::new();
-    writeln!(output, "[DHCPServer]").unwrap();
-    
-    if let Some(offset) = cfg.pool_offset {
-        writeln!(output, "PoolOffset={}", offset).unwrap();
-    }
-    if let Some(size) = cfg.pool_size {
-        writeln!(output, "PoolSize={}", size).unwrap();
-    }
-    if let Some(lease_time) = cfg.default_lease_time_secs {
-        writeln!(output, "DefaultLeaseTimeSec={}", lease_time).unwrap();
-    }
-    if let Some(max_lease) = cfg.max_lease_time_secs {
-        writeln!(output, "MaxLeaseTimeSec={}", max_lease).unwrap();
-    }
-    
-    writeln!(output, "EmitDNS={}", bool_to_yesno(cfg.emit_dns)).unwrap();
-    for dns in &cfg.dns_servers {
-        writeln!(output, "DNS={}", dns).unwrap();
-    }
-    
-    writeln!(output, "EmitNTP={}", bool_to_yesno(cfg.emit_ntp)).unwrap();
-    for ntp in &cfg.ntp_servers {
-        writeln!(output, "NTP={}", ntp).unwrap();
-    }
-    
-    writeln!(output, "EmitRouter={}", bool_to_yesno(cfg.emit_router)).unwrap();
-    if let Some(router) = &cfg.router_address {
-        writeln!(output, "Router={}", router).unwrap();
-    }
-    writeln!(output).unwrap();
-
-    // Static leases as separate sections
-    for lease in &cfg.static_leases {
-        writeln!(output, "[DHCPServerStaticLease]").unwrap();
-        writeln!(output, "MACAddress={}", lease.mac_address).unwrap();
-        writeln!(output, "Address={}", lease.ip_address).unwrap();
-        writeln!(output).unwrap();
-    }
-
-    output
-}
-
-fn generate_ipv6_ra_section(cfg: &keystone_core::Ipv6RaConfig) -> String {
-    let mut output = String::new();
-    writeln!(output, "[IPv6SendRA]").unwrap();
-    
-    if let Some(lifetime) = cfg.router_lifetime_secs {
-        writeln!(output, "RouterLifetimeSec={}", lifetime).unwrap();
-    }
-    
-    if let Some(pref) = &cfg.router_preference {
-        writeln!(output, "RouterPreference={}", pref).unwrap();
-    }
-    
-    writeln!(output, "Managed={}", bool_to_yesno(cfg.managed)).unwrap();
-    writeln!(output, "OtherInformation={}", bool_to_yesno(cfg.other_information)).unwrap();
-    
-    if cfg.emit_dns {
-        for dns in &cfg.dns_servers {
-            writeln!(output, "DNS={}", dns).unwrap();
-        }
-    }
-    
-    if !cfg.search_domains.is_empty() {
-        writeln!(output, "Domains={}", cfg.search_domains.join(" ")).unwrap();
-    }
-    
-    writeln!(output).unwrap();
-    
-    // [IPv6Prefix] sections for each prefix
-    for prefix_cfg in &cfg.prefixes {
-        writeln!(output, "[IPv6Prefix]").unwrap();
-        writeln!(output, "Prefix={}", prefix_cfg.prefix).unwrap();
-        
-        if let Some(preferred) = prefix_cfg.preferred_lifetime_secs {
-            writeln!(output, "PreferredLifetimeSec={}", preferred).unwrap();
-        }
-        
-        if let Some(valid) = prefix_cfg.valid_lifetime_secs {
-            writeln!(output, "ValidLifetimeSec={}", valid).unwrap();
-        }
-        
-        writeln!(output, "OnLink={}", bool_to_yesno(prefix_cfg.on_link)).unwrap();
-        writeln!(output, "Assign={}", bool_to_yesno(prefix_cfg.autonomous)).unwrap();
-        writeln!(output).unwrap();
-    }
-    
     output
 }
 
@@ -604,7 +498,7 @@ pub fn write_bridge_member_network_files(config: &keystone_core::BridgeConfig) -
 mod tests {
     use super::*;
     use keystone_core::{
-        ActivationPolicy, AddressScope, DhcpStaticLease, InterfaceRole, LinkLocalMode,
+        ActivationPolicy, AddressScope, InterfaceRole, LinkLocalMode,
         StaticAddress, VlanProtocol,
     };
 
@@ -627,10 +521,8 @@ mod tests {
             activation_policy: ActivationPolicy::Up,
             dhcpv4_client: Some(Dhcpv4ClientConfig::default()),
             dhcpv6_client: None,
-            dhcp_server: None,
             ipv6_accept_ra: true,
             ipv6_accept_ra_config: None,
-            ipv6_ra: None,
             mtu: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
@@ -669,10 +561,8 @@ mod tests {
             activation_policy: ActivationPolicy::Up,
             dhcpv4_client: None,
             dhcpv6_client: None,
-            dhcp_server: None,
             ipv6_accept_ra: false,
             ipv6_accept_ra_config: None,
-            ipv6_ra: None,
             mtu: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::No,
@@ -685,141 +575,6 @@ mod tests {
         assert!(output.contains("DNS=8.8.8.8"));
         assert!(output.contains("Domains=example.com"));
         assert!(output.contains("IPForward=yes"));
-    }
-
-    #[test]
-    fn test_dhcp_server_config() {
-        let config = InterfaceConfig {
-            id: Some(3),
-            name: "eth2".to_string(),
-            role: InterfaceRole::LAN,
-            enabled: true,
-            description: None,
-            dhcp_mode: DhcpMode::No,
-            addresses: vec![
-                StaticAddress {
-                    address: "192.168.1.1/24".to_string(),
-                    label: None,
-                    scope: AddressScope::Global,
-                },
-            ],
-            routes: vec![],
-            dns_servers: vec![],
-            search_domains: vec![],
-            gateway: None,
-            link_local: LinkLocalMode::Yes,
-            required_for_online: true,
-            activation_policy: ActivationPolicy::Up,
-            dhcpv4_client: None,
-            dhcpv6_client: None,
-            dhcp_server: Some(DhcpServerConfig {
-                enabled: true,
-                pool_offset: Some(100),
-                pool_size: Some(50),
-                default_lease_time_secs: Some(3600),
-                max_lease_time_secs: Some(86400),
-                emit_dns: true,
-                dns_servers: vec!["192.168.1.1".to_string()],
-                emit_ntp: false,
-                ntp_servers: vec![],
-                emit_router: true,
-                router_address: None,
-                static_leases: vec![
-                    DhcpStaticLease {
-                        mac_address: "00:11:22:33:44:55".to_string(),
-                        ip_address: "192.168.1.200".to_string(),
-                        hostname: Some("server".to_string()),
-                    },
-                ],
-            }),
-            ipv6_accept_ra: false,
-            ipv6_accept_ra_config: None,
-            ipv6_ra: None,
-            mtu: None,
-            ip_forward: IpForwardMode::No,
-            ip_masquerade: IpMasqueradeMode::No,
-            vlans: vec![],
-        };
-
-        let output = generate_network_file(&config);
-        assert!(output.contains("[DHCPServer]"));
-        assert!(output.contains("PoolOffset=100"));
-        assert!(output.contains("PoolSize=50"));
-        assert!(output.contains("DNS=192.168.1.1"));
-        assert!(output.contains("[DHCPServerStaticLease]"));
-        assert!(output.contains("MACAddress=00:11:22:33:44:55"));
-        assert!(output.contains("Address=192.168.1.200"));
-    }
-
-    #[test]
-    fn test_ipv6_ra_config() {
-        use keystone_core::{Ipv6RaConfig, Ipv6RaPrefix};
-
-        let config = InterfaceConfig {
-            id: Some(4),
-            name: "eth3".to_string(),
-            role: InterfaceRole::LAN,
-            enabled: true,
-            description: Some("IPv6 LAN".to_string()),
-            dhcp_mode: DhcpMode::No,
-            addresses: vec![
-                StaticAddress {
-                    address: "2001:db8::1/64".to_string(),
-                    label: None,
-                    scope: AddressScope::Global,
-                },
-            ],
-            routes: vec![],
-            dns_servers: vec![],
-            search_domains: vec![],
-            gateway: None,
-            link_local: LinkLocalMode::Yes,
-            required_for_online: true,
-            activation_policy: ActivationPolicy::Up,
-            dhcpv4_client: None,
-            dhcpv6_client: None,
-            dhcp_server: None,
-            ipv6_accept_ra: false,
-            ipv6_accept_ra_config: None,
-            ipv6_ra: Some(Ipv6RaConfig {
-                enabled: true,
-                router_lifetime_secs: Some(1800),
-                router_preference: Some("high".to_string()),
-                managed: false,
-                other_information: true,
-                emit_dns: true,
-                dns_servers: vec!["2001:db8::1".to_string()],
-                search_domains: vec!["example.com".to_string()],
-                prefixes: vec![
-                    Ipv6RaPrefix {
-                        prefix: "2001:db8::/64".to_string(),
-                        preferred_lifetime_secs: Some(604800),
-                        valid_lifetime_secs: Some(2592000),
-                        on_link: true,
-                        autonomous: true,
-                    },
-                ],
-            }),
-            ip_forward: IpForwardMode::Yes,
-            ip_masquerade: IpMasqueradeMode::No,
-            mtu: None,
-            vlans: vec![],
-        };
-
-        let output = generate_network_file(&config);
-        assert!(output.contains("[IPv6SendRA]"));
-        assert!(output.contains("RouterLifetimeSec=1800"));
-        assert!(output.contains("RouterPreference=high"));
-        assert!(output.contains("Managed=no"));
-        assert!(output.contains("OtherInformation=yes"));
-        assert!(output.contains("DNS=2001:db8::1"));
-        assert!(output.contains("Domains=example.com"));
-        assert!(output.contains("[IPv6Prefix]"));
-        assert!(output.contains("Prefix=2001:db8::/64"));
-        assert!(output.contains("PreferredLifetimeSec=604800"));
-        assert!(output.contains("ValidLifetimeSec=2592000"));
-        assert!(output.contains("OnLink=yes"));
-        assert!(output.contains("Assign=yes"));
     }
 
     #[test]
@@ -893,10 +648,8 @@ mod tests {
             activation_policy: ActivationPolicy::Up,
             dhcpv4_client: None,
             dhcpv6_client: None,
-            dhcp_server: None,
             ipv6_accept_ra: false,
             ipv6_accept_ra_config: None,
-            ipv6_ra: None,
             mtu: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,

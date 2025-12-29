@@ -4,9 +4,9 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    ActivationPolicy, AddressScope, BridgeConfig, DhcpMode, DhcpServerConfig, DhcpStaticLease,
+    ActivationPolicy, AddressScope, BridgeConfig, DhcpMode,
     Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
-    IpMasqueradeMode, Ipv6AcceptRaConfig, Ipv6RaConfig, Ipv6RaPrefix, LinkLocalMode,
+    IpMasqueradeMode, Ipv6AcceptRaConfig, LinkLocalMode,
     ManagedInterface, RouteType, StaticAddress, StaticRoute, User, UserInfo, VlanConfig,
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
@@ -42,6 +42,11 @@ impl Database {
         db.run_migrations().await?;
 
         Ok(db)
+    }
+
+    /// Get a reference to the database pool
+    pub fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 
     /// Run database migrations
@@ -269,8 +274,6 @@ impl Database {
             let search_domains = self.get_interface_domains(id).await?;
             let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
             let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
-            let dhcp_server = self.get_dhcp_server_config(id).await?;
-            let ipv6_ra = self.get_ipv6_ra_config(id).await?;
             let ipv6_accept_ra_config = self.get_ipv6_accept_ra_config(id).await?;
             let vlans = self.get_vlan_names_for_interface(&name).await?;
 
@@ -291,10 +294,8 @@ impl Database {
                 activation_policy: activation_policy.parse().unwrap_or(ActivationPolicy::default()),
                 dhcpv4_client,
                 dhcpv6_client,
-                dhcp_server,
                 ipv6_accept_ra,
                 ipv6_accept_ra_config,
-                ipv6_ra,
                 ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                 ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
                 mtu: mtu.map(|v| v as u32),
@@ -324,8 +325,6 @@ impl Database {
                 let search_domains = self.get_interface_domains(id).await?;
                 let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
                 let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
-                let dhcp_server = self.get_dhcp_server_config(id).await?;
-                let ipv6_ra = self.get_ipv6_ra_config(id).await?;
                 let ipv6_accept_ra_config = self.get_ipv6_accept_ra_config(id).await?;
                 let vlans = self.get_vlan_names_for_interface(&name).await?;
 
@@ -346,10 +345,8 @@ impl Database {
                     activation_policy: activation_policy.parse().unwrap_or(ActivationPolicy::default()),
                     dhcpv4_client,
                     dhcpv6_client,
-                    dhcp_server,
                     ipv6_accept_ra,
                     ipv6_accept_ra_config,
-                    ipv6_ra,
                     ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                     ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
                     mtu: mtu.map(|v| v as u32),
@@ -526,12 +523,6 @@ impl Database {
             .await?;
         }
 
-        // Save DHCP server config
-        self.save_dhcp_server_config_tx(&mut tx, config_id, &config.dhcp_server).await?;
-
-        // Save IPv6 RA config
-        self.save_ipv6_ra_config_tx(&mut tx, config_id, &config.ipv6_ra).await?;
-
         // Save IPv6 Accept RA config
         self.save_ipv6_accept_ra_config_tx(&mut tx, config_id, &config.ipv6_accept_ra_config).await?;
 
@@ -663,309 +654,6 @@ impl Database {
                 without_ra,
             }
         }))
-    }
-
-    async fn get_dhcp_server_config(&self, config_id: i64) -> Result<Option<DhcpServerConfig>> {
-        let row = sqlx::query_as::<_, (bool, Option<i64>, Option<i64>, Option<i64>, Option<i64>, bool, bool, bool, Option<String>)>(
-            r#"SELECT enabled, pool_offset, pool_size, default_lease_time_secs, max_lease_time_secs, emit_dns, emit_ntp, emit_router, router_address
-               FROM dhcp_server_config WHERE interface_config_id = ?"#
-        )
-        .bind(config_id)
-        .fetch_optional(&self.pool)
-        .await
-        .context("Failed to fetch DHCP server config")?;
-
-        match row {
-            Some((enabled, pool_offset, pool_size, default_lease_time_secs, max_lease_time_secs, emit_dns, emit_ntp, emit_router, router_address)) => {
-                // Get DNS servers for DHCP server
-                let dns_servers = sqlx::query_as::<_, (String,)>(
-                    "SELECT server FROM dhcp_server_dns WHERE dhcp_server_id = ? ORDER BY priority"
-                )
-                .bind(config_id)
-                .fetch_all(&self.pool)
-                .await
-                .context("Failed to fetch DHCP server DNS")?
-                .into_iter()
-                .map(|(s,)| s)
-                .collect();
-
-                // Get NTP servers for DHCP server
-                let ntp_servers = sqlx::query_as::<_, (String,)>(
-                    "SELECT server FROM dhcp_server_ntp WHERE dhcp_server_id = ? ORDER BY priority"
-                )
-                .bind(config_id)
-                .fetch_all(&self.pool)
-                .await
-                .context("Failed to fetch DHCP server NTP")?
-                .into_iter()
-                .map(|(s,)| s)
-                .collect();
-
-                // Get static leases
-                let static_leases = sqlx::query_as::<_, (String, String, Option<String>)>(
-                    "SELECT mac_address, ip_address, hostname FROM dhcp_static_leases WHERE dhcp_server_id = ? ORDER BY id"
-                )
-                .bind(config_id)
-                .fetch_all(&self.pool)
-                .await
-                .context("Failed to fetch DHCP static leases")?
-                .into_iter()
-                .map(|(mac_address, ip_address, hostname)| DhcpStaticLease {
-                    mac_address,
-                    ip_address,
-                    hostname,
-                })
-                .collect();
-
-                Ok(Some(DhcpServerConfig {
-                    enabled,
-                    pool_offset: pool_offset.map(|v| v as u32),
-                    pool_size: pool_size.map(|v| v as u32),
-                    default_lease_time_secs: default_lease_time_secs.map(|v| v as u32),
-                    max_lease_time_secs: max_lease_time_secs.map(|v| v as u32),
-                    emit_dns,
-                    dns_servers,
-                    emit_ntp,
-                    ntp_servers,
-                    emit_router,
-                    router_address,
-                    static_leases,
-                }))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn save_dhcp_server_config_tx(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        config_id: i64,
-        dhcp_server: &Option<DhcpServerConfig>,
-    ) -> Result<()> {
-        // Clear existing DHCP server config and related tables
-        sqlx::query("DELETE FROM dhcp_static_leases WHERE dhcp_server_id = ?")
-            .bind(config_id)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("DELETE FROM dhcp_server_ntp WHERE dhcp_server_id = ?")
-            .bind(config_id)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("DELETE FROM dhcp_server_dns WHERE dhcp_server_id = ?")
-            .bind(config_id)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("DELETE FROM dhcp_server_config WHERE interface_config_id = ?")
-            .bind(config_id)
-            .execute(&mut **tx)
-            .await?;
-
-        if let Some(dhcp) = dhcp_server {
-            // Insert main config
-            sqlx::query(
-                r#"INSERT INTO dhcp_server_config 
-                   (interface_config_id, enabled, pool_offset, pool_size, default_lease_time_secs, max_lease_time_secs, emit_dns, emit_ntp, emit_router, router_address)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#
-            )
-            .bind(config_id)
-            .bind(dhcp.enabled)
-            .bind(dhcp.pool_offset.map(|v| v as i64))
-            .bind(dhcp.pool_size.map(|v| v as i64))
-            .bind(dhcp.default_lease_time_secs.map(|v| v as i64))
-            .bind(dhcp.max_lease_time_secs.map(|v| v as i64))
-            .bind(dhcp.emit_dns)
-            .bind(dhcp.emit_ntp)
-            .bind(dhcp.emit_router)
-            .bind(&dhcp.router_address)
-            .execute(&mut **tx)
-            .await?;
-
-            // Insert DNS servers
-            for (priority, dns) in dhcp.dns_servers.iter().enumerate() {
-                sqlx::query("INSERT INTO dhcp_server_dns (dhcp_server_id, server, priority) VALUES (?, ?, ?)")
-                    .bind(config_id)
-                    .bind(dns)
-                    .bind(priority as i64)
-                    .execute(&mut **tx)
-                    .await?;
-            }
-
-            // Insert NTP servers
-            for (priority, ntp) in dhcp.ntp_servers.iter().enumerate() {
-                sqlx::query("INSERT INTO dhcp_server_ntp (dhcp_server_id, server, priority) VALUES (?, ?, ?)")
-                    .bind(config_id)
-                    .bind(ntp)
-                    .bind(priority as i64)
-                    .execute(&mut **tx)
-                    .await?;
-            }
-
-            // Insert static leases
-            for lease in &dhcp.static_leases {
-                sqlx::query("INSERT INTO dhcp_static_leases (dhcp_server_id, mac_address, ip_address, hostname) VALUES (?, ?, ?, ?)")
-                    .bind(config_id)
-                    .bind(&lease.mac_address)
-                    .bind(&lease.ip_address)
-                    .bind(&lease.hostname)
-                    .execute(&mut **tx)
-                    .await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    // ============================================================================
-    // IPv6 Router Advertisement Configuration
-    // ============================================================================
-
-    async fn get_ipv6_ra_config(&self, config_id: i64) -> Result<Option<Ipv6RaConfig>> {
-        let row = sqlx::query_as::<_, (bool, Option<i64>, Option<String>, bool, bool, bool)>(
-            r#"SELECT enabled, router_lifetime_secs, router_preference, managed, other_information, emit_dns
-               FROM ipv6_ra_config WHERE interface_config_id = ?"#
-        )
-        .bind(config_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        match row {
-            Some((enabled, router_lifetime_secs, router_preference, managed, other_information, emit_dns)) => {
-                // Get DNS servers for RA
-                let dns_servers = sqlx::query_as::<_, (String,)>(
-                    "SELECT server FROM ipv6_ra_dns WHERE ipv6_ra_config_id = ? ORDER BY priority"
-                )
-                .bind(config_id)
-                .fetch_all(&self.pool)
-                .await?
-                .into_iter()
-                .map(|(s,)| s)
-                .collect();
-
-                // Get search domains
-                let search_domains = sqlx::query_as::<_, (String,)>(
-                    "SELECT domain FROM ipv6_ra_search_domains WHERE ipv6_ra_config_id = ? ORDER BY priority"
-                )
-                .bind(config_id)
-                .fetch_all(&self.pool)
-                .await?
-                .into_iter()
-                .map(|(d,)| d)
-                .collect();
-
-                // Get prefixes
-                let prefix_rows = sqlx::query_as::<_, (String, Option<i64>, Option<i64>, bool, bool)>(
-                    "SELECT prefix, preferred_lifetime_secs, valid_lifetime_secs, on_link, autonomous FROM ipv6_ra_prefixes WHERE ipv6_ra_config_id = ? ORDER BY id"
-                )
-                .bind(config_id)
-                .fetch_all(&self.pool)
-                .await?;
-
-                let prefixes = prefix_rows.into_iter().map(|(prefix, preferred, valid, on_link, autonomous)| {
-                    Ipv6RaPrefix {
-                        prefix,
-                        preferred_lifetime_secs: preferred.map(|v| v as u32),
-                        valid_lifetime_secs: valid.map(|v| v as u32),
-                        on_link,
-                        autonomous,
-                    }
-                }).collect();
-
-                Ok(Some(Ipv6RaConfig {
-                    enabled,
-                    router_lifetime_secs: router_lifetime_secs.map(|v| v as u32),
-                    router_preference,
-                    managed,
-                    other_information,
-                    emit_dns,
-                    dns_servers,
-                    search_domains,
-                    prefixes,
-                }))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn save_ipv6_ra_config_tx(
-        &self,
-        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-        config_id: i64,
-        ipv6_ra: &Option<Ipv6RaConfig>,
-    ) -> Result<()> {
-        // Clear existing IPv6 RA config and related tables
-        sqlx::query("DELETE FROM ipv6_ra_prefixes WHERE ipv6_ra_config_id = ?")
-            .bind(config_id)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("DELETE FROM ipv6_ra_search_domains WHERE ipv6_ra_config_id = ?")
-            .bind(config_id)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("DELETE FROM ipv6_ra_dns WHERE ipv6_ra_config_id = ?")
-            .bind(config_id)
-            .execute(&mut **tx)
-            .await?;
-        sqlx::query("DELETE FROM ipv6_ra_config WHERE interface_config_id = ?")
-            .bind(config_id)
-            .execute(&mut **tx)
-            .await?;
-
-        if let Some(ra) = ipv6_ra {
-            // Insert main config
-            sqlx::query(
-                r#"INSERT INTO ipv6_ra_config 
-                   (interface_config_id, enabled, router_lifetime_secs, router_preference, managed, other_information, emit_dns)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)"#
-            )
-            .bind(config_id)
-            .bind(ra.enabled)
-            .bind(ra.router_lifetime_secs.map(|v| v as i64))
-            .bind(&ra.router_preference)
-            .bind(ra.managed)
-            .bind(ra.other_information)
-            .bind(ra.emit_dns)
-            .execute(&mut **tx)
-            .await?;
-
-            // Insert DNS servers
-            for (priority, dns) in ra.dns_servers.iter().enumerate() {
-                sqlx::query("INSERT INTO ipv6_ra_dns (ipv6_ra_config_id, server, priority) VALUES (?, ?, ?)")
-                    .bind(config_id)
-                    .bind(dns)
-                    .bind(priority as i64)
-                    .execute(&mut **tx)
-                    .await?;
-            }
-
-            // Insert search domains
-            for (priority, domain) in ra.search_domains.iter().enumerate() {
-                sqlx::query("INSERT INTO ipv6_ra_search_domains (ipv6_ra_config_id, domain, priority) VALUES (?, ?, ?)")
-                    .bind(config_id)
-                    .bind(domain)
-                    .bind(priority as i64)
-                    .execute(&mut **tx)
-                    .await?;
-            }
-
-            // Insert prefixes
-            for prefix in &ra.prefixes {
-                sqlx::query(
-                    r#"INSERT INTO ipv6_ra_prefixes 
-                       (ipv6_ra_config_id, prefix, preferred_lifetime_secs, valid_lifetime_secs, on_link, autonomous)
-                       VALUES (?, ?, ?, ?, ?, ?)"#
-                )
-                .bind(config_id)
-                .bind(&prefix.prefix)
-                .bind(prefix.preferred_lifetime_secs.map(|v| v as i64))
-                .bind(prefix.valid_lifetime_secs.map(|v| v as i64))
-                .bind(prefix.on_link)
-                .bind(prefix.autonomous)
-                .execute(&mut **tx)
-                .await?;
-            }
-        }
-
-        Ok(())
     }
 
     // ============================================================================

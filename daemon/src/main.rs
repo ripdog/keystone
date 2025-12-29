@@ -6,6 +6,7 @@
 mod auth;
 mod config;
 mod db;
+mod dnsmasq;
 mod firewall;
 mod networkd;
 
@@ -123,6 +124,11 @@ async fn main() -> anyhow::Result<()> {
         apply_manager: firewall_apply_manager,
     };
 
+    // Create dnsmasq state for dnsmasq routes
+    let dnsmasq_state = dnsmasq::routes::DnsmasqState {
+        db: db.clone(),
+    };
+
     // Build the router with protected routes
     let protected = Router::new()
         .route("/state", get(get_state))
@@ -149,6 +155,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/users", delete(delete_user))
         // Merge firewall routes
         .merge(firewall::routes::firewall_routes(firewall_state))
+        // Merge dnsmasq routes
+        .merge(dnsmasq::routes::dnsmasq_routes(dnsmasq_state))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

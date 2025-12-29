@@ -439,130 +439,616 @@ impl Default for Ipv6AcceptRaConfig {
     }
 }
 
-/// DHCP static lease for reserving IP addresses
+// ============================================================================
+// Dnsmasq Configuration Types
+// ============================================================================
+
+/// Global dnsmasq configuration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DhcpStaticLease {
-    /// Client MAC address (e.g., "00:11:22:33:44:55")
+pub struct DnsmasqConfig {
+    /// Whether dnsmasq is enabled
+    pub enabled: bool,
+    
+    // --- DNS Settings ---
+    /// DNS port (53 by default, 0 to disable DNS)
+    pub dns_port: u16,
+    /// DNS cache size (0 to disable caching)
+    pub cache_size: u32,
+    /// Enable DNSSEC validation (requires trust-anchors)
+    pub dnssec_enabled: bool,
+    /// Never forward plain names (no dots)
+    pub domain_needed: bool,
+    /// Never forward addresses in non-routed address spaces
+    pub bogus_priv: bool,
+    /// Local domain name (e.g., "home.lan", "local")
+    pub local_domain: Option<String>,
+    /// Expand simple hostnames with the local domain
+    pub expand_hosts: bool,
+    
+    // --- Upstream DNS ---
+    /// DNS forwarding mode
+    pub upstream_mode: DnsmasqUpstreamMode,
+    /// Custom upstream DNS servers (when mode is Custom)
+    pub upstream_servers: Vec<DnsmasqUpstreamServer>,
+    
+    // --- Interface Binding ---
+    /// Interfaces to listen on (empty = all interfaces)
+    pub listen_interfaces: Vec<String>,
+    /// Interfaces to NOT listen on
+    pub except_interfaces: Vec<String>,
+    /// Interfaces where DHCP is disabled (DNS only)
+    pub no_dhcp_interfaces: Vec<String>,
+    /// Use bind-dynamic mode (recommended for routers)
+    pub bind_dynamic: bool,
+    
+    // --- Logging ---
+    /// Log DNS queries
+    pub log_queries: bool,
+    /// Log DHCP transactions
+    pub log_dhcp: bool,
+}
+
+impl Default for DnsmasqConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            dns_port: 53,
+            cache_size: 1000,
+            dnssec_enabled: false,
+            domain_needed: true,
+            bogus_priv: true,
+            local_domain: Some("lan".to_string()),
+            expand_hosts: true,
+            upstream_mode: DnsmasqUpstreamMode::System,
+            upstream_servers: Vec::new(),
+            listen_interfaces: Vec::new(),
+            except_interfaces: Vec::new(),
+            no_dhcp_interfaces: Vec::new(),
+            bind_dynamic: true,
+            log_queries: false,
+            log_dhcp: false,
+        }
+    }
+}
+
+/// How dnsmasq resolves upstream DNS queries
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DnsmasqUpstreamMode {
+    /// Use system resolv.conf
+    #[default]
+    System,
+    /// Use custom upstream servers only (--no-resolv)
+    Custom,
+    /// Chain to local AdGuard Home (localhost:5353 or similar)
+    LocalAdGuard,
+}
+
+impl std::fmt::Display for DnsmasqUpstreamMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DnsmasqUpstreamMode::System => write!(f, "system"),
+            DnsmasqUpstreamMode::Custom => write!(f, "custom"),
+            DnsmasqUpstreamMode::LocalAdGuard => write!(f, "localadguard"),
+        }
+    }
+}
+
+impl std::str::FromStr for DnsmasqUpstreamMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "system" => Ok(DnsmasqUpstreamMode::System),
+            "custom" => Ok(DnsmasqUpstreamMode::Custom),
+            "localadguard" | "adguard" => Ok(DnsmasqUpstreamMode::LocalAdGuard),
+            _ => Err(format!("Unknown upstream mode: {}", s)),
+        }
+    }
+}
+
+/// Upstream DNS server configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DnsmasqUpstreamServer {
+    /// Server address (IP or hostname)
+    pub address: String,
+    /// Port (default 53)
+    pub port: Option<u16>,
+    /// Specific domain this server handles (None = all)
+    /// e.g., "internal.company.com" for private DNS
+    pub domain: Option<String>,
+}
+
+/// DHCP range/pool configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DnsmasqDhcpRange {
+    pub id: Option<i64>,
+    /// Human-readable name for this pool
+    pub name: String,
+    /// Interface this pool serves
+    pub interface: String,
+    /// Pool start address (e.g., "192.168.1.100")
+    pub start_address: String,
+    /// Pool end address (e.g., "192.168.1.200")
+    pub end_address: String,
+    /// Subnet mask (e.g., "255.255.255.0")
+    /// If not specified, derived from interface address
+    pub netmask: Option<String>,
+    /// Lease duration (e.g., "12h", "1d", "infinite")
+    pub lease_time: String,
+    /// Whether this range is enabled
+    pub enabled: bool,
+    
+    // --- DHCPv6 / SLAAC options ---
+    /// IPv6 mode for this range
+    pub ipv6_mode: Option<DnsmasqIpv6Mode>,
+    /// IPv6 prefix for this range (e.g., "2001:db8::/64")
+    pub ipv6_prefix: Option<String>,
+}
+
+impl Default for DnsmasqDhcpRange {
+    fn default() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            interface: String::new(),
+            start_address: String::new(),
+            end_address: String::new(),
+            netmask: None,
+            lease_time: "24h".to_string(),
+            enabled: true,
+            ipv6_mode: None,
+            ipv6_prefix: None,
+        }
+    }
+}
+
+/// IPv6 DHCP/RA mode
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DnsmasqIpv6Mode {
+    /// Router Advertisement only (SLAAC)
+    RaOnly,
+    /// RA with stateless DHCPv6 (addresses via SLAAC, other config via DHCP)
+    RaStateless,
+    /// RA + DHCPv6 + SLAAC
+    Slaac,
+    /// Full DHCPv6 (managed addresses, no SLAAC)
+    Dhcpv6,
+}
+
+impl std::fmt::Display for DnsmasqIpv6Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DnsmasqIpv6Mode::RaOnly => write!(f, "ra-only"),
+            DnsmasqIpv6Mode::RaStateless => write!(f, "ra-stateless"),
+            DnsmasqIpv6Mode::Slaac => write!(f, "slaac"),
+            DnsmasqIpv6Mode::Dhcpv6 => write!(f, "dhcpv6"),
+        }
+    }
+}
+
+impl std::str::FromStr for DnsmasqIpv6Mode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('_', "-").as_str() {
+            "ra-only" | "raonly" => Ok(DnsmasqIpv6Mode::RaOnly),
+            "ra-stateless" | "rastateless" => Ok(DnsmasqIpv6Mode::RaStateless),
+            "slaac" => Ok(DnsmasqIpv6Mode::Slaac),
+            "dhcpv6" => Ok(DnsmasqIpv6Mode::Dhcpv6),
+            _ => Err(format!("Unknown IPv6 mode: {}", s)),
+        }
+    }
+}
+
+/// Static DHCP lease/reservation
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DnsmasqStaticLease {
+    pub id: Option<i64>,
+    /// MAC address (e.g., "00:11:22:33:44:55")
+    /// Supports wildcards like "00:11:22:*:*:*"
     pub mac_address: String,
-    /// Reserved IP address (e.g., "192.168.1.100")
+    /// Reserved IP address
     pub ip_address: String,
-    /// Optional hostname for the client
+    /// Client hostname (optional)
     pub hostname: Option<String>,
-}
-
-/// DHCP server configuration for LAN interfaces
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DhcpServerConfig {
-    /// Whether DHCP server is enabled
+    /// Lease time override (optional, e.g., "infinite")
+    pub lease_time: Option<String>,
+    /// Client ID (alternative to MAC, for DHCPv6)
+    pub client_id: Option<String>,
+    /// Tags to set when this host is matched
+    pub set_tags: Vec<String>,
+    /// Whether this reservation is enabled
     pub enabled: bool,
-    /// Offset from network address for pool start (e.g., 100 for .100)
-    pub pool_offset: Option<u32>,
-    /// Number of addresses in the pool
-    pub pool_size: Option<u32>,
-    /// Default lease time in seconds
-    pub default_lease_time_secs: Option<u32>,
-    /// Maximum lease time in seconds
-    pub max_lease_time_secs: Option<u32>,
-    /// Whether to provide DNS servers to clients
-    pub emit_dns: bool,
-    /// DNS servers to provide (if empty, uses interface's DNS)
-    pub dns_servers: Vec<String>,
-    /// Whether to provide NTP servers to clients
-    pub emit_ntp: bool,
-    /// NTP servers to provide
-    pub ntp_servers: Vec<String>,
-    /// Whether to provide router/gateway to clients
-    pub emit_router: bool,
-    /// Router address to provide (if None, uses interface's address)
-    pub router_address: Option<String>,
-    /// Static DHCP leases (MAC to IP reservations)
-    pub static_leases: Vec<DhcpStaticLease>,
 }
 
-impl Default for DhcpServerConfig {
+impl Default for DnsmasqStaticLease {
     fn default() -> Self {
         Self {
-            enabled: false,
-            pool_offset: Some(100),
-            pool_size: Some(100),
-            default_lease_time_secs: Some(3600),
-            max_lease_time_secs: Some(86400),
-            emit_dns: true,
-            dns_servers: Vec::new(),
-            emit_ntp: false,
-            ntp_servers: Vec::new(),
-            emit_router: true,
-            router_address: None,
-            static_leases: Vec::new(),
+            id: None,
+            mac_address: String::new(),
+            ip_address: String::new(),
+            hostname: None,
+            lease_time: None,
+            client_id: None,
+            set_tags: Vec::new(),
+            enabled: true,
         }
     }
 }
 
-/// IPv6 prefix to advertise via Router Advertisement
+/// DHCP options sent to clients
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Ipv6RaPrefix {
-    /// IPv6 prefix in CIDR notation (e.g., "2001:db8::/64")
-    pub prefix: String,
-    /// Preferred lifetime in seconds (None = infinite)
-    pub preferred_lifetime_secs: Option<u32>,
-    /// Valid lifetime in seconds (None = infinite)
-    pub valid_lifetime_secs: Option<u32>,
-    /// On-link flag (prefix is on-link)
-    pub on_link: bool,
-    /// Autonomous flag (use for SLAAC)
-    pub autonomous: bool,
-}
-
-impl Default for Ipv6RaPrefix {
-    fn default() -> Self {
-        Self {
-            prefix: String::new(),
-            preferred_lifetime_secs: None,
-            valid_lifetime_secs: None,
-            on_link: true,
-            autonomous: true,
-        }
-    }
-}
-
-/// IPv6 Router Advertisement configuration for LAN interfaces
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Ipv6RaConfig {
-    /// Whether to send Router Advertisements
+pub struct DnsmasqDhcpOption {
+    pub id: Option<i64>,
+    /// Human-readable description
+    pub description: Option<String>,
+    /// DHCP option number (e.g., 3 for router, 6 for DNS)
+    /// Can also be option name like "router", "dns-server"
+    pub option: String,
+    /// Value(s) for the option
+    pub value: String,
+    /// Only apply to clients with these tags
+    pub match_tags: Vec<String>,
+    /// Whether this option is enabled
     pub enabled: bool,
-    /// Router lifetime in seconds
-    pub router_lifetime_secs: Option<u32>,
-    /// Router preference (low, medium, high)
-    pub router_preference: Option<String>,
-    /// Managed flag - clients should use DHCPv6 for addresses
-    pub managed: bool,
-    /// Other information flag - clients should use DHCPv6 for other config
-    pub other_information: bool,
-    /// Whether to include DNS servers in RA
-    pub emit_dns: bool,
-    /// DNS servers to advertise (RDNSS)
-    pub dns_servers: Vec<String>,
-    /// DNS search domains to advertise (DNSSL)
-    pub search_domains: Vec<String>,
-    /// Prefixes to advertise
-    pub prefixes: Vec<Ipv6RaPrefix>,
+    /// Is this an IPv6 option (option6:)
+    pub ipv6: bool,
+    /// Force send even if client didn't request it
+    pub force: bool,
 }
 
-impl Default for Ipv6RaConfig {
+impl Default for DnsmasqDhcpOption {
     fn default() -> Self {
         Self {
-            enabled: false,
-            router_lifetime_secs: Some(1800),
-            router_preference: Some("medium".to_string()),
-            managed: false,
-            other_information: false,
-            emit_dns: true,
-            dns_servers: Vec::new(),
-            search_domains: Vec::new(),
-            prefixes: Vec::new(),
+            id: None,
+            description: None,
+            option: String::new(),
+            value: String::new(),
+            match_tags: Vec::new(),
+            enabled: true,
+            ipv6: false,
+            force: false,
         }
     }
 }
+
+/// Custom DNS host record
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DnsmasqHostRecord {
+    pub id: Option<i64>,
+    /// Hostname(s) for this record
+    pub hostnames: Vec<String>,
+    /// IPv4 address (optional)
+    pub ipv4_address: Option<String>,
+    /// IPv6 address (optional)
+    pub ipv6_address: Option<String>,
+    /// TTL in seconds (optional)
+    pub ttl: Option<u32>,
+    /// Whether this record is enabled
+    pub enabled: bool,
+}
+
+impl Default for DnsmasqHostRecord {
+    fn default() -> Self {
+        Self {
+            id: None,
+            hostnames: Vec::new(),
+            ipv4_address: None,
+            ipv6_address: None,
+            ttl: None,
+            enabled: true,
+        }
+    }
+}
+
+/// Custom CNAME record
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DnsmasqCnameRecord {
+    pub id: Option<i64>,
+    /// Alias name (the CNAME)
+    pub alias: String,
+    /// Target hostname
+    pub target: String,
+    /// TTL in seconds (optional)
+    pub ttl: Option<u32>,
+    /// Whether this record is enabled
+    pub enabled: bool,
+}
+
+impl Default for DnsmasqCnameRecord {
+    fn default() -> Self {
+        Self {
+            id: None,
+            alias: String::new(),
+            target: String::new(),
+            ttl: None,
+            enabled: true,
+        }
+    }
+}
+
+/// Address override (block or redirect domain)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DnsmasqAddressOverride {
+    pub id: Option<i64>,
+    /// Domain pattern (e.g., "ads.example.com", "*.malware.com")
+    pub domain: String,
+    /// Override action
+    pub action: DnsmasqAddressAction,
+    /// Custom IP address (when action is Redirect)
+    pub redirect_address: Option<String>,
+    /// Whether this override is enabled
+    pub enabled: bool,
+}
+
+impl Default for DnsmasqAddressOverride {
+    fn default() -> Self {
+        Self {
+            id: None,
+            domain: String::new(),
+            action: DnsmasqAddressAction::Block,
+            redirect_address: None,
+            enabled: true,
+        }
+    }
+}
+
+/// Action for address override
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DnsmasqAddressAction {
+    /// Return NXDOMAIN (block the domain)
+    #[default]
+    Block,
+    /// Redirect to specific IP
+    Redirect,
+    /// Return 0.0.0.0 / :: (NULL address)
+    Null,
+}
+
+impl std::fmt::Display for DnsmasqAddressAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DnsmasqAddressAction::Block => write!(f, "block"),
+            DnsmasqAddressAction::Redirect => write!(f, "redirect"),
+            DnsmasqAddressAction::Null => write!(f, "null"),
+        }
+    }
+}
+
+impl std::str::FromStr for DnsmasqAddressAction {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "block" | "nxdomain" => Ok(DnsmasqAddressAction::Block),
+            "redirect" => Ok(DnsmasqAddressAction::Redirect),
+            "null" | "0.0.0.0" => Ok(DnsmasqAddressAction::Null),
+            _ => Err(format!("Unknown address action: {}", s)),
+        }
+    }
+}
+
+/// Current DHCP lease (read from dnsmasq lease file)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DhcpLease {
+    pub mac_address: String,
+    pub ip_address: String,
+    pub hostname: Option<String>,
+    /// Unix timestamp when lease expires
+    pub expires_at: u64,
+    pub client_id: Option<String>,
+}
+
+// ============================================================================
+// Dnsmasq API Request/Response Types
+// ============================================================================
+
+/// Complete dnsmasq state for UI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsmasqStateResponse {
+    pub config: DnsmasqConfig,
+    pub dhcp_ranges: Vec<DnsmasqDhcpRange>,
+    pub static_leases: Vec<DnsmasqStaticLease>,
+    pub dhcp_options: Vec<DnsmasqDhcpOption>,
+    pub host_records: Vec<DnsmasqHostRecord>,
+    pub cname_records: Vec<DnsmasqCnameRecord>,
+    pub address_overrides: Vec<DnsmasqAddressOverride>,
+}
+
+/// Request to save global dnsmasq config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveDnsmasqConfigRequest {
+    pub config: DnsmasqConfig,
+}
+
+/// Response from saving dnsmasq config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveDnsmasqConfigResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Request to save a DHCP range
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveDhcpRangeRequest {
+    pub range: DnsmasqDhcpRange,
+}
+
+/// Response from saving DHCP range
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveDhcpRangeResponse {
+    pub success: bool,
+    pub message: String,
+    pub range_id: Option<i64>,
+}
+
+/// Request to delete a DHCP range
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteDhcpRangeRequest {
+    pub id: i64,
+}
+
+/// Response containing DHCP ranges
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DhcpRangesResponse {
+    pub ranges: Vec<DnsmasqDhcpRange>,
+}
+
+/// Request to save a static lease
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveStaticLeaseRequest {
+    pub lease: DnsmasqStaticLease,
+}
+
+/// Response from saving static lease
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveStaticLeaseResponse {
+    pub success: bool,
+    pub message: String,
+    pub lease_id: Option<i64>,
+}
+
+/// Request to delete a static lease
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteStaticLeaseRequest {
+    pub id: i64,
+}
+
+/// Response containing static leases
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaticLeasesResponse {
+    pub leases: Vec<DnsmasqStaticLease>,
+}
+
+/// Request to save a DHCP option
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveDhcpOptionRequest {
+    pub option: DnsmasqDhcpOption,
+}
+
+/// Response from saving DHCP option
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveDhcpOptionResponse {
+    pub success: bool,
+    pub message: String,
+    pub option_id: Option<i64>,
+}
+
+/// Request to delete a DHCP option
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteDhcpOptionRequest {
+    pub id: i64,
+}
+
+/// Response containing DHCP options
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DhcpOptionsResponse {
+    pub options: Vec<DnsmasqDhcpOption>,
+}
+
+/// Request to save a host record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveHostRecordRequest {
+    pub record: DnsmasqHostRecord,
+}
+
+/// Response from saving host record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveHostRecordResponse {
+    pub success: bool,
+    pub message: String,
+    pub record_id: Option<i64>,
+}
+
+/// Request to delete a host record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteHostRecordRequest {
+    pub id: i64,
+}
+
+/// Response containing host records
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostRecordsResponse {
+    pub records: Vec<DnsmasqHostRecord>,
+}
+
+/// Request to save a CNAME record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveCnameRecordRequest {
+    pub record: DnsmasqCnameRecord,
+}
+
+/// Response from saving CNAME record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveCnameRecordResponse {
+    pub success: bool,
+    pub message: String,
+    pub record_id: Option<i64>,
+}
+
+/// Request to delete a CNAME record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteCnameRecordRequest {
+    pub id: i64,
+}
+
+/// Response containing CNAME records
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CnameRecordsResponse {
+    pub records: Vec<DnsmasqCnameRecord>,
+}
+
+/// Request to save an address override
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveAddressOverrideRequest {
+    pub override_entry: DnsmasqAddressOverride,
+}
+
+/// Response from saving address override
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveAddressOverrideResponse {
+    pub success: bool,
+    pub message: String,
+    pub override_id: Option<i64>,
+}
+
+/// Request to delete an address override
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteAddressOverrideRequest {
+    pub id: i64,
+}
+
+/// Response containing address overrides
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressOverridesResponse {
+    pub overrides: Vec<DnsmasqAddressOverride>,
+}
+
+/// Response containing current active DHCP leases
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DhcpLeasesResponse {
+    pub leases: Vec<DhcpLease>,
+}
+
+/// Preview of generated dnsmasq config file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsmasqPreviewResponse {
+    pub config_content: String,
+}
+
+/// Request to apply dnsmasq config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsmasqApplyRequest {
+    // Empty - applies current config from database
+}
+
+/// Response from applying dnsmasq config
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsmasqApplyResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 
 // ============================================================================
 // VLAN Configuration Types
@@ -821,20 +1307,12 @@ pub struct InterfaceConfig {
     /// DHCPv6 client configuration (only used when dhcp_mode includes IPv6)
     pub dhcpv6_client: Option<Dhcpv6ClientConfig>,
     
-    // DHCP server settings (for LAN interfaces)
-    /// DHCP server configuration (typically for LAN interfaces)
-    #[serde(default)]
-    pub dhcp_server: Option<DhcpServerConfig>,
-    
     // IPv6 settings
     /// Accept IPv6 Router Advertisements
     pub ipv6_accept_ra: bool,
     /// IPv6 Accept RA client configuration (controls what to accept from RAs)
     #[serde(default)]
     pub ipv6_accept_ra_config: Option<Ipv6AcceptRaConfig>,
-    /// IPv6 Router Advertisement server configuration (for LAN interfaces)
-    #[serde(default)]
-    pub ipv6_ra: Option<Ipv6RaConfig>,
     
     // Forwarding & NAT (typically for WAN interfaces)
     /// IP forwarding mode
@@ -878,10 +1356,8 @@ impl Default for InterfaceConfig {
             activation_policy: ActivationPolicy::default(),
             dhcpv4_client: None,
             dhcpv6_client: None,
-            dhcp_server: None,
             ipv6_accept_ra: true,
             ipv6_accept_ra_config: None,
-            ipv6_ra: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
             mtu: None,
@@ -1908,27 +2384,8 @@ mod tests {
                 rapid_commit: true,
                 without_ra: "no".to_string(),
             }),
-            dhcp_server: Some(DhcpServerConfig {
-                enabled: true,
-                pool_offset: Some(100),
-                pool_size: Some(50),
-                default_lease_time_secs: Some(3600),
-                max_lease_time_secs: Some(86400),
-                emit_dns: true,
-                dns_servers: vec!["192.168.1.1".to_string()],
-                emit_ntp: false,
-                ntp_servers: vec![],
-                emit_router: true,
-                router_address: None,
-                static_leases: vec![DhcpStaticLease {
-                    mac_address: "00:11:22:33:44:55".to_string(),
-                    ip_address: "192.168.1.200".to_string(),
-                    hostname: Some("server1".to_string()),
-                }],
-            }),
             ipv6_accept_ra: true,
             ipv6_accept_ra_config: None,
-            ipv6_ra: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::Ipv4,
             mtu: Some(1492),
@@ -1990,5 +2447,101 @@ mod tests {
         assert_eq!("qinq".parse::<VlanProtocol>().unwrap(), VlanProtocol::Dot1Ad);
         assert_eq!(VlanProtocol::Dot1Q.to_string(), "802.1q");
         assert_eq!(VlanProtocol::Dot1Ad.to_string(), "802.1ad");
+    }
+
+    #[test]
+    fn test_dnsmasq_config_serialization() {
+        let config = DnsmasqConfig {
+            enabled: true,
+            dns_port: 53,
+            cache_size: 1000,
+            dnssec_enabled: false,
+            domain_needed: true,
+            bogus_priv: true,
+            local_domain: Some("lan".to_string()),
+            expand_hosts: true,
+            upstream_mode: DnsmasqUpstreamMode::LocalAdGuard,
+            upstream_servers: vec![DnsmasqUpstreamServer {
+                address: "127.0.0.1".to_string(),
+                port: Some(5353),
+                domain: None,
+            }],
+            listen_interfaces: vec!["br-lan".to_string()],
+            except_interfaces: vec!["eth0".to_string()],
+            no_dhcp_interfaces: vec![],
+            bind_dynamic: true,
+            log_queries: false,
+            log_dhcp: true,
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: DnsmasqConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_dnsmasq_dhcp_range_serialization() {
+        let range = DnsmasqDhcpRange {
+            id: Some(1),
+            name: "LAN Pool".to_string(),
+            interface: "br-lan".to_string(),
+            start_address: "192.168.1.100".to_string(),
+            end_address: "192.168.1.200".to_string(),
+            netmask: Some("255.255.255.0".to_string()),
+            lease_time: "24h".to_string(),
+            enabled: true,
+            ipv6_mode: Some(DnsmasqIpv6Mode::RaStateless),
+            ipv6_prefix: Some("2001:db8::/64".to_string()),
+        };
+
+        let json = serde_json::to_string(&range).unwrap();
+        let deserialized: DnsmasqDhcpRange = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(range, deserialized);
+    }
+
+    #[test]
+    fn test_dnsmasq_static_lease_serialization() {
+        let lease = DnsmasqStaticLease {
+            id: Some(1),
+            mac_address: "00:11:22:33:44:55".to_string(),
+            ip_address: "192.168.1.10".to_string(),
+            hostname: Some("server1".to_string()),
+            lease_time: Some("infinite".to_string()),
+            client_id: None,
+            set_tags: vec!["servers".to_string()],
+            enabled: true,
+        };
+
+        let json = serde_json::to_string(&lease).unwrap();
+        let deserialized: DnsmasqStaticLease = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(lease, deserialized);
+    }
+
+    #[test]
+    fn test_dnsmasq_upstream_mode_parsing() {
+        assert_eq!("system".parse::<DnsmasqUpstreamMode>().unwrap(), DnsmasqUpstreamMode::System);
+        assert_eq!("custom".parse::<DnsmasqUpstreamMode>().unwrap(), DnsmasqUpstreamMode::Custom);
+        assert_eq!("localadguard".parse::<DnsmasqUpstreamMode>().unwrap(), DnsmasqUpstreamMode::LocalAdGuard);
+        assert_eq!(DnsmasqUpstreamMode::LocalAdGuard.to_string(), "localadguard");
+    }
+
+    #[test]
+    fn test_dnsmasq_ipv6_mode_parsing() {
+        assert_eq!("ra-only".parse::<DnsmasqIpv6Mode>().unwrap(), DnsmasqIpv6Mode::RaOnly);
+        assert_eq!("ra-stateless".parse::<DnsmasqIpv6Mode>().unwrap(), DnsmasqIpv6Mode::RaStateless);
+        assert_eq!("slaac".parse::<DnsmasqIpv6Mode>().unwrap(), DnsmasqIpv6Mode::Slaac);
+        assert_eq!("dhcpv6".parse::<DnsmasqIpv6Mode>().unwrap(), DnsmasqIpv6Mode::Dhcpv6);
+        assert_eq!(DnsmasqIpv6Mode::RaStateless.to_string(), "ra-stateless");
+    }
+
+    #[test]
+    fn test_dnsmasq_address_action_parsing() {
+        assert_eq!("block".parse::<DnsmasqAddressAction>().unwrap(), DnsmasqAddressAction::Block);
+        assert_eq!("redirect".parse::<DnsmasqAddressAction>().unwrap(), DnsmasqAddressAction::Redirect);
+        assert_eq!("null".parse::<DnsmasqAddressAction>().unwrap(), DnsmasqAddressAction::Null);
+        assert_eq!(DnsmasqAddressAction::Block.to_string(), "block");
     }
 }

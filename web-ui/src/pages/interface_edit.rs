@@ -1,9 +1,9 @@
 //! Interface edit page for configuring individual interface settings
 
 use keystone_core::{
-    ActivationPolicy, AddressScope, DhcpMode, DhcpServerConfig, DhcpStaticLease,
+    ActivationPolicy, AddressScope, DhcpMode,
     Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
-    IpMasqueradeMode, Ipv6AcceptRaConfig, Ipv6RaConfig, Ipv6RaPrefix, LinkLocalMode, RouteType,
+    IpMasqueradeMode, Ipv6AcceptRaConfig, LinkLocalMode, RouteType,
     StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
@@ -74,39 +74,9 @@ pub fn InterfaceEditPage(
     let (required_for_online, set_required_for_online) = signal(true);
     let (activation_policy, set_activation_policy) = signal(ActivationPolicy::default());
     
-    // DHCP Server settings (for LAN interfaces)
-    let (dhcp_server_enabled, set_dhcp_server_enabled) = signal(false);
-    let (dhcp_pool_offset, set_dhcp_pool_offset) = signal(String::from("100"));
-    let (dhcp_pool_size, set_dhcp_pool_size) = signal(String::from("100"));
-    let (dhcp_lease_time, set_dhcp_lease_time) = signal(String::from("3600"));
-    let (dhcp_emit_dns, set_dhcp_emit_dns) = signal(true);
-    let (dhcp_emit_router, set_dhcp_emit_router) = signal(true);
-    let (dhcp_static_leases, set_dhcp_static_leases) = signal::<Vec<DhcpStaticLease>>(vec![]);
-    let (new_lease_mac, set_new_lease_mac) = signal(String::new());
-    let (new_lease_ip, set_new_lease_ip) = signal(String::new());
-    let (new_lease_hostname, set_new_lease_hostname) = signal(String::new());
-    
-    // IPv6 RA settings (for LAN interfaces)
-    let (ipv6_ra_enabled, set_ipv6_ra_enabled) = signal(false);
-    let (ipv6_ra_managed, set_ipv6_ra_managed) = signal(false);
-    let (ipv6_ra_other_info, set_ipv6_ra_other_info) = signal(false);
-    let (ipv6_ra_router_lifetime, set_ipv6_ra_router_lifetime) = signal(String::from("1800"));
-    let (ipv6_ra_router_pref, set_ipv6_ra_router_pref) = signal(String::from("medium"));
-    let (ipv6_ra_emit_dns, set_ipv6_ra_emit_dns) = signal(true);
-    let (ipv6_ra_dns_servers, set_ipv6_ra_dns_servers) = signal::<Vec<String>>(vec![]);
-    let (new_ra_dns, set_new_ra_dns) = signal(String::new());
-    let (ipv6_ra_search_domains, set_ipv6_ra_search_domains) = signal::<Vec<String>>(vec![]);
-    let (new_ra_domain, set_new_ra_domain) = signal(String::new());
-    let (ipv6_ra_prefixes, set_ipv6_ra_prefixes) = signal::<Vec<keystone_core::Ipv6RaPrefix>>(vec![]);
-    let (new_prefix, set_new_prefix) = signal(String::new());
-    let (new_prefix_preferred, set_new_prefix_preferred) = signal(String::new());
-    let (new_prefix_valid, set_new_prefix_valid) = signal(String::new());
-    
     // UI state
     let (show_advanced, set_show_advanced) = signal(false);
     let (show_interface_state, set_show_interface_state) = signal(false);
-    let (show_dhcp_server, set_show_dhcp_server) = signal(false);
-    let (show_ipv6_ra, set_show_ipv6_ra) = signal(false);
 
     // Load interface configuration
     Effect::new(move |_| {
@@ -162,30 +132,6 @@ pub fn InterfaceEditPage(
                         set_required_for_online.set(cfg.required_for_online);
                         set_activation_policy.set(cfg.activation_policy);
                         
-                        // DHCP Server settings
-                        if let Some(dhcp_srv) = &cfg.dhcp_server {
-                            set_dhcp_server_enabled.set(dhcp_srv.enabled);
-                            set_dhcp_pool_offset.set(dhcp_srv.pool_offset.map(|v| v.to_string()).unwrap_or_default());
-                            set_dhcp_pool_size.set(dhcp_srv.pool_size.map(|v| v.to_string()).unwrap_or_default());
-                            set_dhcp_lease_time.set(dhcp_srv.default_lease_time_secs.map(|v| v.to_string()).unwrap_or_default());
-                            set_dhcp_emit_dns.set(dhcp_srv.emit_dns);
-                            set_dhcp_emit_router.set(dhcp_srv.emit_router);
-                            set_dhcp_static_leases.set(dhcp_srv.static_leases.clone());
-                        }
-                        
-                        // IPv6 RA settings
-                        if let Some(ra_cfg) = &cfg.ipv6_ra {
-                            set_ipv6_ra_enabled.set(ra_cfg.enabled);
-                            set_ipv6_ra_managed.set(ra_cfg.managed);
-                            set_ipv6_ra_other_info.set(ra_cfg.other_information);
-                            set_ipv6_ra_router_lifetime.set(ra_cfg.router_lifetime_secs.map(|v| v.to_string()).unwrap_or_default());
-                            set_ipv6_ra_router_pref.set(ra_cfg.router_preference.clone().unwrap_or_else(|| "medium".to_string()));
-                            set_ipv6_ra_emit_dns.set(ra_cfg.emit_dns);
-                            set_ipv6_ra_dns_servers.set(ra_cfg.dns_servers.clone());
-                            set_ipv6_ra_search_domains.set(ra_cfg.search_domains.clone());
-                            set_ipv6_ra_prefixes.set(ra_cfg.prefixes.clone());
-                        }
-                        
                         set_config.set(Some(cfg));
                         set_is_new.set(false);
                     }
@@ -208,10 +154,8 @@ pub fn InterfaceEditPage(
                             activation_policy: ActivationPolicy::default(),
                             dhcpv4_client: None,
                             dhcpv6_client: None,
-                            dhcp_server: None,
                             ipv6_accept_ra: true,
                             ipv6_accept_ra_config: None,
-                            ipv6_ra: None,
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
                             mtu: None,
@@ -376,42 +320,6 @@ pub fn InterfaceEditPage(
                     None
                 };
                 
-                // Build DHCP server config (for LAN interfaces)
-                let dhcp_server = if dhcp_server_enabled.get() {
-                    Some(DhcpServerConfig {
-                        enabled: true,
-                        pool_offset: dhcp_pool_offset.get().parse().ok(),
-                        pool_size: dhcp_pool_size.get().parse().ok(),
-                        default_lease_time_secs: dhcp_lease_time.get().parse().ok(),
-                        max_lease_time_secs: dhcp_lease_time.get().parse::<u32>().ok().map(|v| v * 24), // Max = 24x default
-                        emit_dns: dhcp_emit_dns.get(),
-                        dns_servers: vec![], // Uses interface DNS by default
-                        emit_ntp: false,
-                        ntp_servers: vec![],
-                        emit_router: dhcp_emit_router.get(),
-                        router_address: None, // Uses interface address by default
-                        static_leases: dhcp_static_leases.get(),
-                    })
-                } else {
-                    None
-                };
-                
-                let ipv6_ra = if ipv6_ra_enabled.get() {
-                    Some(Ipv6RaConfig {
-                        enabled: true,
-                        router_lifetime_secs: ipv6_ra_router_lifetime.get().parse().ok(),
-                        router_preference: Some(ipv6_ra_router_pref.get()),
-                        managed: ipv6_ra_managed.get(),
-                        other_information: ipv6_ra_other_info.get(),
-                        emit_dns: ipv6_ra_emit_dns.get(),
-                        dns_servers: ipv6_ra_dns_servers.get(),
-                        search_domains: ipv6_ra_search_domains.get(),
-                        prefixes: ipv6_ra_prefixes.get(),
-                    })
-                } else {
-                    None
-                };
-                
                 let updated = InterfaceConfig {
                     id: current.id,
                     name: current.name.clone(),
@@ -429,7 +337,6 @@ pub fn InterfaceEditPage(
                     activation_policy: activation_policy.get(),
                     dhcpv4_client,
                     dhcpv6_client,
-                    dhcp_server,
                     ipv6_accept_ra: ipv6_accept_ra.get(),
                     ipv6_accept_ra_config: if ipv6_accept_ra.get() {
                         Some(Ipv6AcceptRaConfig {
@@ -441,7 +348,6 @@ pub fn InterfaceEditPage(
                     } else {
                         None
                     },
-                    ipv6_ra,
                     ip_forward: ip_forward.get(),
                     ip_masquerade: ip_masquerade.get(),
                     mtu: link_mtu.get().parse().ok(),
@@ -497,13 +403,6 @@ pub fn InterfaceEditPage(
             .collect::<Vec<_>>()
     };
     let routes_indexed = move || routes.get().into_iter().enumerate().collect::<Vec<_>>();
-    let static_leases_indexed = move || {
-        dhcp_static_leases
-            .get()
-            .into_iter()
-            .enumerate()
-            .collect::<Vec<_>>()
-    };
 
     view! {
         <div class="space-y-6">
@@ -995,497 +894,6 @@ pub fn InterfaceEditPage(
                             </div>
                         </Show>
                     </div>
-
-                    // DHCP Server Settings (only shown for LAN interfaces)
-                    <Show when=move || role.get() == InterfaceRole::LAN>
-                        <div class="border border-gray-600 rounded-lg overflow-hidden">
-                            <button
-                                type="button"
-                                class="w-full flex items-center justify-between px-4 py-3 bg-gray-700/50 hover:bg-gray-700 text-left"
-                                on:click=move |_| set_show_dhcp_server.update(|v| *v = !*v)
-                            >
-                                <div class="flex items-center gap-3">
-                                    <span class="text-gray-200 font-medium">"DHCP Server"</span>
-                                    <Show when=move || dhcp_server_enabled.get()>
-                                        <span class="text-xs bg-green-600 text-white px-2 py-0.5 rounded">"Enabled"</span>
-                                    </Show>
-                                </div>
-                                <svg
-                                    class="w-5 h-5 text-gray-400 transition-transform"
-                                    class:rotate-180=move || show_dhcp_server.get()
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                                </svg>
-                            </button>
-                            <Show when=move || show_dhcp_server.get()>
-                                <div class="p-4 space-y-4 border-t border-gray-600">
-                                    // Enable DHCP Server
-                                    <div>
-                                        <label class="flex items-center gap-3 cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                checked=move || dhcp_server_enabled.get()
-                                                on:change=move |ev| set_dhcp_server_enabled.set(event_target_checked(&ev))
-                                                class="w-5 h-5 rounded"
-                                            />
-                                            <span class="text-gray-200 font-medium">"Enable DHCP Server"</span>
-                                        </label>
-                                        <p class="text-gray-500 text-sm mt-1 ml-8">"Provide IP addresses to clients on this network"</p>
-                                    </div>
-
-                                    <Show when=move || dhcp_server_enabled.get()>
-                                        // Pool Settings
-                                        <div class="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <label class="block text-gray-300 mb-2 text-sm">"Pool Offset"</label>
-                                                <input
-                                                    type="text"
-                                                    placeholder="100"
-                                                    prop:value=move || dhcp_pool_offset.get()
-                                                    on:input=move |ev| set_dhcp_pool_offset.set(event_target_value(&ev))
-                                                    class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                />
-                                                <p class="text-gray-500 text-xs mt-1">"Start offset from network (e.g., 100 = .100)"</p>
-                                            </div>
-                                            <div>
-                                                <label class="block text-gray-300 mb-2 text-sm">"Pool Size"</label>
-                                                <input
-                                                    type="text"
-                                                    placeholder="100"
-                                                    prop:value=move || dhcp_pool_size.get()
-                                                    on:input=move |ev| set_dhcp_pool_size.set(event_target_value(&ev))
-                                                    class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                />
-                                                <p class="text-gray-500 text-xs mt-1">"Number of addresses in pool"</p>
-                                            </div>
-                                        </div>
-
-                                        // Lease Time
-                                        <div>
-                                            <label class="block text-gray-300 mb-2 text-sm">"Default Lease Time (seconds)"</label>
-                                            <input
-                                                type="text"
-                                                placeholder="3600"
-                                                prop:value=move || dhcp_lease_time.get()
-                                                on:input=move |ev| set_dhcp_lease_time.set(event_target_value(&ev))
-                                                class="w-48 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                            />
-                                            <p class="text-gray-500 text-xs mt-1">"How long clients keep their address (3600 = 1 hour)"</p>
-                                        </div>
-
-                                        // Emit Options
-                                        <div class="grid grid-cols-2 gap-4">
-                                            <label class="flex items-center gap-2 cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    checked=move || dhcp_emit_dns.get()
-                                                    on:change=move |ev| set_dhcp_emit_dns.set(event_target_checked(&ev))
-                                                    class="w-4 h-4 rounded"
-                                                />
-                                                <span class="text-gray-300">"Provide DNS servers"</span>
-                                            </label>
-                                            <label class="flex items-center gap-2 cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    checked=move || dhcp_emit_router.get()
-                                                    on:change=move |ev| set_dhcp_emit_router.set(event_target_checked(&ev))
-                                                    class="w-4 h-4 rounded"
-                                                />
-                                                <span class="text-gray-300">"Provide gateway/router"</span>
-                                            </label>
-                                        </div>
-
-                                        // Static Leases section
-                                        <div class="border-t border-gray-600 pt-4">
-                                            <h4 class="text-gray-200 font-medium mb-3">"Static Leases (Reserved Addresses)"</h4>
-                                            <div class="space-y-2">
-                                                <For
-                                                    each=static_leases_indexed
-                                                    key=|(i, lease)| (*i, lease.mac_address.clone(), lease.ip_address.clone())
-                                                    children=move |(i, lease)| {
-                                                        let hostname_display = lease.hostname.clone().unwrap_or_default();
-                                                        let hostname_for_show = hostname_display.clone();
-                                                        view! {
-                                                            <div class="flex items-center gap-2 bg-gray-700/50 rounded px-3 py-2">
-                                                                <span class="flex-1 text-sm font-mono">{lease.mac_address}</span>
-                                                                <span class="text-gray-400">"→"</span>
-                                                                <span class="text-sm">{lease.ip_address}</span>
-                                                                <Show when=move || !hostname_for_show.is_empty()>
-                                                                    <span class="text-gray-400 text-sm">"("{hostname_display.clone()}")"</span>
-                                                                </Show>
-                                                                <button
-                                                                    class="text-red-400 hover:text-red-300 px-2"
-                                                                    on:click=move |_| {
-                                                                        set_dhcp_static_leases.update(|list| {
-                                                                            if i < list.len() {
-                                                                                list.remove(i);
-                                                                            }
-                                                                        });
-                                                                    }
-                                                                >
-                                                                    "✕"
-                                                                </button>
-                                                            </div>
-                                                        }
-                                                    }
-                                                />
-                                                // Add new lease form
-                                                <div class="flex gap-2 flex-wrap">
-                                                    <input
-                                                        type="text"
-                                                        placeholder="MAC (00:11:22:33:44:55)"
-                                                        prop:value=move || new_lease_mac.get()
-                                                        on:input=move |ev| set_new_lease_mac.set(event_target_value(&ev))
-                                                        class="flex-1 min-w-40 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 font-mono text-sm"
-                                                    />
-                                                    <input
-                                                        type="text"
-                                                        placeholder="IP (192.168.1.200)"
-                                                        prop:value=move || new_lease_ip.get()
-                                                        on:input=move |ev| set_new_lease_ip.set(event_target_value(&ev))
-                                                        class="w-36 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 text-sm"
-                                                    />
-                                                    <input
-                                                        type="text"
-                                                        placeholder="Hostname (optional)"
-                                                        prop:value=move || new_lease_hostname.get()
-                                                        on:input=move |ev| set_new_lease_hostname.set(event_target_value(&ev))
-                                                        class="w-32 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600 text-sm"
-                                                    />
-                                                    <button
-                                                        class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm"
-                                                        on:click=move |_| {
-                                                            let mac = new_lease_mac.get();
-                                                            let ip = new_lease_ip.get();
-                                                            if !mac.is_empty() && !ip.is_empty() {
-                                                                let hostname = new_lease_hostname.get();
-                                                                set_dhcp_static_leases.update(|list| {
-                                                                    list.push(DhcpStaticLease {
-                                                                        mac_address: mac,
-                                                                        ip_address: ip,
-                                                                        hostname: if hostname.is_empty() { None } else { Some(hostname) },
-                                                                    });
-                                                                });
-                                                                set_new_lease_mac.set(String::new());
-                                                                set_new_lease_ip.set(String::new());
-                                                                set_new_lease_hostname.set(String::new());
-                                                            }
-                                                        }
-                                                    >
-                                                        "Add"
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </Show>
-                                </div>
-                            </Show>
-                        </div>
-                    </Show>
-
-
-                    // IPv6 Router Advertisement Settings (only shown for LAN interfaces)
-                    <Show when=move || role.get() == InterfaceRole::LAN>
-                        <div class="border border-gray-600 rounded-lg overflow-hidden">
-                            <button
-                                type="button"
-                                class="w-full flex items-center justify-between px-4 py-3 bg-gray-700/50 hover:bg-gray-700 text-left"
-                                on:click=move |_| set_show_ipv6_ra.update(|v| *v = !*v)
-                            >
-                                <div class="flex items-center gap-3">
-                                    <span class="text-gray-200 font-medium">"IPv6 Router Advertisement"</span>
-                                    <Show when=move || ipv6_ra_enabled.get()>
-                                        <span class="text-xs bg-green-600 text-white px-2 py-0.5 rounded">"Enabled"</span>
-                                    </Show>
-                                </div>
-                                <svg
-                                    class="w-5 h-5 text-gray-400 transition-transform"
-                                    class:rotate-180=move || show_ipv6_ra.get()
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-                                </svg>
-                            </button>
-                            <Show when=move || show_ipv6_ra.get()>
-                                <div class="p-4 space-y-4 border-t border-gray-600">
-                                    // Enable IPv6 RA
-                                    <div>
-                                        <label class="flex items-center gap-3 cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                checked=move || ipv6_ra_enabled.get()
-                                                on:change=move |ev| set_ipv6_ra_enabled.set(event_target_checked(&ev))
-                                                class="w-5 h-5 rounded"
-                                            />
-                                            <span class="text-gray-200 font-medium">"Send Router Advertisements"</span>
-                                        </label>
-                                        <p class="text-gray-500 text-sm mt-1 ml-8">"Advertise IPv6 prefixes for SLAAC and act as IPv6 gateway"</p>
-                                    </div>
-
-                                    <Show when=move || ipv6_ra_enabled.get()>
-                                        // Router Settings
-                                        <div class="grid grid-cols-2 gap-4">
-                                            <div>
-                                                <label class="block text-gray-300 mb-2 text-sm">"Router Lifetime (seconds)"</label>
-                                                <input
-                                                    type="text"
-                                                    placeholder="1800"
-                                                    prop:value=move || ipv6_ra_router_lifetime.get()
-                                                    on:input=move |ev| set_ipv6_ra_router_lifetime.set(event_target_value(&ev))
-                                                    class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label class="block text-gray-300 mb-2 text-sm">"Router Preference"</label>
-                                                <select
-                                                    class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                    on:change=move |ev| set_ipv6_ra_router_pref.set(event_target_value(&ev))
-                                                >
-                                                    <option value="low" selected=move || ipv6_ra_router_pref.get() == "low">"Low"</option>
-                                                    <option value="medium" selected=move || ipv6_ra_router_pref.get() == "medium">"Medium"</option>
-                                                    <option value="high" selected=move || ipv6_ra_router_pref.get() == "high">"High"</option>
-                                                </select>
-                                            </div>
-                                        </div>
-
-                                        // DHCPv6 Flags
-                                        <div class="space-y-3">
-                                            <label class="block text-gray-300 text-sm font-medium">"DHCPv6 Flags"</label>
-                                            <div class="space-y-2 ml-4">
-                                                <label class="flex items-center gap-3 cursor-pointer">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked=move || ipv6_ra_managed.get()
-                                                        on:change=move |ev| set_ipv6_ra_managed.set(event_target_checked(&ev))
-                                                        class="w-4 h-4 rounded"
-                                                    />
-                                                    <div>
-                                                        <span class="text-gray-200">"Managed (M flag)"</span>
-                                                        <span class="text-gray-500 text-sm ml-2">"Use DHCPv6 for addresses"</span>
-                                                    </div>
-                                                </label>
-                                                <label class="flex items-center gap-3 cursor-pointer">
-                                                    <input
-                                                        type="checkbox"
-                                                        checked=move || ipv6_ra_other_info.get()
-                                                        on:change=move |ev| set_ipv6_ra_other_info.set(event_target_checked(&ev))
-                                                        class="w-4 h-4 rounded"
-                                                    />
-                                                    <div>
-                                                        <span class="text-gray-200">"Other Info (O flag)"</span>
-                                                        <span class="text-gray-500 text-sm ml-2">"Use DHCPv6 for DNS/other config"</span>
-                                                    </div>
-                                                </label>
-                                            </div>
-                                        </div>
-
-                                        // DNS in RA
-                                        <div>
-                                            <label class="flex items-center gap-3 cursor-pointer mb-3">
-                                                <input
-                                                    type="checkbox"
-                                                    checked=move || ipv6_ra_emit_dns.get()
-                                                    on:change=move |ev| set_ipv6_ra_emit_dns.set(event_target_checked(&ev))
-                                                    class="w-4 h-4 rounded"
-                                                />
-                                                <span class="text-gray-200">"Advertise DNS in Router Advertisements"</span>
-                                            </label>
-
-                                            <Show when=move || ipv6_ra_emit_dns.get()>
-                                                <div class="ml-7 space-y-3">
-                                                    // DNS Servers
-                                                    <div>
-                                                        <label class="block text-gray-300 mb-2 text-sm">"DNS Servers (RDNSS)"</label>
-                                                        <div class="space-y-2">
-                                                            <For
-                                                                each=move || ipv6_ra_dns_servers.get().into_iter().enumerate()
-                                                                key=|(i, dns)| (*i, dns.clone())
-                                                                children=move |(i, dns)| {
-                                                                    view! {
-                                                                        <div class="flex gap-2">
-                                                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{dns}</span>
-                                                                            <button
-                                                                                type="button"
-                                                                                class="text-red-400 hover:text-red-300 px-2"
-                                                                                on:click=move |_| {
-                                                                                    set_ipv6_ra_dns_servers.update(|servers| { servers.remove(i); });
-                                                                                }
-                                                                            >
-                                                                                "✕"
-                                                                            </button>
-                                                                        </div>
-                                                                    }
-                                                                }
-                                                            />
-                                                            <div class="flex gap-2">
-                                                                <input
-                                                                    type="text"
-                                                                    placeholder="2001:db8::1"
-                                                                    prop:value=move || new_ra_dns.get()
-                                                                    on:input=move |ev| set_new_ra_dns.set(event_target_value(&ev))
-                                                                    class="flex-1 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                                />
-                                                                <button
-                                                                    type="button"
-                                                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                                                    on:click=move |_| {
-                                                                        let dns = new_ra_dns.get().trim().to_string();
-                                                                        if !dns.is_empty() {
-                                                                            set_ipv6_ra_dns_servers.update(|servers| servers.push(dns));
-                                                                            set_new_ra_dns.set(String::new());
-                                                                        }
-                                                                    }
-                                                                >
-                                                                    "Add"
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
-                                                    // Search Domains
-                                                    <div>
-                                                        <label class="block text-gray-300 mb-2 text-sm">"Search Domains (DNSSL)"</label>
-                                                        <div class="space-y-2">
-                                                            <For
-                                                                each=move || ipv6_ra_search_domains.get().into_iter().enumerate()
-                                                                key=|(i, domain)| (*i, domain.clone())
-                                                                children=move |(i, domain)| {
-                                                                    view! {
-                                                                        <div class="flex gap-2">
-                                                                            <span class="flex-1 bg-gray-700 text-white rounded px-3 py-2">{domain}</span>
-                                                                            <button
-                                                                                type="button"
-                                                                                class="text-red-400 hover:text-red-300 px-2"
-                                                                                on:click=move |_| {
-                                                                                    set_ipv6_ra_search_domains.update(|domains| { domains.remove(i); });
-                                                                                }
-                                                                            >
-                                                                                "✕"
-                                                                            </button>
-                                                                        </div>
-                                                                    }
-                                                                }
-                                                            />
-                                                            <div class="flex gap-2">
-                                                                <input
-                                                                    type="text"
-                                                                    placeholder="example.com"
-                                                                    prop:value=move || new_ra_domain.get()
-                                                                    on:input=move |ev| set_new_ra_domain.set(event_target_value(&ev))
-                                                                    class="flex-1 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                                />
-                                                                <button
-                                                                    type="button"
-                                                                    class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                                                    on:click=move |_| {
-                                                                        let domain = new_ra_domain.get().trim().to_string();
-                                                                        if !domain.is_empty() {
-                                                                            set_ipv6_ra_search_domains.update(|domains| domains.push(domain));
-                                                                            set_new_ra_domain.set(String::new());
-                                                                        }
-                                                                    }
-                                                                >
-                                                                    "Add"
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </Show>
-                                        </div>
-
-                                        // IPv6 Prefixes
-                                        <div>
-                                            <label class="block text-gray-300 mb-2 text-sm font-medium">"IPv6 Prefixes"</label>
-                                            <div class="space-y-2">
-                                                <For
-                                                    each=move || ipv6_ra_prefixes.get().into_iter().enumerate()
-                                                    key=|(i, prefix)| (*i, prefix.prefix.clone())
-                                                    children=move |(i, prefix)| {
-                                                        view! {
-                                                            <div class="flex items-center gap-2 bg-gray-700 rounded px-3 py-2">
-                                                                <span class="flex-1 text-white font-mono text-sm">{prefix.prefix.clone()}</span>
-                                                                <span class="text-gray-400 text-xs">
-                                                                    {prefix.preferred_lifetime_secs.map(|s| format!("pref: {}s", s)).unwrap_or_default()}
-                                                                    " "
-                                                                    {prefix.valid_lifetime_secs.map(|s| format!("valid: {}s", s)).unwrap_or_default()}
-                                                                </span>
-                                                                <button
-                                                                    type="button"
-                                                                    class="text-red-400 hover:text-red-300 px-2"
-                                                                    on:click=move |_| {
-                                                                        set_ipv6_ra_prefixes.update(|prefixes| { prefixes.remove(i); });
-                                                                    }
-                                                                >
-                                                                    "✕"
-                                                                </button>
-                                                            </div>
-                                                        }
-                                                    }
-                                                />
-                                                <div class="bg-gray-700/50 rounded p-3 space-y-2">
-                                                    <input
-                                                        type="text"
-                                                        placeholder="2001:db8::/64"
-                                                        prop:value=move || new_prefix.get()
-                                                        on:input=move |ev| set_new_prefix.set(event_target_value(&ev))
-                                                        class="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                    />
-                                                    <div class="grid grid-cols-2 gap-2">
-                                                        <input
-                                                            type="text"
-                                                            placeholder="Preferred lifetime (s)"
-                                                            prop:value=move || new_prefix_preferred.get()
-                                                            on:input=move |ev| set_new_prefix_preferred.set(event_target_value(&ev))
-                                                            class="bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                        />
-                                                        <input
-                                                            type="text"
-                                                            placeholder="Valid lifetime (s)"
-                                                            prop:value=move || new_prefix_valid.get()
-                                                            on:input=move |ev| set_new_prefix_valid.set(event_target_value(&ev))
-                                                            class="bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
-                                                        />
-                                                    </div>
-                                                    <button
-                                                        type="button"
-                                                        class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
-                                                        on:click=move |_| {
-                                                            let prefix_str = new_prefix.get().trim().to_string();
-                                                            if !prefix_str.is_empty() {
-                                                                let preferred = new_prefix_preferred.get().parse().ok();
-                                                                let valid = new_prefix_valid.get().parse().ok();
-                                                                set_ipv6_ra_prefixes.update(|prefixes| {
-                                                                    prefixes.push(Ipv6RaPrefix {
-                                                                        prefix: prefix_str,
-                                                                        preferred_lifetime_secs: preferred,
-                                                                        valid_lifetime_secs: valid,
-                                                                        on_link: true,
-                                                                        autonomous: true,
-                                                                    });
-                                                                });
-                                                                set_new_prefix.set(String::new());
-                                                                set_new_prefix_preferred.set(String::new());
-                                                                set_new_prefix_valid.set(String::new());
-                                                            }
-                                                        }
-                                                    >
-                                                        "Add Prefix"
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </Show>
-                                </div>
-                            </Show>
-                        </div>
-                    </Show>
-
 
                     // Save/Cancel buttons
                     <div class="flex gap-3 pt-4 border-t border-gray-700">

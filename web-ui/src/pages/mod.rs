@@ -2,6 +2,7 @@
 
 mod bridges;
 mod dashboard;
+mod dnsmasq;
 mod firewall;
 mod interface_edit;
 mod interfaces;
@@ -11,6 +12,7 @@ mod vlans;
 
 pub use bridges::*;
 pub use dashboard::*;
+pub use dnsmasq::*;
 pub use firewall::*;
 pub use interface_edit::*;
 pub use interfaces::*;

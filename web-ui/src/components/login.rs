@@ -28,7 +28,7 @@ pub fn LoginPage(on_login: WriteSignal<Option<String>>) -> impl IntoView {
                     if response.success {
                         if let Some(token) = &response.token {
                             set_stored_token(token);
-                            on_login.set(Some(token.clone()));
+                            on_login.set(Some(token.to_string()));
                         }
                     } else {
                         set_error_msg.set(Some(response.message));

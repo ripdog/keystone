@@ -453,7 +453,6 @@ fn read_system_state() -> anyhow::Result<SystemState> {
 
     Ok(SystemState {
         interfaces,
-        firewall_rules: Vec::new(),
         ip_forwarding_enabled,
         nat_enabled,
     })

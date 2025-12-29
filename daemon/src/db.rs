@@ -1360,4 +1360,947 @@ impl Database {
 
         Ok(result.rows_affected() > 0)
     }
+
+    // ========================================================================
+    // Firewall Zone CRUD Operations
+    // ========================================================================
+
+    /// Get all firewall zones
+    pub async fn get_firewall_zones(&self) -> Result<Vec<keystone_core::FirewallZone>> {
+        use keystone_core::{FirewallPolicy, FirewallZone};
+
+        // First get all zones
+        let zone_rows = sqlx::query_as::<_, (i64, String, Option<String>, String, String)>(
+            r#"SELECT id, name, description, default_input_policy, default_forward_policy
+               FROM firewall_zones ORDER BY name"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch firewall zones")?;
+
+        let mut zones = Vec::with_capacity(zone_rows.len());
+        for (id, name, description, input_policy, forward_policy) in zone_rows {
+            // Get interfaces for this zone
+            let interface_rows = sqlx::query_as::<_, (String,)>(
+                "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
+            )
+            .bind(id)
+            .fetch_all(&self.pool)
+            .await
+            .context("Failed to fetch zone interfaces")?;
+
+            let interfaces: Vec<String> = interface_rows.into_iter().map(|(name,)| name).collect();
+
+            zones.push(FirewallZone {
+                id: Some(id),
+                name,
+                description,
+                interfaces,
+                default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
+                default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
+            });
+        }
+
+        Ok(zones)
+    }
+
+    /// Get a single firewall zone by ID
+    pub async fn get_firewall_zone(&self, id: i64) -> Result<Option<keystone_core::FirewallZone>> {
+        use keystone_core::{FirewallPolicy, FirewallZone};
+
+        let row = sqlx::query_as::<_, (i64, String, Option<String>, String, String)>(
+            r#"SELECT id, name, description, default_input_policy, default_forward_policy
+               FROM firewall_zones WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch firewall zone")?;
+
+        match row {
+            Some((id, name, description, input_policy, forward_policy)) => {
+                let interface_rows = sqlx::query_as::<_, (String,)>(
+                    "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
+                )
+                .bind(id)
+                .fetch_all(&self.pool)
+                .await
+                .context("Failed to fetch zone interfaces")?;
+
+                let interfaces: Vec<String> =
+                    interface_rows.into_iter().map(|(name,)| name).collect();
+
+                Ok(Some(FirewallZone {
+                    id: Some(id),
+                    name,
+                    description,
+                    interfaces,
+                    default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
+                    default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Get a firewall zone by name
+    pub async fn get_firewall_zone_by_name(
+        &self,
+        name: &str,
+    ) -> Result<Option<keystone_core::FirewallZone>> {
+        use keystone_core::{FirewallPolicy, FirewallZone};
+
+        let row = sqlx::query_as::<_, (i64, String, Option<String>, String, String)>(
+            r#"SELECT id, name, description, default_input_policy, default_forward_policy
+               FROM firewall_zones WHERE name = ?"#,
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch firewall zone by name")?;
+
+        match row {
+            Some((id, name, description, input_policy, forward_policy)) => {
+                let interface_rows = sqlx::query_as::<_, (String,)>(
+                    "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
+                )
+                .bind(id)
+                .fetch_all(&self.pool)
+                .await
+                .context("Failed to fetch zone interfaces")?;
+
+                let interfaces: Vec<String> =
+                    interface_rows.into_iter().map(|(name,)| name).collect();
+
+                Ok(Some(FirewallZone {
+                    id: Some(id),
+                    name,
+                    description,
+                    interfaces,
+                    default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
+                    default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Save (insert or update) a firewall zone
+    pub async fn save_firewall_zone(&self, zone: &keystone_core::FirewallZone) -> Result<i64> {
+        if zone.name.is_empty() {
+            anyhow::bail!("Zone name is required");
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        let id = if let Some(id) = zone.id {
+            // Update existing zone
+            sqlx::query(
+                r#"UPDATE firewall_zones SET 
+                   name = ?, description = ?, default_input_policy = ?, 
+                   default_forward_policy = ?, updated_at = strftime('%s', 'now')
+                   WHERE id = ?"#,
+            )
+            .bind(&zone.name)
+            .bind(&zone.description)
+            .bind(zone.default_input_policy.to_string())
+            .bind(zone.default_forward_policy.to_string())
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to update firewall zone")?;
+
+            // Clear existing interfaces
+            sqlx::query("DELETE FROM firewall_zone_interfaces WHERE zone_id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .context("Failed to clear zone interfaces")?;
+
+            id
+        } else {
+            // Insert new zone
+            let result = sqlx::query(
+                r#"INSERT INTO firewall_zones 
+                   (name, description, default_input_policy, default_forward_policy, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+            )
+            .bind(&zone.name)
+            .bind(&zone.description)
+            .bind(zone.default_input_policy.to_string())
+            .bind(zone.default_forward_policy.to_string())
+            .execute(&mut *tx)
+            .await
+            .context("Failed to insert firewall zone")?;
+
+            result.last_insert_rowid()
+        };
+
+        // Insert interfaces
+        for iface_name in &zone.interfaces {
+            sqlx::query(
+                "INSERT INTO firewall_zone_interfaces (zone_id, interface_name) VALUES (?, ?)",
+            )
+            .bind(id)
+            .bind(iface_name)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to insert zone interface")?;
+        }
+
+        tx.commit().await?;
+        info!("Saved firewall zone '{}' with id {}", zone.name, id);
+        Ok(id)
+    }
+
+    /// Delete a firewall zone by ID
+    /// Returns error if zone is in use by forwarding policies or rules
+    pub async fn delete_firewall_zone(&self, id: i64) -> Result<bool> {
+        // Check if zone is used in zone forwards
+        let forward_count = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM firewall_zone_forwards WHERE source_zone_id = ? OR dest_zone_id = ?",
+        )
+        .bind(id)
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?
+        .0;
+
+        if forward_count > 0 {
+            anyhow::bail!(
+                "Cannot delete zone: it is used in {} zone forwarding policies",
+                forward_count
+            );
+        }
+
+        let result = sqlx::query("DELETE FROM firewall_zones WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete firewall zone")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ========================================================================
+    // Zone Forward Policy CRUD Operations
+    // ========================================================================
+
+    /// Get all zone forward policies
+    pub async fn get_zone_forwards(&self) -> Result<Vec<keystone_core::ZoneForwardPolicy>> {
+        use keystone_core::{FirewallAction, ZoneForwardPolicy};
+
+        let rows = sqlx::query_as::<_, (i64, i64, i64, String, bool)>(
+            r#"SELECT zf.id, zf.source_zone_id, zf.dest_zone_id, zf.policy, zf.enabled
+               FROM firewall_zone_forwards zf
+               ORDER BY zf.id"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch zone forwards")?;
+
+        // Get zone name lookup
+        let zones = self.get_firewall_zones().await?;
+        let zone_names: std::collections::HashMap<i64, String> = zones
+            .into_iter()
+            .filter_map(|z| z.id.map(|id| (id, z.name)))
+            .collect();
+
+        let forwards = rows
+            .into_iter()
+            .filter_map(|(id, source_id, dest_id, policy, enabled)| {
+                Some(ZoneForwardPolicy {
+                    id: Some(id),
+                    source_zone: zone_names.get(&source_id)?.clone(),
+                    dest_zone: zone_names.get(&dest_id)?.clone(),
+                    policy: policy.parse().unwrap_or(FirewallAction::Drop),
+                    enabled,
+                })
+            })
+            .collect();
+
+        Ok(forwards)
+    }
+
+    /// Save (insert or update) a zone forward policy
+    pub async fn save_zone_forward(
+        &self,
+        forward: &keystone_core::ZoneForwardPolicy,
+    ) -> Result<i64> {
+        // Look up zone IDs by name
+        let source_zone = self
+            .get_firewall_zone_by_name(&forward.source_zone)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Source zone '{}' not found", forward.source_zone))?;
+        let dest_zone = self
+            .get_firewall_zone_by_name(&forward.dest_zone)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Destination zone '{}' not found", forward.dest_zone))?;
+
+        let source_id = source_zone.id.unwrap();
+        let dest_id = dest_zone.id.unwrap();
+
+        let id = if let Some(id) = forward.id {
+            // Update existing
+            sqlx::query(
+                r#"UPDATE firewall_zone_forwards SET 
+                   source_zone_id = ?, dest_zone_id = ?, policy = ?, enabled = ?,
+                   updated_at = strftime('%s', 'now')
+                   WHERE id = ?"#,
+            )
+            .bind(source_id)
+            .bind(dest_id)
+            .bind(forward.policy.to_string())
+            .bind(forward.enabled)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to update zone forward")?;
+            id
+        } else {
+            // Insert new - use INSERT OR REPLACE to handle unique constraint
+            let result = sqlx::query(
+                r#"INSERT INTO firewall_zone_forwards 
+                   (source_zone_id, dest_zone_id, policy, enabled, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+                   ON CONFLICT(source_zone_id, dest_zone_id) DO UPDATE SET
+                   policy = excluded.policy, enabled = excluded.enabled,
+                   updated_at = strftime('%s', 'now')"#,
+            )
+            .bind(source_id)
+            .bind(dest_id)
+            .bind(forward.policy.to_string())
+            .bind(forward.enabled)
+            .execute(&self.pool)
+            .await
+            .context("Failed to insert zone forward")?;
+            result.last_insert_rowid()
+        };
+
+        info!(
+            "Saved zone forward {} -> {} ({})",
+            forward.source_zone, forward.dest_zone, forward.policy
+        );
+        Ok(id)
+    }
+
+    /// Delete a zone forward policy by ID
+    pub async fn delete_zone_forward(&self, id: i64) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM firewall_zone_forwards WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete zone forward")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ========================================================================
+    // Port Forward CRUD Operations
+    // ========================================================================
+
+    /// Get all port forwards
+    pub async fn get_port_forwards(&self) -> Result<Vec<keystone_core::PortForward>> {
+        use keystone_core::{PortForward, RuleProtocol};
+
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                Option<String>,
+                bool,
+                String,
+                Option<i64>,
+                i64,
+                Option<i64>,
+                Option<String>,
+                String,
+                Option<i64>,
+            ),
+        >(
+            r#"SELECT pf.id, pf.name, pf.description, pf.enabled, pf.protocol,
+                      pf.source_zone_id, pf.external_port_start, pf.external_port_end,
+                      pf.source_ip, pf.dest_ip, pf.dest_port
+               FROM firewall_port_forwards pf
+               ORDER BY pf.name"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch port forwards")?;
+
+        // Get zone name lookup
+        let zones = self.get_firewall_zones().await?;
+        let zone_names: std::collections::HashMap<i64, String> = zones
+            .into_iter()
+            .filter_map(|z| z.id.map(|id| (id, z.name)))
+            .collect();
+
+        let forwards = rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    name,
+                    description,
+                    enabled,
+                    protocol,
+                    source_zone_id,
+                    ext_port_start,
+                    ext_port_end,
+                    source_ip,
+                    dest_ip,
+                    dest_port,
+                )| {
+                    PortForward {
+                        id: Some(id),
+                        name,
+                        description,
+                        enabled,
+                        protocol: protocol.parse().unwrap_or(RuleProtocol::Tcp),
+                        source_zone: source_zone_id.and_then(|id| zone_names.get(&id).cloned()),
+                        external_port_start: ext_port_start as u16,
+                        external_port_end: ext_port_end.map(|p| p as u16),
+                        source_ip,
+                        dest_ip,
+                        dest_port: dest_port.map(|p| p as u16),
+                    }
+                },
+            )
+            .collect();
+
+        Ok(forwards)
+    }
+
+    /// Save (insert or update) a port forward
+    pub async fn save_port_forward(&self, pf: &keystone_core::PortForward) -> Result<i64> {
+        if pf.name.is_empty() {
+            anyhow::bail!("Port forward name is required");
+        }
+        if pf.dest_ip.is_empty() {
+            anyhow::bail!("Destination IP is required");
+        }
+        if pf.external_port_start == 0 {
+            anyhow::bail!("External port is required");
+        }
+
+        // Look up source zone ID if specified
+        let source_zone_id = if let Some(ref zone_name) = pf.source_zone {
+            let zone = self
+                .get_firewall_zone_by_name(zone_name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Zone '{}' not found", zone_name))?;
+            zone.id
+        } else {
+            None
+        };
+
+        let id = if let Some(id) = pf.id {
+            // Update existing
+            sqlx::query(
+                r#"UPDATE firewall_port_forwards SET 
+                   name = ?, description = ?, enabled = ?, protocol = ?,
+                   source_zone_id = ?, external_port_start = ?, external_port_end = ?,
+                   source_ip = ?, dest_ip = ?, dest_port = ?,
+                   updated_at = strftime('%s', 'now')
+                   WHERE id = ?"#,
+            )
+            .bind(&pf.name)
+            .bind(&pf.description)
+            .bind(pf.enabled)
+            .bind(pf.protocol.to_string())
+            .bind(source_zone_id)
+            .bind(pf.external_port_start as i64)
+            .bind(pf.external_port_end.map(|p| p as i64))
+            .bind(&pf.source_ip)
+            .bind(&pf.dest_ip)
+            .bind(pf.dest_port.map(|p| p as i64))
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to update port forward")?;
+            id
+        } else {
+            // Insert new
+            let result = sqlx::query(
+                r#"INSERT INTO firewall_port_forwards 
+                   (name, description, enabled, protocol, source_zone_id, 
+                    external_port_start, external_port_end, source_ip, dest_ip, dest_port,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+            )
+            .bind(&pf.name)
+            .bind(&pf.description)
+            .bind(pf.enabled)
+            .bind(pf.protocol.to_string())
+            .bind(source_zone_id)
+            .bind(pf.external_port_start as i64)
+            .bind(pf.external_port_end.map(|p| p as i64))
+            .bind(&pf.source_ip)
+            .bind(&pf.dest_ip)
+            .bind(pf.dest_port.map(|p| p as i64))
+            .execute(&self.pool)
+            .await
+            .context("Failed to insert port forward")?;
+            result.last_insert_rowid()
+        };
+
+        info!("Saved port forward '{}' with id {}", pf.name, id);
+        Ok(id)
+    }
+
+    /// Delete a port forward by ID
+    pub async fn delete_port_forward(&self, id: i64) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM firewall_port_forwards WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete port forward")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ========================================================================
+    // Input Rule CRUD Operations
+    // ========================================================================
+
+    /// Get all input rules
+    pub async fn get_input_rules(&self) -> Result<Vec<keystone_core::InputRule>> {
+        use keystone_core::{FirewallAction, InputRule, RuleProtocol};
+
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                Option<String>,
+                bool,
+                i64,
+                Option<i64>,
+                Option<String>,
+                Option<i64>,
+                Option<i64>,
+                Option<String>,
+                String,
+                bool,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
+            r#"SELECT id, name, description, enabled, position, zone_id, protocol,
+                      port_start, port_end, source_ip, action, log_enabled, log_prefix, rate_limit
+               FROM firewall_input_rules
+               ORDER BY position, id"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch input rules")?;
+
+        // Get zone name lookup
+        let zones = self.get_firewall_zones().await?;
+        let zone_names: std::collections::HashMap<i64, String> = zones
+            .into_iter()
+            .filter_map(|z| z.id.map(|id| (id, z.name)))
+            .collect();
+
+        let rules = rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    name,
+                    description,
+                    enabled,
+                    position,
+                    zone_id,
+                    protocol,
+                    port_start,
+                    port_end,
+                    source_ip,
+                    action,
+                    log_enabled,
+                    log_prefix,
+                    rate_limit,
+                )| {
+                    InputRule {
+                        id: Some(id),
+                        name,
+                        description,
+                        enabled,
+                        position: position as i32,
+                        zone: zone_id.and_then(|id| zone_names.get(&id).cloned()),
+                        protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
+                        port_start: port_start.map(|p| p as u16),
+                        port_end: port_end.map(|p| p as u16),
+                        source_ip,
+                        action: action.parse().unwrap_or(FirewallAction::Accept),
+                        log_enabled,
+                        log_prefix,
+                        rate_limit,
+                    }
+                },
+            )
+            .collect();
+
+        Ok(rules)
+    }
+
+    /// Save (insert or update) an input rule
+    pub async fn save_input_rule(&self, rule: &keystone_core::InputRule) -> Result<i64> {
+        if rule.name.is_empty() {
+            anyhow::bail!("Input rule name is required");
+        }
+
+        // Look up zone ID if specified
+        let zone_id = if let Some(ref zone_name) = rule.zone {
+            let zone = self
+                .get_firewall_zone_by_name(zone_name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Zone '{}' not found", zone_name))?;
+            zone.id
+        } else {
+            None
+        };
+
+        let id = if let Some(id) = rule.id {
+            // Update existing
+            sqlx::query(
+                r#"UPDATE firewall_input_rules SET 
+                   name = ?, description = ?, enabled = ?, position = ?, zone_id = ?,
+                   protocol = ?, port_start = ?, port_end = ?, source_ip = ?,
+                   action = ?, log_enabled = ?, log_prefix = ?, rate_limit = ?,
+                   updated_at = strftime('%s', 'now')
+                   WHERE id = ?"#,
+            )
+            .bind(&rule.name)
+            .bind(&rule.description)
+            .bind(rule.enabled)
+            .bind(rule.position as i64)
+            .bind(zone_id)
+            .bind(rule.protocol.map(|p| p.to_string()))
+            .bind(rule.port_start.map(|p| p as i64))
+            .bind(rule.port_end.map(|p| p as i64))
+            .bind(&rule.source_ip)
+            .bind(rule.action.to_string())
+            .bind(rule.log_enabled)
+            .bind(&rule.log_prefix)
+            .bind(&rule.rate_limit)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to update input rule")?;
+            id
+        } else {
+            // Insert new
+            let result = sqlx::query(
+                r#"INSERT INTO firewall_input_rules 
+                   (name, description, enabled, position, zone_id, protocol,
+                    port_start, port_end, source_ip, action, log_enabled, log_prefix, rate_limit,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+            )
+            .bind(&rule.name)
+            .bind(&rule.description)
+            .bind(rule.enabled)
+            .bind(rule.position as i64)
+            .bind(zone_id)
+            .bind(rule.protocol.map(|p| p.to_string()))
+            .bind(rule.port_start.map(|p| p as i64))
+            .bind(rule.port_end.map(|p| p as i64))
+            .bind(&rule.source_ip)
+            .bind(rule.action.to_string())
+            .bind(rule.log_enabled)
+            .bind(&rule.log_prefix)
+            .bind(&rule.rate_limit)
+            .execute(&self.pool)
+            .await
+            .context("Failed to insert input rule")?;
+            result.last_insert_rowid()
+        };
+
+        info!("Saved input rule '{}' with id {}", rule.name, id);
+        Ok(id)
+    }
+
+    /// Delete an input rule by ID
+    pub async fn delete_input_rule(&self, id: i64) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM firewall_input_rules WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete input rule")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ========================================================================
+    // Forward Rule CRUD Operations
+    // ========================================================================
+
+    /// Get all forward rules
+    pub async fn get_forward_rules(&self) -> Result<Vec<keystone_core::ForwardRule>> {
+        use keystone_core::{FirewallAction, ForwardRule, RuleProtocol};
+
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                Option<String>,
+                bool,
+                i64,
+                Option<i64>,
+                Option<i64>,
+                Option<String>,
+                Option<i64>,
+                Option<i64>,
+                Option<String>,
+                Option<String>,
+                String,
+                bool,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
+            r#"SELECT id, name, description, enabled, position, source_zone_id, dest_zone_id,
+                      protocol, dest_port_start, dest_port_end, source_ip, dest_ip,
+                      action, log_enabled, log_prefix, rate_limit
+               FROM firewall_forward_rules
+               ORDER BY position, id"#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to fetch forward rules")?;
+
+        // Get zone name lookup
+        let zones = self.get_firewall_zones().await?;
+        let zone_names: std::collections::HashMap<i64, String> = zones
+            .into_iter()
+            .filter_map(|z| z.id.map(|id| (id, z.name)))
+            .collect();
+
+        let rules = rows
+            .into_iter()
+            .map(
+                |(
+                    id,
+                    name,
+                    description,
+                    enabled,
+                    position,
+                    source_zone_id,
+                    dest_zone_id,
+                    protocol,
+                    dest_port_start,
+                    dest_port_end,
+                    source_ip,
+                    dest_ip,
+                    action,
+                    log_enabled,
+                    log_prefix,
+                    rate_limit,
+                )| {
+                    ForwardRule {
+                        id: Some(id),
+                        name,
+                        description,
+                        enabled,
+                        position: position as i32,
+                        source_zone: source_zone_id.and_then(|id| zone_names.get(&id).cloned()),
+                        dest_zone: dest_zone_id.and_then(|id| zone_names.get(&id).cloned()),
+                        protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
+                        dest_port_start: dest_port_start.map(|p| p as u16),
+                        dest_port_end: dest_port_end.map(|p| p as u16),
+                        source_ip,
+                        dest_ip,
+                        action: action.parse().unwrap_or(FirewallAction::Accept),
+                        log_enabled,
+                        log_prefix,
+                        rate_limit,
+                    }
+                },
+            )
+            .collect();
+
+        Ok(rules)
+    }
+
+    /// Save (insert or update) a forward rule
+    pub async fn save_forward_rule(&self, rule: &keystone_core::ForwardRule) -> Result<i64> {
+        if rule.name.is_empty() {
+            anyhow::bail!("Forward rule name is required");
+        }
+
+        // Look up zone IDs if specified
+        let source_zone_id = if let Some(ref zone_name) = rule.source_zone {
+            let zone = self
+                .get_firewall_zone_by_name(zone_name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Source zone '{}' not found", zone_name))?;
+            zone.id
+        } else {
+            None
+        };
+
+        let dest_zone_id = if let Some(ref zone_name) = rule.dest_zone {
+            let zone = self
+                .get_firewall_zone_by_name(zone_name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Destination zone '{}' not found", zone_name))?;
+            zone.id
+        } else {
+            None
+        };
+
+        let id = if let Some(id) = rule.id {
+            // Update existing
+            sqlx::query(
+                r#"UPDATE firewall_forward_rules SET 
+                   name = ?, description = ?, enabled = ?, position = ?,
+                   source_zone_id = ?, dest_zone_id = ?, protocol = ?,
+                   dest_port_start = ?, dest_port_end = ?, source_ip = ?, dest_ip = ?,
+                   action = ?, log_enabled = ?, log_prefix = ?, rate_limit = ?,
+                   updated_at = strftime('%s', 'now')
+                   WHERE id = ?"#,
+            )
+            .bind(&rule.name)
+            .bind(&rule.description)
+            .bind(rule.enabled)
+            .bind(rule.position as i64)
+            .bind(source_zone_id)
+            .bind(dest_zone_id)
+            .bind(rule.protocol.map(|p| p.to_string()))
+            .bind(rule.dest_port_start.map(|p| p as i64))
+            .bind(rule.dest_port_end.map(|p| p as i64))
+            .bind(&rule.source_ip)
+            .bind(&rule.dest_ip)
+            .bind(rule.action.to_string())
+            .bind(rule.log_enabled)
+            .bind(&rule.log_prefix)
+            .bind(&rule.rate_limit)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to update forward rule")?;
+            id
+        } else {
+            // Insert new
+            let result = sqlx::query(
+                r#"INSERT INTO firewall_forward_rules 
+                   (name, description, enabled, position, source_zone_id, dest_zone_id,
+                    protocol, dest_port_start, dest_port_end, source_ip, dest_ip,
+                    action, log_enabled, log_prefix, rate_limit, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+            )
+            .bind(&rule.name)
+            .bind(&rule.description)
+            .bind(rule.enabled)
+            .bind(rule.position as i64)
+            .bind(source_zone_id)
+            .bind(dest_zone_id)
+            .bind(rule.protocol.map(|p| p.to_string()))
+            .bind(rule.dest_port_start.map(|p| p as i64))
+            .bind(rule.dest_port_end.map(|p| p as i64))
+            .bind(&rule.source_ip)
+            .bind(&rule.dest_ip)
+            .bind(rule.action.to_string())
+            .bind(rule.log_enabled)
+            .bind(&rule.log_prefix)
+            .bind(&rule.rate_limit)
+            .execute(&self.pool)
+            .await
+            .context("Failed to insert forward rule")?;
+            result.last_insert_rowid()
+        };
+
+        info!("Saved forward rule '{}' with id {}", rule.name, id);
+        Ok(id)
+    }
+
+    /// Delete a forward rule by ID
+    pub async fn delete_forward_rule(&self, id: i64) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM firewall_forward_rules WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .context("Failed to delete forward rule")?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ========================================================================
+    // Firewall Config Aggregate Operations
+    // ========================================================================
+
+    /// Get complete firewall configuration
+    pub async fn get_firewall_config(&self) -> Result<keystone_core::FirewallConfig> {
+        Ok(keystone_core::FirewallConfig {
+            zones: self.get_firewall_zones().await?,
+            zone_forwards: self.get_zone_forwards().await?,
+            port_forwards: self.get_port_forwards().await?,
+            input_rules: self.get_input_rules().await?,
+            forward_rules: self.get_forward_rules().await?,
+        })
+    }
+
+    // ========================================================================
+    // Rollback State Operations
+    // ========================================================================
+
+    /// Save rollback state for safe apply
+    pub async fn save_rollback_state(
+        &self,
+        config: &keystone_core::FirewallConfig,
+        rollback_at: i64,
+    ) -> Result<()> {
+        let config_json =
+            serde_json::to_string(config).context("Failed to serialize firewall config")?;
+
+        sqlx::query(
+            r#"INSERT OR REPLACE INTO firewall_rollback_state 
+               (id, previous_config, rollback_at, created_at)
+               VALUES (1, ?, ?, strftime('%s', 'now'))"#,
+        )
+        .bind(&config_json)
+        .bind(rollback_at)
+        .execute(&self.pool)
+        .await
+        .context("Failed to save rollback state")?;
+
+        info!("Saved rollback state, will rollback at {}", rollback_at);
+        Ok(())
+    }
+
+    /// Get pending rollback state
+    pub async fn get_rollback_state(
+        &self,
+    ) -> Result<Option<(keystone_core::FirewallConfig, i64)>> {
+        let row = sqlx::query_as::<_, (String, i64)>(
+            "SELECT previous_config, rollback_at FROM firewall_rollback_state WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch rollback state")?;
+
+        match row {
+            Some((config_json, rollback_at)) => {
+                let config: keystone_core::FirewallConfig = serde_json::from_str(&config_json)
+                    .context("Failed to deserialize rollback config")?;
+                Ok(Some((config, rollback_at)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Clear rollback state (called on confirm)
+    pub async fn clear_rollback_state(&self) -> Result<()> {
+        sqlx::query("DELETE FROM firewall_rollback_state WHERE id = 1")
+            .execute(&self.pool)
+            .await
+            .context("Failed to clear rollback state")?;
+
+        info!("Cleared rollback state");
+        Ok(())
+    }
 }
+

@@ -385,17 +385,8 @@ mod pretty {
             println!("  {} [{}] {} ({}, {})", iface.name, iface.role, addr, dhcp, status);
         }
 
-        println!("\nFirewall Rules ({}):", state.firewall_rules.len());
-        for rule in &state.firewall_rules {
-            let status = if rule.enabled { "" } else { " [disabled]" };
-            println!(
-                "  {} {:?} port {} {:?}{}",
-                rule.id, rule.protocol, rule.port, rule.action, status
-            );
-            if !rule.description.is_empty() {
-                println!("      {}", rule.description);
-            }
-        }
+        // TODO: Add firewall zone display once FirewallConfig is integrated
+        println!("\nFirewall: Zone-based firewall (run 'keystonectl firewall' for details)");
     }
 
     pub fn dashboard(dashboard: &DashboardResponse) {

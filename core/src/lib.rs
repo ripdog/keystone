@@ -1030,48 +1030,539 @@ pub struct ManagedInterfacesResponse {
     pub interfaces: Vec<ManagedInterface>,
 }
 
-/// Firewall protocol
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum Protocol {
-    TCP,
-    UDP,
-    ICMP,
+// ============================================================================
+// Firewall Configuration Types (nftables)
+// ============================================================================
+
+/// Default policy for a firewall zone
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FirewallPolicy {
+    /// Accept packets by default
+    Accept,
+    /// Drop packets by default
+    #[default]
+    Drop,
 }
 
-/// Firewall action
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+impl std::fmt::Display for FirewallPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FirewallPolicy::Accept => write!(f, "accept"),
+            FirewallPolicy::Drop => write!(f, "drop"),
+        }
+    }
+}
+
+impl std::str::FromStr for FirewallPolicy {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "accept" => Ok(FirewallPolicy::Accept),
+            "drop" => Ok(FirewallPolicy::Drop),
+            _ => Err(format!("Unknown firewall policy: {}", s)),
+        }
+    }
+}
+
+/// Action to take on a matched packet
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
 pub enum FirewallAction {
+    /// Accept the packet
+    #[default]
     Accept,
+    /// Silently drop the packet
     Drop,
+    /// Reject with ICMP error
     Reject,
 }
 
-/// Represents an nftables firewall rule
+impl std::fmt::Display for FirewallAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FirewallAction::Accept => write!(f, "accept"),
+            FirewallAction::Drop => write!(f, "drop"),
+            FirewallAction::Reject => write!(f, "reject"),
+        }
+    }
+}
+
+impl std::str::FromStr for FirewallAction {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "accept" => Ok(FirewallAction::Accept),
+            "drop" => Ok(FirewallAction::Drop),
+            "reject" => Ok(FirewallAction::Reject),
+            _ => Err(format!("Unknown firewall action: {}", s)),
+        }
+    }
+}
+
+/// Protocol for firewall rules
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RuleProtocol {
+    /// Any protocol
+    #[default]
+    Any,
+    /// TCP only
+    Tcp,
+    /// UDP only
+    Udp,
+    /// Both TCP and UDP
+    #[serde(rename = "tcp+udp")]
+    TcpUdp,
+    /// ICMP (IPv4)
+    Icmp,
+    /// ICMPv6 (IPv6)
+    Icmpv6,
+}
+
+impl std::fmt::Display for RuleProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RuleProtocol::Any => write!(f, "any"),
+            RuleProtocol::Tcp => write!(f, "tcp"),
+            RuleProtocol::Udp => write!(f, "udp"),
+            RuleProtocol::TcpUdp => write!(f, "tcp+udp"),
+            RuleProtocol::Icmp => write!(f, "icmp"),
+            RuleProtocol::Icmpv6 => write!(f, "icmpv6"),
+        }
+    }
+}
+
+impl std::str::FromStr for RuleProtocol {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "any" | "" => Ok(RuleProtocol::Any),
+            "tcp" => Ok(RuleProtocol::Tcp),
+            "udp" => Ok(RuleProtocol::Udp),
+            "tcp+udp" | "tcpudp" | "both" => Ok(RuleProtocol::TcpUdp),
+            "icmp" => Ok(RuleProtocol::Icmp),
+            "icmpv6" => Ok(RuleProtocol::Icmpv6),
+            _ => Err(format!("Unknown protocol: {}", s)),
+        }
+    }
+}
+
+/// A firewall zone groups interfaces with common policies
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct FirewallRule {
-    /// Rule identifier
-    pub id: String,
+pub struct FirewallZone {
+    pub id: Option<i64>,
+    pub name: String,
+    pub description: Option<String>,
+    /// Interfaces belonging to this zone
+    pub interfaces: Vec<String>,
+    /// Default policy for incoming traffic to the router
+    pub default_input_policy: FirewallPolicy,
+    /// Default policy for forwarded traffic from this zone
+    pub default_forward_policy: FirewallPolicy,
+}
 
-    /// Port number or range
-    pub port: u16,
+impl Default for FirewallZone {
+    fn default() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            description: None,
+            interfaces: Vec::new(),
+            default_input_policy: FirewallPolicy::Drop,
+            default_forward_policy: FirewallPolicy::Drop,
+        }
+    }
+}
 
-    /// Protocol (TCP/UDP/ICMP)
-    pub protocol: Protocol,
+/// Policy for traffic forwarding between two zones
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ZoneForwardPolicy {
+    pub id: Option<i64>,
+    pub source_zone: String,
+    pub dest_zone: String,
+    pub policy: FirewallAction,
+    pub enabled: bool,
+}
 
+impl Default for ZoneForwardPolicy {
+    fn default() -> Self {
+        Self {
+            id: None,
+            source_zone: String::new(),
+            dest_zone: String::new(),
+            policy: FirewallAction::Drop,
+            enabled: true,
+        }
+    }
+}
+
+/// Port forward (DNAT) rule
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PortForward {
+    pub id: Option<i64>,
+    pub name: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    /// Protocol to match
+    pub protocol: RuleProtocol,
+    /// Source zone (None = any incoming interface)
+    pub source_zone: Option<String>,
+    /// External port range start
+    pub external_port_start: u16,
+    /// External port range end (None = single port)
+    pub external_port_end: Option<u16>,
+    /// Restrict to source IP/CIDR (None = any)
+    pub source_ip: Option<String>,
+    /// Internal destination IP
+    pub dest_ip: String,
+    /// Internal destination port (None = same as external)
+    pub dest_port: Option<u16>,
+}
+
+impl Default for PortForward {
+    fn default() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            description: None,
+            enabled: true,
+            protocol: RuleProtocol::Tcp,
+            source_zone: None,
+            external_port_start: 0,
+            external_port_end: None,
+            source_ip: None,
+            dest_ip: String::new(),
+            dest_port: None,
+        }
+    }
+}
+
+/// Input rule controlling access to the router itself
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InputRule {
+    pub id: Option<i64>,
+    pub name: String,
+    pub description: Option<String>,
+    pub enabled: bool,
+    /// Position for ordering (lower = evaluated first)
+    pub position: i32,
+    /// Source zone (None = any)
+    pub zone: Option<String>,
+    /// Protocol to match (None = any)
+    pub protocol: Option<RuleProtocol>,
+    /// Port range start (None = any port)
+    pub port_start: Option<u16>,
+    /// Port range end (None = single port)
+    pub port_end: Option<u16>,
+    /// Source IP/CIDR (None = any)
+    pub source_ip: Option<String>,
     /// Action to take
     pub action: FirewallAction,
+    /// Enable logging for matched packets
+    pub log_enabled: bool,
+    /// Log prefix string
+    pub log_prefix: Option<String>,
+    /// Rate limit (e.g., "10/minute")
+    pub rate_limit: Option<String>,
+}
 
-    /// Optional source IP/CIDR
-    pub source: Option<String>,
+impl Default for InputRule {
+    fn default() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            description: None,
+            enabled: true,
+            position: 0,
+            zone: None,
+            protocol: None,
+            port_start: None,
+            port_end: None,
+            source_ip: None,
+            action: FirewallAction::Accept,
+            log_enabled: false,
+            log_prefix: None,
+            rate_limit: None,
+        }
+    }
+}
 
-    /// Optional destination IP/CIDR
-    pub destination: Option<String>,
-
-    /// Rule description
-    pub description: String,
-
-    /// Whether the rule is enabled
+/// Forward rule controlling traffic between zones
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ForwardRule {
+    pub id: Option<i64>,
+    pub name: String,
+    pub description: Option<String>,
     pub enabled: bool,
+    /// Position for ordering
+    pub position: i32,
+    /// Source zone (None = any)
+    pub source_zone: Option<String>,
+    /// Destination zone (None = any)
+    pub dest_zone: Option<String>,
+    /// Protocol to match
+    pub protocol: Option<RuleProtocol>,
+    /// Destination port range start
+    pub dest_port_start: Option<u16>,
+    /// Destination port range end
+    pub dest_port_end: Option<u16>,
+    /// Source IP/CIDR
+    pub source_ip: Option<String>,
+    /// Destination IP/CIDR
+    pub dest_ip: Option<String>,
+    /// Action to take
+    pub action: FirewallAction,
+    /// Enable logging
+    pub log_enabled: bool,
+    /// Log prefix
+    pub log_prefix: Option<String>,
+    /// Rate limit
+    pub rate_limit: Option<String>,
+}
+
+impl Default for ForwardRule {
+    fn default() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            description: None,
+            enabled: true,
+            position: 0,
+            source_zone: None,
+            dest_zone: None,
+            protocol: None,
+            dest_port_start: None,
+            dest_port_end: None,
+            source_ip: None,
+            dest_ip: None,
+            action: FirewallAction::Accept,
+            log_enabled: false,
+            log_prefix: None,
+            rate_limit: None,
+        }
+    }
+}
+
+/// Complete firewall configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct FirewallConfig {
+    pub zones: Vec<FirewallZone>,
+    pub zone_forwards: Vec<ZoneForwardPolicy>,
+    pub port_forwards: Vec<PortForward>,
+    pub input_rules: Vec<InputRule>,
+    pub forward_rules: Vec<ForwardRule>,
+}
+
+// ============================================================================
+// Firewall API Request/Response Types
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveFirewallZoneRequest {
+    pub zone: FirewallZone,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveFirewallZoneResponse {
+    pub success: bool,
+    pub message: String,
+    pub zone_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteFirewallZoneRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteFirewallZoneResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallZonesResponse {
+    pub zones: Vec<FirewallZone>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveZoneForwardRequest {
+    pub forward: ZoneForwardPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveZoneForwardResponse {
+    pub success: bool,
+    pub message: String,
+    pub forward_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteZoneForwardRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteZoneForwardResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZoneForwardsResponse {
+    pub forwards: Vec<ZoneForwardPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavePortForwardRequest {
+    pub port_forward: PortForward,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavePortForwardResponse {
+    pub success: bool,
+    pub message: String,
+    pub port_forward_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletePortForwardRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeletePortForwardResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortForwardsResponse {
+    pub port_forwards: Vec<PortForward>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveInputRuleRequest {
+    pub rule: InputRule,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveInputRuleResponse {
+    pub success: bool,
+    pub message: String,
+    pub rule_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteInputRuleRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteInputRuleResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputRulesResponse {
+    pub rules: Vec<InputRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveForwardRuleRequest {
+    pub rule: ForwardRule,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveForwardRuleResponse {
+    pub success: bool,
+    pub message: String,
+    pub rule_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteForwardRuleRequest {
+    pub id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteForwardRuleResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForwardRulesResponse {
+    pub rules: Vec<ForwardRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReorderRulesRequest {
+    /// List of rule IDs in desired order
+    pub rule_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReorderRulesResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallPreviewResponse {
+    /// The generated nftables ruleset as text
+    pub ruleset: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallApplyRequest {
+    // Empty - applies current config from database
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallApplyResponse {
+    pub success: bool,
+    pub message: String,
+    /// Whether changes require confirmation
+    pub pending_confirmation: bool,
+    /// Unix timestamp - confirm before this time or rollback
+    pub confirm_deadline: Option<u64>,
+    /// Session ID for confirmation
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallConfirmRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallConfirmResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallRollbackResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallStatusResponse {
+    /// Is there a pending apply waiting for confirmation?
+    pub pending_confirmation: bool,
+    /// Seconds remaining until automatic rollback
+    pub seconds_remaining: Option<u32>,
+    /// Session ID if pending
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallConfigResponse {
+    pub config: FirewallConfig,
 }
 
 /// Complete system state representing the router configuration
@@ -1079,9 +1570,6 @@ pub struct FirewallRule {
 pub struct SystemState {
     /// All configured network interfaces
     pub interfaces: Vec<Interface>,
-
-    /// All firewall rules
-    pub firewall_rules: Vec<FirewallRule>,
 
     /// Whether IP forwarding is enabled
     pub ip_forwarding_enabled: bool,
@@ -1220,22 +1708,68 @@ mod tests {
     }
 
     #[test]
-    fn test_firewall_rule_serialization() {
-        let rule = FirewallRule {
-            id: "rule1".to_string(),
-            port: 80,
-            protocol: Protocol::TCP,
-            action: FirewallAction::Accept,
-            source: None,
-            destination: Some("192.168.1.0/24".to_string()),
-            description: "Allow HTTP".to_string(),
-            enabled: true,
+    fn test_firewall_zone_serialization() {
+        let zone = FirewallZone {
+            id: Some(1),
+            name: "lan".to_string(),
+            description: Some("Local network".to_string()),
+            interfaces: vec!["eth1".to_string(), "eth2".to_string()],
+            default_input_policy: FirewallPolicy::Accept,
+            default_forward_policy: FirewallPolicy::Accept,
         };
 
-        let json = serde_json::to_string(&rule).unwrap();
-        let deserialized: FirewallRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&zone).unwrap();
+        let deserialized: FirewallZone = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(rule, deserialized);
+        assert_eq!(zone, deserialized);
+    }
+
+    #[test]
+    fn test_port_forward_serialization() {
+        let pf = PortForward {
+            id: Some(1),
+            name: "Web Server".to_string(),
+            description: Some("Forward HTTP to internal server".to_string()),
+            enabled: true,
+            protocol: RuleProtocol::Tcp,
+            source_zone: Some("wan".to_string()),
+            external_port_start: 8080,
+            external_port_end: None,
+            source_ip: None,
+            dest_ip: "192.168.1.100".to_string(),
+            dest_port: Some(80),
+        };
+
+        let json = serde_json::to_string(&pf).unwrap();
+        let deserialized: PortForward = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(pf, deserialized);
+    }
+
+    #[test]
+    fn test_firewall_action_parsing() {
+        assert_eq!("accept".parse::<FirewallAction>().unwrap(), FirewallAction::Accept);
+        assert_eq!("drop".parse::<FirewallAction>().unwrap(), FirewallAction::Drop);
+        assert_eq!("reject".parse::<FirewallAction>().unwrap(), FirewallAction::Reject);
+        assert_eq!(FirewallAction::Accept.to_string(), "accept");
+    }
+
+    #[test]
+    fn test_rule_protocol_parsing() {
+        assert_eq!("tcp".parse::<RuleProtocol>().unwrap(), RuleProtocol::Tcp);
+        assert_eq!("udp".parse::<RuleProtocol>().unwrap(), RuleProtocol::Udp);
+        assert_eq!("tcp+udp".parse::<RuleProtocol>().unwrap(), RuleProtocol::TcpUdp);
+        assert_eq!("icmp".parse::<RuleProtocol>().unwrap(), RuleProtocol::Icmp);
+        assert_eq!("icmpv6".parse::<RuleProtocol>().unwrap(), RuleProtocol::Icmpv6);
+        assert_eq!("any".parse::<RuleProtocol>().unwrap(), RuleProtocol::Any);
+        assert_eq!(RuleProtocol::TcpUdp.to_string(), "tcp+udp");
+    }
+
+    #[test]
+    fn test_firewall_policy_parsing() {
+        assert_eq!("accept".parse::<FirewallPolicy>().unwrap(), FirewallPolicy::Accept);
+        assert_eq!("drop".parse::<FirewallPolicy>().unwrap(), FirewallPolicy::Drop);
+        assert_eq!(FirewallPolicy::Drop.to_string(), "drop");
     }
 
     #[test]

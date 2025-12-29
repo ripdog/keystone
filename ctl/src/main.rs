@@ -28,6 +28,17 @@ use keystone_core::{
     DeleteZoneForwardResponse, DeletePortForwardRequest, DeletePortForwardResponse,
     DeleteInputRuleRequest, DeleteInputRuleResponse, DeleteForwardRuleRequest, 
     DeleteForwardRuleResponse,
+    // Dnsmasq types
+    DnsmasqStateResponse, DnsmasqConfig, DnsmasqUpstreamMode, DnsmasqDhcpRange, DnsmasqStaticLease,
+    DnsmasqDhcpOption, DnsmasqHostRecord, DnsmasqCnameRecord, DnsmasqAddressOverride,
+    DnsmasqAddressAction, DhcpLeasesResponse, DnsmasqPreviewResponse,
+    DnsmasqApplyRequest, DnsmasqApplyResponse, SaveDnsmasqConfigRequest, SaveDnsmasqConfigResponse,
+    SaveDhcpRangeRequest, SaveDhcpRangeResponse, DeleteDhcpRangeRequest,
+    SaveStaticLeaseRequest, SaveStaticLeaseResponse, DeleteStaticLeaseRequest,
+    SaveDhcpOptionRequest, SaveDhcpOptionResponse, DeleteDhcpOptionRequest,
+    SaveHostRecordRequest, SaveHostRecordResponse, DeleteHostRecordRequest,
+    SaveCnameRecordRequest, SaveCnameRecordResponse, DeleteCnameRecordRequest,
+    SaveAddressOverrideRequest, SaveAddressOverrideResponse, DeleteAddressOverrideRequest,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -157,6 +168,10 @@ enum Commands {
     /// Manage firewall configuration
     #[command(subcommand)]
     Firewall(FirewallCommands),
+
+    /// Manage DNS & DHCP (dnsmasq) configuration
+    #[command(subcommand)]
+    Dnsmasq(DnsmasqCommands),
 }
 
 #[derive(Subcommand)]
@@ -661,6 +676,394 @@ enum ForwardRulesCommands {
         token: Option<String>,
 
         /// Rule ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+// ============================================================================
+// Dnsmasq Commands
+// ============================================================================
+
+#[derive(Subcommand)]
+enum DnsmasqCommands {
+    /// Get full dnsmasq state (config + all records)
+    State {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Manage global DNS settings
+    #[command(subcommand)]
+    Config(DnsmasqConfigCommands),
+
+    /// Manage DHCP address pools
+    #[command(subcommand)]
+    Ranges(DhcpRangeCommands),
+
+    /// Manage static DHCP leases (reservations)
+    #[command(subcommand)]
+    Leases(StaticLeaseCommands),
+
+    /// Manage custom DHCP options
+    #[command(subcommand)]
+    Options(DhcpOptionCommands),
+
+    /// Manage DNS host records
+    #[command(subcommand)]
+    Hosts(HostRecordCommands),
+
+    /// Manage CNAME records
+    #[command(subcommand)]
+    Cnames(CnameRecordCommands),
+
+    /// Manage address overrides (blocking/redirects)
+    #[command(subcommand)]
+    Overrides(AddressOverrideCommands),
+
+    /// View current active DHCP leases
+    ActiveLeases {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Preview generated dnsmasq config file
+    Preview {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Apply dnsmasq configuration and restart service
+    Apply {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DnsmasqConfigCommands {
+    /// Show current DNS configuration
+    Get {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Update DNS configuration
+    Set {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Enable/disable dnsmasq service
+        #[arg(long)]
+        enabled: Option<bool>,
+
+        /// DNS cache size (0 = disable)
+        #[arg(long)]
+        cache_size: Option<u32>,
+
+        /// Local domain name (e.g., "lan", "home.local")
+        #[arg(long)]
+        local_domain: Option<String>,
+
+        /// Upstream DNS mode: system, custom, localadguard
+        #[arg(long)]
+        upstream_mode: Option<String>,
+
+        /// Enable DNSSEC validation
+        #[arg(long)]
+        dnssec: Option<bool>,
+
+        /// Enable query logging
+        #[arg(long)]
+        log_queries: Option<bool>,
+
+        /// Enable DHCP logging
+        #[arg(long)]
+        log_dhcp: Option<bool>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DhcpRangeCommands {
+    /// List all DHCP ranges
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a DHCP range
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Range name (description)
+        #[arg(short, long)]
+        name: String,
+
+        /// Interface to serve DHCP on
+        #[arg(short, long)]
+        interface: String,
+
+        /// Start IP address
+        #[arg(long)]
+        start: String,
+
+        /// End IP address
+        #[arg(long)]
+        end: String,
+
+        /// Netmask (optional, e.g., "255.255.255.0")
+        #[arg(long)]
+        netmask: Option<String>,
+
+        /// Lease time (e.g., "24h", "12h", "1w")
+        #[arg(long, default_value = "24h")]
+        lease_time: String,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete a DHCP range
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Range ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum StaticLeaseCommands {
+    /// List all static leases
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a static lease (DHCP reservation)
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// MAC address (e.g., "00:11:22:33:44:55")
+        #[arg(short, long)]
+        mac: String,
+
+        /// IP address to assign
+        #[arg(short, long)]
+        ip: String,
+
+        /// Hostname (optional)
+        #[arg(short = 'H', long)]
+        hostname: Option<String>,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete a static lease
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Lease ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum DhcpOptionCommands {
+    /// List all DHCP options
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a DHCP option
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Option name or number (e.g., "option:router", "6", "option:ntp-server")
+        #[arg(short, long)]
+        option: String,
+
+        /// Option value
+        #[arg(short, long)]
+        value: String,
+
+        /// Description (optional)
+        #[arg(short, long)]
+        description: Option<String>,
+
+        /// Is IPv6 option
+        #[arg(long, default_value = "false")]
+        ipv6: bool,
+
+        /// Force send even if not requested
+        #[arg(long, default_value = "false")]
+        force: bool,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete a DHCP option
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Option ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum HostRecordCommands {
+    /// List all host records
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a host record
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Hostnames (comma-separated, e.g., "server,server.lan")
+        #[arg(short = 'H', long)]
+        hostnames: String,
+
+        /// IPv4 address
+        #[arg(long)]
+        ipv4: Option<String>,
+
+        /// IPv6 address
+        #[arg(long)]
+        ipv6: Option<String>,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete a host record
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Record ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum CnameRecordCommands {
+    /// List all CNAME records
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a CNAME record
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Alias name (the CNAME)
+        #[arg(short, long)]
+        alias: String,
+
+        /// Target hostname
+        #[arg(long)]
+        target: String,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete a CNAME record
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Record ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum AddressOverrideCommands {
+    /// List all address overrides
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add an address override
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Domain pattern (e.g., "ads.example.com", ".malware.com")
+        #[arg(short, long)]
+        domain: String,
+
+        /// Action: block, redirect, null
+        #[arg(short, long, default_value = "block")]
+        action: String,
+
+        /// Redirect address (required if action is redirect)
+        #[arg(long)]
+        redirect_to: Option<String>,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete an address override
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Override ID to delete
         #[arg(long)]
         id: i64,
     },
@@ -1233,6 +1636,328 @@ mod pretty {
             println!("\nNote: Apply firewall configuration for changes to take effect.");
         } else {
             println!("Error: {}", response.message);
+        }
+    }
+
+    // ========================================================================
+    // Dnsmasq pretty print functions
+    // ========================================================================
+
+    pub fn dnsmasq_state(response: &DnsmasqStateResponse) {
+        println!("=== DNS & DHCP State ===\n");
+        
+        // Config summary
+        println!("Service: {}", if response.config.enabled { "Enabled" } else { "Disabled" });
+        println!("Upstream DNS: {}", response.config.upstream_mode);
+        println!("Cache Size: {}", response.config.cache_size);
+        if let Some(domain) = &response.config.local_domain {
+            println!("Local Domain: {}", domain);
+        }
+        println!("DNSSEC: {}", if response.config.dnssec_enabled { "Enabled" } else { "Disabled" });
+        
+        println!("\nStatistics:");
+        println!("  DHCP Ranges: {}", response.dhcp_ranges.len());
+        println!("  Static Leases: {}", response.static_leases.len());
+        println!("  DHCP Options: {}", response.dhcp_options.len());
+        println!("  Host Records: {}", response.host_records.len());
+        println!("  CNAME Records: {}", response.cname_records.len());
+        println!("  Address Overrides: {}", response.address_overrides.len());
+    }
+
+    pub fn dnsmasq_config(config: &DnsmasqConfig) {
+        println!("=== DNS Configuration ===\n");
+        println!("Service: {}", if config.enabled { "Enabled" } else { "Disabled" });
+        println!("DNS Port: {}", config.dns_port);
+        println!("Upstream Mode: {}", config.upstream_mode);
+        println!("Cache Size: {}", config.cache_size);
+        println!("Local Domain: {}", config.local_domain.as_deref().unwrap_or("-"));
+        println!("DNSSEC: {}", if config.dnssec_enabled { "Enabled" } else { "Disabled" });
+        println!("Domain Needed: {}", if config.domain_needed { "Yes" } else { "No" });
+        println!("Bogus Priv: {}", if config.bogus_priv { "Yes" } else { "No" });
+        println!("Expand Hosts: {}", if config.expand_hosts { "Yes" } else { "No" });
+        println!("Log Queries: {}", if config.log_queries { "Yes" } else { "No" });
+        println!("Log DHCP: {}", if config.log_dhcp { "Yes" } else { "No" });
+    }
+
+    pub fn save_dnsmasq_config(response: &SaveDnsmasqConfigResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn dhcp_ranges(ranges: &Vec<DnsmasqDhcpRange>) {
+        println!("=== DHCP Ranges ===\n");
+        if ranges.is_empty() {
+            println!("No DHCP ranges configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<15} {:<12} {:<30} {:<8} {:<8}",
+            "ID", "Name", "Interface", "Range", "Lease", "Enabled"
+        );
+        println!("{}", "-".repeat(85));
+        for range in ranges {
+            let id = range.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let range_str = format!("{} - {}", range.start_address, range.end_address);
+            let enabled = if range.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<15} {:<12} {:<30} {:<8} {:<8}",
+                id, range.name, range.interface, range_str, range.lease_time, enabled
+            );
+        }
+    }
+
+    pub fn save_dhcp_range(response: &SaveDhcpRangeResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.range_id {
+                println!("  Range ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn static_leases(leases: &Vec<DnsmasqStaticLease>) {
+        println!("=== Static Leases ===\n");
+        if leases.is_empty() {
+            println!("No static leases configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<20} {:<18} {:<20} {:<8}",
+            "ID", "MAC Address", "IP Address", "Hostname", "Enabled"
+        );
+        println!("{}", "-".repeat(75));
+        for lease in leases {
+            let id = lease.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let hostname = lease.hostname.as_deref().unwrap_or("-");
+            let enabled = if lease.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<20} {:<18} {:<20} {:<8}",
+                id, lease.mac_address, lease.ip_address, hostname, enabled
+            );
+        }
+    }
+
+    pub fn save_static_lease(response: &SaveStaticLeaseResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.lease_id {
+                println!("  Lease ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn dhcp_options(options: &Vec<DnsmasqDhcpOption>) {
+        println!("=== DHCP Options ===\n");
+        if options.is_empty() {
+            println!("No DHCP options configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<20} {:<15} {:<30} {:<8}",
+            "ID", "Description", "Option", "Value", "Enabled"
+        );
+        println!("{}", "-".repeat(85));
+        for opt in options {
+            let id = opt.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let desc = opt.description.as_deref().unwrap_or("-");
+            let enabled = if opt.enabled { "yes" } else { "no" };
+            // Truncate value if too long
+            let value = if opt.value.len() > 28 {
+                format!("{}...", &opt.value[..25])
+            } else {
+                opt.value.clone()
+            };
+            println!(
+                "{:<6} {:<20} {:<15} {:<30} {:<8}",
+                id, desc, opt.option, value, enabled
+            );
+        }
+    }
+
+    pub fn save_dhcp_option(response: &SaveDhcpOptionResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.option_id {
+                println!("  Option ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn host_records(records: &Vec<DnsmasqHostRecord>) {
+        println!("=== Host Records ===\n");
+        if records.is_empty() {
+            println!("No host records configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<30} {:<18} {:<25} {:<8}",
+            "ID", "Hostnames", "IPv4", "IPv6", "Enabled"
+        );
+        println!("{}", "-".repeat(90));
+        for rec in records {
+            let id = rec.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let hostnames = if rec.hostnames.len() > 2 {
+                format!("{}, {} (+{})", rec.hostnames[0], rec.hostnames[1], rec.hostnames.len() - 2)
+            } else {
+                rec.hostnames.join(", ")
+            };
+            let ipv4 = rec.ipv4_address.as_deref().unwrap_or("-");
+            let ipv6 = rec.ipv6_address.as_deref().unwrap_or("-");
+            let enabled = if rec.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<30} {:<18} {:<25} {:<8}",
+                id, hostnames, ipv4, ipv6, enabled
+            );
+        }
+    }
+
+    pub fn save_host_record(response: &SaveHostRecordResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.record_id {
+                println!("  Record ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn cname_records(records: &Vec<DnsmasqCnameRecord>) {
+        println!("=== CNAME Records ===\n");
+        if records.is_empty() {
+            println!("No CNAME records configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<25} {:<25} {:<8}",
+            "ID", "Alias", "Target", "Enabled"
+        );
+        println!("{}", "-".repeat(70));
+        for rec in records {
+            let id = rec.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let enabled = if rec.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<25} {:<25} {:<8}",
+                id, rec.alias, rec.target, enabled
+            );
+        }
+    }
+
+    pub fn save_cname_record(response: &SaveCnameRecordResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.record_id {
+                println!("  Record ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn address_overrides(overrides: &Vec<DnsmasqAddressOverride>) {
+        println!("=== Address Overrides ===\n");
+        if overrides.is_empty() {
+            println!("No address overrides configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<30} {:<10} {:<20} {:<8}",
+            "ID", "Domain", "Action", "Redirect To", "Enabled"
+        );
+        println!("{}", "-".repeat(80));
+        for ovr in overrides {
+            let id = ovr.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let redirect = ovr.redirect_address.as_deref().unwrap_or("-");
+            let enabled = if ovr.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<30} {:<10} {:<20} {:<8}",
+                id, ovr.domain, ovr.action, redirect, enabled
+            );
+        }
+    }
+
+    pub fn save_address_override(response: &SaveAddressOverrideResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.override_id {
+                println!("  Override ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn active_leases(response: &DhcpLeasesResponse) {
+        println!("=== Active DHCP Leases ===\n");
+        if response.leases.is_empty() {
+            println!("No active DHCP leases.");
+            return;
+        }
+        println!(
+            "{:<20} {:<18} {:<20} {:<15}",
+            "MAC Address", "IP Address", "Hostname", "Expires"
+        );
+        println!("{}", "-".repeat(75));
+        for lease in &response.leases {
+            let hostname = lease.hostname.as_deref().unwrap_or("-");
+            let expires = format_lease_expiry(lease.expires_at);
+            println!(
+                "{:<20} {:<18} {:<20} {:<15}",
+                lease.mac_address, lease.ip_address, hostname, expires
+            );
+        }
+    }
+
+    fn format_lease_expiry(expires_at: u64) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        
+        if expires_at <= now {
+            return "Expired".to_string();
+        }
+        
+        let remaining = expires_at - now;
+        if remaining < 60 {
+            format!("{}s", remaining)
+        } else if remaining < 3600 {
+            format!("{}m", remaining / 60)
+        } else if remaining < 86400 {
+            format!("{}h", remaining / 3600)
+        } else {
+            format!("{}d", remaining / 86400)
+        }
+    }
+
+    pub fn dnsmasq_preview(response: &DnsmasqPreviewResponse) {
+        println!("=== dnsmasq Configuration Preview ===\n");
+        println!("{}", response.config_content);
+    }
+
+    pub fn dnsmasq_apply(response: &DnsmasqApplyResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn delete_success(success: bool, message: &str) {
+        if success {
+            println!("✓ Deleted successfully");
+        } else {
+            println!("✗ {}", message);
         }
     }
 }
@@ -1822,6 +2547,458 @@ async fn main() -> Result<()> {
                 let response: FirewallStatusResponse =
                     client.get("/firewall/status", Some(&token)).await?;
                 output(cli.json, &response, pretty::firewall_status);
+            }
+        },
+
+        Commands::Dnsmasq(subcmd) => match subcmd {
+            DnsmasqCommands::State { token } => {
+                let token = get_token(token)?;
+                let response: DnsmasqStateResponse =
+                    client.get("/dnsmasq/state", Some(&token)).await?;
+                output(cli.json, &response, pretty::dnsmasq_state);
+            }
+
+            DnsmasqCommands::Config(config_cmd) => match config_cmd {
+                DnsmasqConfigCommands::Get { token } => {
+                    let token = get_token(token)?;
+                    let response: DnsmasqStateResponse =
+                        client.get("/dnsmasq/state", Some(&token)).await?;
+                    output(cli.json, &response.config, pretty::dnsmasq_config);
+                }
+
+                DnsmasqConfigCommands::Set {
+                    token,
+                    enabled,
+                    cache_size,
+                    local_domain,
+                    upstream_mode,
+                    dnssec,
+                    log_queries,
+                    log_dhcp,
+                } => {
+                    let token = get_token(token)?;
+
+                    // Fetch current config
+                    let current: DnsmasqStateResponse =
+                        client.get("/dnsmasq/state", Some(&token)).await?;
+
+                    // Parse upstream mode if provided
+                    let upstream = match upstream_mode.as_deref() {
+                        Some("system") => Some(DnsmasqUpstreamMode::System),
+                        Some("custom") => Some(DnsmasqUpstreamMode::Custom),
+                        Some("localadguard") => Some(DnsmasqUpstreamMode::LocalAdGuard),
+                        Some(other) => {
+                            anyhow::bail!(
+                                "Invalid upstream mode '{}'. Valid options: system, custom, localadguard",
+                                other
+                            );
+                        }
+                        None => None,
+                    };
+
+                    // Merge updates with current config
+                    let config = DnsmasqConfig {
+                        enabled: enabled.unwrap_or(current.config.enabled),
+                        dns_port: current.config.dns_port,
+                        cache_size: cache_size.unwrap_or(current.config.cache_size),
+                        local_domain: local_domain.or(current.config.local_domain),
+                        upstream_mode: upstream.unwrap_or(current.config.upstream_mode),
+                        upstream_servers: current.config.upstream_servers,
+                        dnssec_enabled: dnssec.unwrap_or(current.config.dnssec_enabled),
+                        domain_needed: current.config.domain_needed,
+                        bogus_priv: current.config.bogus_priv,
+                        expand_hosts: current.config.expand_hosts,
+                        listen_interfaces: current.config.listen_interfaces,
+                        except_interfaces: current.config.except_interfaces,
+                        no_dhcp_interfaces: current.config.no_dhcp_interfaces,
+                        bind_dynamic: current.config.bind_dynamic,
+                        log_queries: log_queries.unwrap_or(current.config.log_queries),
+                        log_dhcp: log_dhcp.unwrap_or(current.config.log_dhcp),
+                    };
+
+                    let request = SaveDnsmasqConfigRequest { config };
+                    let response: SaveDnsmasqConfigResponse =
+                        client.post("/dnsmasq/config", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_dnsmasq_config);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            DnsmasqCommands::Ranges(ranges_cmd) => match ranges_cmd {
+                DhcpRangeCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: DnsmasqStateResponse =
+                        client.get("/dnsmasq/state", Some(&token)).await?;
+                    output(cli.json, &response.dhcp_ranges, pretty::dhcp_ranges);
+                }
+
+                DhcpRangeCommands::Add {
+                    token,
+                    name,
+                    interface,
+                    start,
+                    end,
+                    netmask,
+                    lease_time,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    let range = DnsmasqDhcpRange {
+                        id: None,
+                        name,
+                        interface,
+                        start_address: start,
+                        end_address: end,
+                        netmask,
+                        lease_time,
+                        enabled,
+                        ipv6_mode: None,
+                        ipv6_prefix: None,
+                    };
+                    let request = SaveDhcpRangeRequest { range };
+                    let response: SaveDhcpRangeResponse =
+                        client.post("/dnsmasq/ranges", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_dhcp_range);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                DhcpRangeCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteDhcpRangeRequest { id };
+                    let response: serde_json::Value =
+                        client.delete("/dnsmasq/ranges", &request, Some(&token)).await?;
+                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                    } else {
+                        pretty::delete_success(success, message);
+                    }
+                    if !success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            DnsmasqCommands::Leases(leases_cmd) => match leases_cmd {
+                StaticLeaseCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: DnsmasqStateResponse =
+                        client.get("/dnsmasq/state", Some(&token)).await?;
+                    output(cli.json, &response.static_leases, pretty::static_leases);
+                }
+
+                StaticLeaseCommands::Add {
+                    token,
+                    mac,
+                    ip,
+                    hostname,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    let lease = DnsmasqStaticLease {
+                        id: None,
+                        mac_address: mac,
+                        ip_address: ip,
+                        hostname,
+                        enabled,
+                        lease_time: None,
+                        client_id: None,
+                        set_tags: Vec::new(),
+                    };
+                    let request = SaveStaticLeaseRequest { lease };
+                    let response: SaveStaticLeaseResponse =
+                        client.post("/dnsmasq/static-leases", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_static_lease);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                StaticLeaseCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteStaticLeaseRequest { id };
+                    let response: serde_json::Value =
+                        client.delete("/dnsmasq/static-leases", &request, Some(&token)).await?;
+                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                    } else {
+                        pretty::delete_success(success, message);
+                    }
+                    if !success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            DnsmasqCommands::Options(options_cmd) => match options_cmd {
+                DhcpOptionCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: DnsmasqStateResponse =
+                        client.get("/dnsmasq/state", Some(&token)).await?;
+                    output(cli.json, &response.dhcp_options, pretty::dhcp_options);
+                }
+
+                DhcpOptionCommands::Add {
+                    token,
+                    option,
+                    value,
+                    description,
+                    ipv6,
+                    force,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    let opt = DnsmasqDhcpOption {
+                        id: None,
+                        option,
+                        value,
+                        description,
+                        match_tags: Vec::new(),
+                        enabled,
+                        ipv6,
+                        force,
+                    };
+                    let request = SaveDhcpOptionRequest { option: opt };
+                    let response: SaveDhcpOptionResponse =
+                        client.post("/dnsmasq/dhcp-options", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_dhcp_option);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                DhcpOptionCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteDhcpOptionRequest { id };
+                    let response: serde_json::Value =
+                        client.delete("/dnsmasq/dhcp-options", &request, Some(&token)).await?;
+                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                    } else {
+                        pretty::delete_success(success, message);
+                    }
+                    if !success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            DnsmasqCommands::Hosts(hosts_cmd) => match hosts_cmd {
+                HostRecordCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: DnsmasqStateResponse =
+                        client.get("/dnsmasq/state", Some(&token)).await?;
+                    output(cli.json, &response.host_records, pretty::host_records);
+                }
+
+                HostRecordCommands::Add {
+                    token,
+                    hostnames,
+                    ipv4,
+                    ipv6,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    // Parse comma-separated hostnames
+                    let hostnames_vec: Vec<String> = hostnames
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+
+                    if hostnames_vec.is_empty() {
+                        anyhow::bail!("At least one hostname is required");
+                    }
+
+                    if ipv4.is_none() && ipv6.is_none() {
+                        anyhow::bail!("At least one of --ipv4 or --ipv6 is required");
+                    }
+
+                    let record = DnsmasqHostRecord {
+                        id: None,
+                        hostnames: hostnames_vec,
+                        ipv4_address: ipv4,
+                        ipv6_address: ipv6,
+                        ttl: None,
+                        enabled,
+                    };
+                    let request = SaveHostRecordRequest { record };
+                    let response: SaveHostRecordResponse =
+                        client.post("/dnsmasq/host-records", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_host_record);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                HostRecordCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteHostRecordRequest { id };
+                    let response: serde_json::Value =
+                        client.delete("/dnsmasq/host-records", &request, Some(&token)).await?;
+                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                    } else {
+                        pretty::delete_success(success, message);
+                    }
+                    if !success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            DnsmasqCommands::Cnames(cnames_cmd) => match cnames_cmd {
+                CnameRecordCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: DnsmasqStateResponse =
+                        client.get("/dnsmasq/state", Some(&token)).await?;
+                    output(cli.json, &response.cname_records, pretty::cname_records);
+                }
+
+                CnameRecordCommands::Add {
+                    token,
+                    alias,
+                    target,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    let record = DnsmasqCnameRecord {
+                        id: None,
+                        alias,
+                        target,
+                        ttl: None,
+                        enabled,
+                    };
+                    let request = SaveCnameRecordRequest { record };
+                    let response: SaveCnameRecordResponse =
+                        client.post("/dnsmasq/cname-records", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_cname_record);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                CnameRecordCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteCnameRecordRequest { id };
+                    let response: serde_json::Value =
+                        client.delete("/dnsmasq/cname-records", &request, Some(&token)).await?;
+                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                    } else {
+                        pretty::delete_success(success, message);
+                    }
+                    if !success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            DnsmasqCommands::Overrides(overrides_cmd) => match overrides_cmd {
+                AddressOverrideCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: DnsmasqStateResponse =
+                        client.get("/dnsmasq/state", Some(&token)).await?;
+                    output(cli.json, &response.address_overrides, pretty::address_overrides);
+                }
+
+                AddressOverrideCommands::Add {
+                    token,
+                    domain,
+                    action,
+                    redirect_to,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+
+                    // Parse action
+                    let action_enum = match action.to_lowercase().as_str() {
+                        "block" => DnsmasqAddressAction::Block,
+                        "redirect" => DnsmasqAddressAction::Redirect,
+                        "null" => DnsmasqAddressAction::Null,
+                        other => {
+                            anyhow::bail!(
+                                "Invalid action '{}'. Valid options: block, redirect, null",
+                                other
+                            );
+                        }
+                    };
+
+                    // Validate redirect_to is provided when action is redirect
+                    if matches!(action_enum, DnsmasqAddressAction::Redirect) && redirect_to.is_none() {
+                        anyhow::bail!("--redirect-to is required when action is 'redirect'");
+                    }
+
+                    let ovr = DnsmasqAddressOverride {
+                        id: None,
+                        domain,
+                        action: action_enum,
+                        redirect_address: redirect_to,
+                        enabled,
+                    };
+                    let request = SaveAddressOverrideRequest { override_entry: ovr };
+                    let response: SaveAddressOverrideResponse =
+                        client.post("/dnsmasq/address-overrides", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_address_override);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                AddressOverrideCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteAddressOverrideRequest { id };
+                    let response: serde_json::Value =
+                        client.delete("/dnsmasq/address-overrides", &request, Some(&token)).await?;
+                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    if cli.json {
+                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                    } else {
+                        pretty::delete_success(success, message);
+                    }
+                    if !success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            DnsmasqCommands::ActiveLeases { token } => {
+                let token = get_token(token)?;
+                let response: DhcpLeasesResponse =
+                    client.get("/dnsmasq/leases", Some(&token)).await?;
+                output(cli.json, &response, pretty::active_leases);
+            }
+
+            DnsmasqCommands::Preview { token } => {
+                let token = get_token(token)?;
+                let response: DnsmasqPreviewResponse =
+                    client.get("/dnsmasq/preview", Some(&token)).await?;
+                output(cli.json, &response, pretty::dnsmasq_preview);
+            }
+
+            DnsmasqCommands::Apply { token } => {
+                let token = get_token(token)?;
+                let request = DnsmasqApplyRequest {};
+                let response: DnsmasqApplyResponse =
+                    client.post("/dnsmasq/apply", &request, Some(&token)).await?;
+                output(cli.json, &response, pretty::dnsmasq_apply);
+                if !response.success {
+                    std::process::exit(1);
+                }
             }
         },
     }

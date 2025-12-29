@@ -2406,7 +2406,59 @@ impl Database {
             port_forwards: self.get_port_forwards().await?,
             input_rules: self.get_input_rules().await?,
             forward_rules: self.get_forward_rules().await?,
+            global_settings: self.get_firewall_global_settings().await?,
         })
+    }
+
+    // ========================================================================
+    // Firewall Global Settings Operations
+    // ========================================================================
+
+    /// Get global firewall settings
+    pub async fn get_firewall_global_settings(&self) -> Result<keystone_core::FirewallGlobalSettings> {
+        let row = sqlx::query_as::<_, (bool, bool, bool)>(
+            "SELECT ping_wan_enabled, ping_lan_enabled, hairpin_nat_enabled 
+             FROM firewall_global_settings WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch firewall global settings")?;
+
+        match row {
+            Some((ping_wan, ping_lan, hairpin)) => Ok(keystone_core::FirewallGlobalSettings {
+                ping_wan_enabled: ping_wan,
+                ping_lan_enabled: ping_lan,
+                hairpin_nat_enabled: hairpin,
+            }),
+            None => {
+                // Return defaults if no row exists (shouldn't happen after migration)
+                Ok(keystone_core::FirewallGlobalSettings::default())
+            }
+        }
+    }
+
+    /// Save global firewall settings
+    pub async fn save_firewall_global_settings(
+        &self,
+        settings: &keystone_core::FirewallGlobalSettings,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"INSERT OR REPLACE INTO firewall_global_settings 
+               (id, ping_wan_enabled, ping_lan_enabled, hairpin_nat_enabled, updated_at)
+               VALUES (1, ?, ?, ?, strftime('%s', 'now'))"#,
+        )
+        .bind(settings.ping_wan_enabled)
+        .bind(settings.ping_lan_enabled)
+        .bind(settings.hairpin_nat_enabled)
+        .execute(&self.pool)
+        .await
+        .context("Failed to save firewall global settings")?;
+
+        info!(
+            "Saved firewall global settings: ping_wan={}, ping_lan={}, hairpin={}",
+            settings.ping_wan_enabled, settings.ping_lan_enabled, settings.hairpin_nat_enabled
+        );
+        Ok(())
     }
 
     // ========================================================================

@@ -148,6 +148,9 @@ fn generate_input_chain(
     // Priority 3: Accept loopback
     batch.add(NfListObject::Rule(create_loopback_rule(FILTER_TABLE, "input")));
 
+    // Priority 3.5: ICMP safety rules (hardcoded - always block dangerous types)
+    generate_icmp_input_rules(batch, config, zone_interfaces);
+
     // Priority 4: User input rules (position-ordered)
     let mut sorted_rules: Vec<_> = config
         .input_rules
@@ -238,6 +241,205 @@ fn create_loopback_rule(table: &'static str, chain: &'static str) -> Rule<'stati
             Statement::Accept(None),
         ].into(),
         comment: Some(Cow::Borrowed("Accept loopback")),
+        ..Default::default()
+    }
+}
+
+/// Generate hardcoded ICMP safety rules
+/// - Always block dangerous ICMP types: timestamp, redirect, address-mask
+/// - Allow ping (echo-request) based on global settings per zone type
+fn generate_icmp_input_rules(
+    batch: &mut Batch<'static>,
+    config: &FirewallConfig,
+    zone_interfaces: &HashMap<String, Vec<String>>,
+) {
+    // First: Drop dangerous ICMP types from everywhere (hardcoded security)
+    // ICMP types to block:
+    // - Timestamp Request (13) / Reply (14) - can leak system info
+    // - Redirect (5) - can be used for MITM attacks
+    // - Address Mask Request (17) / Reply (18) - can leak network info
+    
+    // Block ICMP timestamp (type 13)
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(13, "Drop ICMP timestamp")));
+    // Block ICMP timestamp reply (type 14)  
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(14, "Drop ICMP timestamp-reply")));
+    // Block ICMP redirect (type 5)
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(5, "Drop ICMP redirect")));
+    // Block ICMP address mask request (type 17)
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(17, "Drop ICMP address-mask-request")));
+    // Block ICMP address mask reply (type 18)
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(18, "Drop ICMP address-mask-reply")));
+
+    // Identify WAN vs LAN zones
+    let wan_zones = find_wan_zones(&config.zones);
+    let wan_zone_names: Vec<&str> = wan_zones.iter().map(|z| z.name.as_str()).collect();
+
+    // Handle ping based on global settings
+    let settings = &config.global_settings;
+
+    // Allow ping from LAN zones if enabled
+    if settings.ping_lan_enabled {
+        for zone in &config.zones {
+            if !wan_zone_names.contains(&zone.name.as_str()) {
+                // This is a LAN zone - allow ping
+                if let Some(interfaces) = zone_interfaces.get(&zone.name) {
+                    if !interfaces.is_empty() {
+                        batch.add(NfListObject::Rule(create_icmp_ping_accept_rule(
+                            interfaces,
+                            &format!("Allow ping from {} (LAN)", zone.name),
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    // Allow ping from WAN zones if enabled
+    if settings.ping_wan_enabled {
+        for zone in &wan_zones {
+            if let Some(interfaces) = zone_interfaces.get(&zone.name) {
+                if !interfaces.is_empty() {
+                    batch.add(NfListObject::Rule(create_icmp_ping_accept_rule(
+                        interfaces,
+                        &format!("Allow ping from {} (WAN)", zone.name),
+                    )));
+                }
+            }
+        }
+    }
+
+    // Always allow essential ICMP for proper network operation:
+    // - Destination Unreachable (type 3) - needed for PMTUD
+    // - Time Exceeded (type 11) - needed for traceroute
+    // - Parameter Problem (type 12) - needed for proper error reporting
+    batch.add(NfListObject::Rule(create_icmp_essential_accept_rule()));
+}
+
+/// Create a rule to drop a specific ICMP type
+fn create_icmp_type_drop_rule(icmp_type: u8, comment: &str) -> Rule<'static> {
+    Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(FILTER_TABLE),
+        chain: Cow::Borrowed("input"),
+        expr: vec![
+            // Match ICMP protocol
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                    key: MetaKey::L4proto,
+                })),
+                right: Expression::String(Cow::Borrowed("icmp")),
+                op: Operator::EQ,
+            }),
+            // Match specific ICMP type
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Payload(
+                    Payload::PayloadField(PayloadField {
+                        protocol: Cow::Borrowed("icmp"),
+                        field: Cow::Borrowed("type"),
+                    }),
+                )),
+                right: Expression::Number(icmp_type as u32),
+                op: Operator::EQ,
+            }),
+            Statement::Counter(Counter::Anonymous(None)),
+            Statement::Drop(None),
+        ].into(),
+        comment: Some(Cow::Owned(comment.to_string())),
+        ..Default::default()
+    }
+}
+
+/// Create a rule to accept ICMP ping (echo-request) from specific interfaces
+fn create_icmp_ping_accept_rule(interfaces: &[String], comment: &str) -> Rule<'static> {
+    let ifaces: Vec<Cow<'static, str>> = interfaces
+        .iter()
+        .map(|s| Cow::Owned(s.clone()))
+        .collect();
+
+    let exprs = vec![
+        // Match input interface
+        Statement::Match(Match {
+            left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                key: MetaKey::Iifname,
+            })),
+            right: if ifaces.len() == 1 {
+                Expression::String(ifaces.into_iter().next().unwrap())
+            } else {
+                Expression::List(ifaces.into_iter().map(Expression::String).collect())
+            },
+            op: if interfaces.len() == 1 {
+                Operator::EQ
+            } else {
+                Operator::IN
+            },
+        }),
+        // Match ICMP protocol
+        Statement::Match(Match {
+            left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                key: MetaKey::L4proto,
+            })),
+            right: Expression::String(Cow::Borrowed("icmp")),
+            op: Operator::EQ,
+        }),
+        // Match echo-request (type 8)
+        Statement::Match(Match {
+            left: Expression::Named(nftables::expr::NamedExpression::Payload(
+                Payload::PayloadField(PayloadField {
+                    protocol: Cow::Borrowed("icmp"),
+                    field: Cow::Borrowed("type"),
+                }),
+            )),
+            right: Expression::Number(8), // echo-request
+            op: Operator::EQ,
+        }),
+        Statement::Counter(Counter::Anonymous(None)),
+        Statement::Accept(None),
+    ];
+
+    Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(FILTER_TABLE),
+        chain: Cow::Borrowed("input"),
+        expr: exprs.into(),
+        comment: Some(Cow::Owned(comment.to_string())),
+        ..Default::default()
+    }
+}
+
+/// Create a rule to accept essential ICMP types for proper network operation
+fn create_icmp_essential_accept_rule() -> Rule<'static> {
+    Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(FILTER_TABLE),
+        chain: Cow::Borrowed("input"),
+        expr: vec![
+            // Match ICMP protocol
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                    key: MetaKey::L4proto,
+                })),
+                right: Expression::String(Cow::Borrowed("icmp")),
+                op: Operator::EQ,
+            }),
+            // Match essential types: 3 (dest-unreachable), 11 (time-exceeded), 12 (parameter-problem)
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Payload(
+                    Payload::PayloadField(PayloadField {
+                        protocol: Cow::Borrowed("icmp"),
+                        field: Cow::Borrowed("type"),
+                    }),
+                )),
+                right: Expression::List(vec![
+                    Expression::Number(3),  // destination-unreachable
+                    Expression::Number(11), // time-exceeded
+                    Expression::Number(12), // parameter-problem
+                ]),
+                op: Operator::IN,
+            }),
+            Statement::Counter(Counter::Anonymous(None)),
+            Statement::Accept(None),
+        ].into(),
+        comment: Some(Cow::Borrowed("Accept essential ICMP (dest-unreach, time-exceeded, param-problem)")),
         ..Default::default()
     }
 }
@@ -643,6 +845,16 @@ fn generate_prerouting_chain(
         ..Default::default()
     }));
 
+    // Collect LAN interfaces for hairpin NAT
+    let wan_zones = find_wan_zones(&config.zones);
+    let wan_zone_names: Vec<&str> = wan_zones.iter().map(|z| z.name.as_str()).collect();
+    let mut lan_interfaces: Vec<String> = Vec::new();
+    for zone in &config.zones {
+        if !wan_zone_names.contains(&zone.name.as_str()) {
+            lan_interfaces.extend(zone.interfaces.clone());
+        }
+    }
+
     // Port forwards
     for pf in &config.port_forwards {
         if pf.enabled {
@@ -655,15 +867,34 @@ fn generate_prerouting_chain(
                     if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "udp") {
                         batch.add(NfListObject::Rule(rule));
                     }
+                    // Hairpin NAT rules (if enabled)
+                    if config.global_settings.hairpin_nat_enabled && !lan_interfaces.is_empty() {
+                        if let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "tcp") {
+                            batch.add(NfListObject::Rule(rule));
+                        }
+                        if let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "udp") {
+                            batch.add(NfListObject::Rule(rule));
+                        }
+                    }
                 }
                 RuleProtocol::Tcp => {
                     if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "tcp") {
                         batch.add(NfListObject::Rule(rule));
                     }
+                    if config.global_settings.hairpin_nat_enabled && !lan_interfaces.is_empty() {
+                        if let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "tcp") {
+                            batch.add(NfListObject::Rule(rule));
+                        }
+                    }
                 }
                 RuleProtocol::Udp => {
                     if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "udp") {
                         batch.add(NfListObject::Rule(rule));
+                    }
+                    if config.global_settings.hairpin_nat_enabled && !lan_interfaces.is_empty() {
+                        if let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "udp") {
+                            batch.add(NfListObject::Rule(rule));
+                        }
                     }
                 }
                 _ => {}
@@ -723,6 +954,66 @@ fn create_port_forward_rule(
     })
 }
 
+/// Create a hairpin NAT DNAT rule for LAN clients accessing port forwards via external IP
+///
+/// Hairpin NAT allows LAN clients to access port-forwarded services using the router's
+/// external (WAN) IP address. This works by matching packets from LAN interfaces that
+/// are destined to "local" addresses (using fib daddr type local) on the forwarded port,
+/// then DNATing them to the internal server.
+fn create_hairpin_dnat_rule(
+    pf: &PortForward,
+    lan_interfaces: &[String],
+    protocol: &'static str,
+) -> Option<Rule<'static>> {
+    if lan_interfaces.is_empty() {
+        return None;
+    }
+
+    let mut exprs: Vec<Statement> = Vec::new();
+
+    // Match input from LAN interfaces
+    exprs.push(create_iif_match(lan_interfaces));
+
+    // Match protocol
+    exprs.push(create_protocol_match(protocol));
+
+    // Match destination port(s)
+    exprs.push(create_dport_match(pf.external_port_start, pf.external_port_end));
+
+    // Match packets destined to a local address (router's own IPs)
+    // This catches traffic to any of the router's IPs, including WAN IP
+    exprs.push(Statement::Match(Match {
+        left: Expression::Named(nftables::expr::NamedExpression::Fib(nftables::expr::Fib {
+            result: nftables::expr::FibResult::Type,
+            flags: [nftables::expr::FibFlag::Daddr].into_iter().collect(),
+        })),
+        right: Expression::String(Cow::Borrowed("local")),
+        op: Operator::EQ,
+    }));
+
+    // Counter
+    exprs.push(Statement::Counter(Counter::Anonymous(None)));
+
+    // DNAT action
+    let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
+
+    exprs.push(Statement::DNAT(Some(nftables::stmt::NAT {
+        addr: Some(Expression::String(Cow::Owned(pf.dest_ip.clone()))),
+        family: None,
+        port: Some(Expression::Number(dest_port as u32)),
+        flags: None,
+    })));
+
+    Some(Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(NAT_TABLE),
+        chain: Cow::Borrowed("prerouting"),
+        expr: exprs.into(),
+        comment: Some(Cow::Owned(format!("{} hairpin ({})", pf.name, protocol))),
+        ..Default::default()
+    })
+}
+
 /// Generate the postrouting chain for SNAT (masquerade)
 fn generate_postrouting_chain(
     batch: &mut Batch<'static>,
@@ -742,7 +1033,48 @@ fn generate_postrouting_chain(
 
     // Find WAN zones for masquerading
     let wan_zones = find_wan_zones(&config.zones);
+    let wan_zone_names: Vec<&str> = wan_zones.iter().map(|z| z.name.as_str()).collect();
 
+    // Collect LAN interfaces for hairpin NAT
+    let mut lan_interfaces: Vec<String> = Vec::new();
+    for zone in &config.zones {
+        if !wan_zone_names.contains(&zone.name.as_str()) {
+            lan_interfaces.extend(zone.interfaces.clone());
+        }
+    }
+
+    // Hairpin NAT SNAT rules - masquerade traffic from LAN to internal servers
+    // This is needed so internal servers see the router as the source, enabling
+    // the return path to work (server replies to router, router forwards to client)
+    if config.global_settings.hairpin_nat_enabled && !lan_interfaces.is_empty() {
+        for pf in &config.port_forwards {
+            if pf.enabled {
+                match pf.protocol {
+                    RuleProtocol::TcpUdp => {
+                        if let Some(rule) = create_hairpin_snat_rule(pf, &lan_interfaces, "tcp") {
+                            batch.add(NfListObject::Rule(rule));
+                        }
+                        if let Some(rule) = create_hairpin_snat_rule(pf, &lan_interfaces, "udp") {
+                            batch.add(NfListObject::Rule(rule));
+                        }
+                    }
+                    RuleProtocol::Tcp => {
+                        if let Some(rule) = create_hairpin_snat_rule(pf, &lan_interfaces, "tcp") {
+                            batch.add(NfListObject::Rule(rule));
+                        }
+                    }
+                    RuleProtocol::Udp => {
+                        if let Some(rule) = create_hairpin_snat_rule(pf, &lan_interfaces, "udp") {
+                            batch.add(NfListObject::Rule(rule));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // WAN masquerade rules
     for zone in wan_zones {
         for iface in &zone.interfaces {
             // MSS clamping for the interface
@@ -752,6 +1084,51 @@ fn generate_postrouting_chain(
             batch.add(NfListObject::Rule(create_masquerade_rule(iface)));
         }
     }
+}
+
+/// Create a hairpin NAT SNAT rule (masquerade for hairpin traffic)
+///
+/// For hairpin NAT to work correctly, we need to masquerade traffic from LAN
+/// clients that is destined to internal servers (after DNAT). This ensures the
+/// server sees the router as the source, so the reply goes back through the router.
+fn create_hairpin_snat_rule(
+    pf: &PortForward,
+    lan_interfaces: &[String],
+    protocol: &'static str,
+) -> Option<Rule<'static>> {
+    if lan_interfaces.is_empty() {
+        return None;
+    }
+
+    let mut exprs: Vec<Statement> = Vec::new();
+
+    // Match source from LAN interfaces (original source is LAN client)
+    exprs.push(create_iif_match(lan_interfaces));
+
+    // Match protocol
+    exprs.push(create_protocol_match(protocol));
+
+    // Match destination IP (the internal server)
+    exprs.push(create_daddr_match(&pf.dest_ip));
+
+    // Match destination port (the internal server port)
+    let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
+    exprs.push(create_dport_match(dest_port, None));
+
+    // Counter
+    exprs.push(Statement::Counter(Counter::Anonymous(None)));
+
+    // Masquerade - router becomes the source so server can reply correctly
+    exprs.push(Statement::Masquerade(None));
+
+    Some(Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(NAT_TABLE),
+        chain: Cow::Borrowed("postrouting"),
+        expr: exprs.into(),
+        comment: Some(Cow::Owned(format!("{} hairpin SNAT ({})", pf.name, protocol))),
+        ..Default::default()
+    })
 }
 
 /// Create an MSS clamping rule for an interface
@@ -992,7 +1369,7 @@ fn generate_preview(
     let timestamp = chrono_lite_now();
 
     output.push_str("#!/usr/sbin/nft -f\n");
-    output.push_str(&format!("# Keystone Firewall - Auto-generated\n"));
+    output.push_str("# Keystone Firewall - Auto-generated\n");
     output.push_str(&format!("# Generated: {}\n\n", timestamp));
 
     // Filter table
@@ -1013,6 +1390,50 @@ fn generate_preview(
     output.push_str("        \n");
     output.push_str("        # Priority 3: Loopback\n");
     output.push_str("        iif lo accept\n");
+    output.push_str("        \n");
+
+    // ICMP Safety Rules
+    output.push_str("        # Priority 3.5: ICMP Safety Rules (hardcoded)\n");
+    output.push_str("        # Drop dangerous ICMP types\n");
+    output.push_str("        icmp type timestamp-request counter drop\n");
+    output.push_str("        icmp type timestamp-reply counter drop\n");
+    output.push_str("        icmp type redirect counter drop\n");
+    output.push_str("        icmp type address-mask-request counter drop\n");
+    output.push_str("        icmp type address-mask-reply counter drop\n");
+    output.push_str("        \n");
+
+    // Ping settings based on global settings
+    let wan_zones_preview = find_wan_zones(&config.zones);
+    let wan_zone_names_preview: Vec<&str> = wan_zones_preview.iter().map(|z| z.name.as_str()).collect();
+
+    if config.global_settings.ping_lan_enabled {
+        output.push_str("        # Allow ping from LAN zones\n");
+        for zone in &config.zones {
+            if !wan_zone_names_preview.contains(&zone.name.as_str()) && !zone.interfaces.is_empty() {
+                let ifaces = format_interface_set(&zone.interfaces);
+                output.push_str(&format!(
+                    "        iifname {} icmp type echo-request counter accept  # ping from {}\n",
+                    ifaces, zone.name
+                ));
+            }
+        }
+    }
+
+    if config.global_settings.ping_wan_enabled {
+        output.push_str("        # Allow ping from WAN zones\n");
+        for zone in &wan_zones_preview {
+            if !zone.interfaces.is_empty() {
+                let ifaces = format_interface_set(&zone.interfaces);
+                output.push_str(&format!(
+                    "        iifname {} icmp type echo-request counter accept  # ping from {}\n",
+                    ifaces, zone.name
+                ));
+            }
+        }
+    }
+
+    output.push_str("        # Allow essential ICMP types (required for proper network operation)\n");
+    output.push_str("        icmp type { destination-unreachable, time-exceeded, parameter-problem } counter accept\n");
     output.push_str("        \n");
     output.push_str("        # Priority 4: User Input Rules\n");
 
@@ -1108,6 +1529,34 @@ fn generate_preview(
         }
     }
 
+    // Hairpin DNAT rules
+    if config.global_settings.hairpin_nat_enabled {
+        // Collect LAN interfaces for hairpin preview
+        let mut lan_interfaces_preview: Vec<String> = Vec::new();
+        for zone in &config.zones {
+            if !wan_zone_names_preview.contains(&zone.name.as_str()) {
+                lan_interfaces_preview.extend(zone.interfaces.clone());
+            }
+        }
+
+        if !lan_interfaces_preview.is_empty() {
+            output.push_str("        \n");
+            output.push_str("        # Hairpin NAT (NAT reflection for LAN clients)\n");
+            for pf in &config.port_forwards {
+                if pf.enabled {
+                    let ifaces = format_interface_set(&lan_interfaces_preview);
+                    let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
+                    output.push_str(&format!(
+                        "        iifname {} {} dport {} fib daddr type local counter dnat to {}:{}  # {} hairpin\n",
+                        ifaces, pf.protocol, 
+                        format_port_range(pf.external_port_start, pf.external_port_end),
+                        pf.dest_ip, dest_port, pf.name
+                    ));
+                }
+            }
+        }
+    }
+
     output.push_str("    }\n\n");
 
     // Postrouting chain
@@ -1117,6 +1566,31 @@ fn generate_preview(
     output.push_str("    chain postrouting {\n");
     output.push_str("        type nat hook postrouting priority srcnat;\n");
     output.push_str("        \n");
+
+    // Hairpin SNAT rules
+    if config.global_settings.hairpin_nat_enabled {
+        let mut lan_interfaces_preview: Vec<String> = Vec::new();
+        for zone in &config.zones {
+            if !wan_zone_names_preview.contains(&zone.name.as_str()) {
+                lan_interfaces_preview.extend(zone.interfaces.clone());
+            }
+        }
+
+        if !lan_interfaces_preview.is_empty() {
+            output.push_str("        # Hairpin NAT SNAT (masquerade for hairpin traffic)\n");
+            for pf in &config.port_forwards {
+                if pf.enabled {
+                    let ifaces = format_interface_set(&lan_interfaces_preview);
+                    let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
+                    output.push_str(&format!(
+                        "        iifname {} {} ip daddr {} dport {} counter masquerade  # {} hairpin SNAT\n",
+                        ifaces, pf.protocol, pf.dest_ip, dest_port, pf.name
+                    ));
+                }
+            }
+            output.push_str("        \n");
+        }
+    }
 
     let wan_zones = find_wan_zones(&config.zones);
     for zone in wan_zones {
@@ -1386,6 +1860,7 @@ mod tests {
                 rate_limit: None,
             }],
             forward_rules: vec![],
+            global_settings: FirewallGlobalSettings::default(),
         }
     }
 

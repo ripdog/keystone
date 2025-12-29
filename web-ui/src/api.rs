@@ -552,9 +552,11 @@ pub async fn delete_bridge(token: &str, id: i64) -> Result<DeleteBridgeResponse,
 
 use keystone_core::{
     DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest, FirewallConfirmResponse,
-    FirewallConfig, FirewallConfigResponse, FirewallPreviewResponse, FirewallRollbackResponse,
+    FirewallConfig, FirewallConfigResponse, FirewallGlobalSettings,
+    FirewallGlobalSettingsResponse, FirewallPreviewResponse, FirewallRollbackResponse,
     FirewallStatusResponse, FirewallZone, FirewallZonesResponse, ForwardRule, InputRule,
-    PortForward, ZoneForwardPolicy,
+    PortForward, SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
+    ZoneForwardPolicy,
 };
 
 /// Fetch complete firewall configuration
@@ -1087,6 +1089,59 @@ pub async fn rollback_firewall(token: &str) -> Result<FirewallRollbackResponse, 
 pub async fn fetch_firewall_status(token: &str) -> Result<FirewallStatusResponse, String> {
     let response = gloo_net::http::Request::get("/api/firewall/status")
         .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Fetch firewall global settings
+pub async fn fetch_firewall_global_settings(token: &str) -> Result<FirewallGlobalSettings, String> {
+    let response = gloo_net::http::Request::get("/api/firewall/settings")
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        let data: FirewallGlobalSettingsResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(data.settings)
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save firewall global settings
+pub async fn save_firewall_global_settings(
+    token: &str,
+    settings: FirewallGlobalSettings,
+) -> Result<SaveFirewallGlobalSettingsResponse, String> {
+    let request = SaveFirewallGlobalSettingsRequest { settings };
+
+    let response = gloo_net::http::Request::post("/api/firewall/settings")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&request).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;

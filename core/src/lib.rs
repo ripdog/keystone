@@ -1359,6 +1359,30 @@ pub struct FirewallConfig {
     pub port_forwards: Vec<PortForward>,
     pub input_rules: Vec<InputRule>,
     pub forward_rules: Vec<ForwardRule>,
+    pub global_settings: FirewallGlobalSettings,
+}
+
+/// Global firewall settings (singleton)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FirewallGlobalSettings {
+    /// Allow responding to ping (ICMP echo-request) from WAN zones
+    /// Note: Dangerous ICMP types (timestamp, redirect, address-mask) are always blocked
+    pub ping_wan_enabled: bool,
+    /// Allow responding to ping from LAN zones
+    pub ping_lan_enabled: bool,
+    /// Enable hairpin NAT (NAT reflection) - allows LAN clients to access
+    /// port-forwarded services using the external/WAN IP address
+    pub hairpin_nat_enabled: bool,
+}
+
+impl Default for FirewallGlobalSettings {
+    fn default() -> Self {
+        Self {
+            ping_wan_enabled: false,   // Don't respond to WAN pings by default (stealth)
+            ping_lan_enabled: true,    // Respond to LAN pings (useful for diagnostics)
+            hairpin_nat_enabled: true, // Enable hairpin NAT by default (common expectation)
+        }
+    }
 }
 
 // ============================================================================
@@ -1570,6 +1594,41 @@ pub struct FirewallStatusResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirewallConfigResponse {
     pub config: FirewallConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallGlobalSettingsResponse {
+    pub settings: FirewallGlobalSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveFirewallGlobalSettingsRequest {
+    pub settings: FirewallGlobalSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveFirewallGlobalSettingsResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Firewall rule counters from nftables
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct FirewallRuleCounter {
+    /// Rule comment/name (used to identify the rule)
+    pub name: String,
+    /// Chain the rule belongs to (input, forward, etc.)
+    pub chain: String,
+    /// Number of packets matched
+    pub packets: u64,
+    /// Number of bytes matched
+    pub bytes: u64,
+}
+
+/// Response containing all firewall rule counters
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FirewallCountersResponse {
+    pub counters: Vec<FirewallRuleCounter>,
 }
 
 /// Complete system state representing the router configuration

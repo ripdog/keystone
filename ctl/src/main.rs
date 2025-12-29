@@ -13,10 +13,12 @@ use hyper_util::rt::TokioIo;
 use keystone_core::{
     ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
     DeleteUserResponse, FirewallAction, FirewallApplyRequest, FirewallApplyResponse,
-    FirewallConfirmRequest, FirewallConfirmResponse, FirewallPolicy, FirewallPreviewResponse,
+    FirewallConfirmRequest, FirewallConfirmResponse, FirewallGlobalSettings,
+    FirewallGlobalSettingsResponse, FirewallPolicy, FirewallPreviewResponse,
     FirewallRollbackResponse, FirewallStatusResponse, FirewallZone, FirewallZonesResponse,
     ForwardRule, ForwardRulesResponse, InputRule, InputRulesResponse, LoginRequest, LoginResponse,
     ManagedInterfacesResponse, PortForward, PortForwardsResponse, RuleProtocol,
+    SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
     SaveFirewallZoneRequest, SaveFirewallZoneResponse, SaveForwardRuleRequest,
     SaveForwardRuleResponse, SaveInputRuleRequest, SaveInputRuleResponse,
     SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SavePortForwardRequest,
@@ -263,6 +265,10 @@ enum FirewallCommands {
     #[command(subcommand)]
     ForwardRules(ForwardRulesCommands),
 
+    /// Manage global firewall settings
+    #[command(subcommand)]
+    Settings(SettingsCommands),
+
     /// Preview generated nftables ruleset
     Preview {
         /// JWT token for authentication
@@ -300,6 +306,35 @@ enum FirewallCommands {
         /// JWT token for authentication
         #[arg(short, long, env = "KEYSTONE_TOKEN")]
         token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SettingsCommands {
+    /// Show current global settings
+    Get {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Update global settings
+    Set {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Enable/disable ping from WAN (true/false)
+        #[arg(long)]
+        ping_wan: Option<bool>,
+
+        /// Enable/disable ping from LAN (true/false)
+        #[arg(long)]
+        ping_lan: Option<bool>,
+
+        /// Enable/disable hairpin NAT (true/false)
+        #[arg(long)]
+        hairpin_nat: Option<bool>,
     },
 }
 
@@ -1176,6 +1211,30 @@ mod pretty {
             println!("Status: No pending changes");
         }
     }
+
+    pub fn firewall_settings(response: &FirewallGlobalSettingsResponse) {
+        println!("=== Firewall Global Settings ===\n");
+        
+        println!("ICMP Settings:");
+        println!("  Ping from WAN: {}", if response.settings.ping_wan_enabled { "Enabled" } else { "Disabled" });
+        println!("  Ping from LAN: {}", if response.settings.ping_lan_enabled { "Enabled" } else { "Disabled" });
+        println!();
+        
+        println!("NAT Settings:");
+        println!("  Hairpin NAT: {}", if response.settings.hairpin_nat_enabled { "Enabled" } else { "Disabled" });
+        println!();
+        
+        println!("Note: Dangerous ICMP types (timestamp, redirect, address-mask) are always blocked.");
+    }
+
+    pub fn save_firewall_settings(response: &SaveFirewallGlobalSettingsResponse) {
+        if response.success {
+            println!("Settings saved successfully");
+            println!("\nNote: Apply firewall configuration for changes to take effect.");
+        } else {
+            println!("Error: {}", response.message);
+        }
+    }
 }
 
 fn output<T: Serialize>(json_mode: bool, value: &T, pretty_fn: impl FnOnce(&T)) {
@@ -1676,6 +1735,43 @@ async fn main() -> Result<()> {
                         .delete("/firewall/forward-rules", &request, Some(&token))
                         .await?;
                     output(cli.json, &response, pretty::delete_forward_rule);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            FirewallCommands::Settings(settings_cmd) => match settings_cmd {
+                SettingsCommands::Get { token } => {
+                    let token = get_token(token)?;
+                    let response: FirewallGlobalSettingsResponse =
+                        client.get("/firewall/settings", Some(&token)).await?;
+                    output(cli.json, &response, pretty::firewall_settings);
+                }
+
+                SettingsCommands::Set {
+                    token,
+                    ping_wan,
+                    ping_lan,
+                    hairpin_nat,
+                } => {
+                    let token = get_token(token)?;
+                    
+                    // First, fetch current settings
+                    let current: FirewallGlobalSettingsResponse =
+                        client.get("/firewall/settings", Some(&token)).await?;
+                    
+                    // Update with any provided values
+                    let settings = FirewallGlobalSettings {
+                        ping_wan_enabled: ping_wan.unwrap_or(current.settings.ping_wan_enabled),
+                        ping_lan_enabled: ping_lan.unwrap_or(current.settings.ping_lan_enabled),
+                        hairpin_nat_enabled: hairpin_nat.unwrap_or(current.settings.hairpin_nat_enabled),
+                    };
+                    
+                    let request = SaveFirewallGlobalSettingsRequest { settings };
+                    let response: SaveFirewallGlobalSettingsResponse =
+                        client.post("/firewall/settings", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_firewall_settings);
                     if !response.success {
                         std::process::exit(1);
                     }

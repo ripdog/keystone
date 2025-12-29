@@ -18,9 +18,10 @@ use axum::{
 };
 use keystone_core::{
     DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest, FirewallConfirmResponse,
-    FirewallConfigResponse, FirewallPreviewResponse, FirewallRollbackResponse,
-    FirewallStatusResponse, FirewallZone, FirewallZonesResponse, ForwardRule, InputRule,
-    PortForward, ReorderRulesRequest, ReorderRulesResponse, ZoneForwardPolicy,
+    FirewallConfigResponse, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
+    FirewallRollbackResponse, FirewallStatusResponse, FirewallZone, FirewallZonesResponse,
+    ForwardRule, InputRule, PortForward, ReorderRulesRequest, ReorderRulesResponse,
+    SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, ZoneForwardPolicy,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -63,6 +64,9 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
         .route("/firewall/port-forwards", get(get_port_forwards))
         .route("/firewall/port-forwards", post(save_port_forward))
         .route("/firewall/port-forwards/{id}", delete(delete_port_forward))
+        // Global settings
+        .route("/firewall/settings", get(get_global_settings))
+        .route("/firewall/settings", post(save_global_settings))
         // Config overview
         .route("/firewall/config", get(get_firewall_config))
         // Preview and Apply
@@ -398,6 +402,32 @@ async fn delete_port_forward(
         } else {
             "Port forward not found".to_string()
         },
+    }))
+}
+
+// ============================================================================
+// Global Settings Endpoints
+// ============================================================================
+
+/// GET /firewall/settings - Get global firewall settings
+async fn get_global_settings(
+    State(state): State<FirewallState>,
+) -> Result<Json<FirewallGlobalSettingsResponse>, AppError> {
+    info!("Getting firewall global settings");
+    let settings = state.db.get_firewall_global_settings().await?;
+    Ok(Json(FirewallGlobalSettingsResponse { settings }))
+}
+
+/// POST /firewall/settings - Save global firewall settings
+async fn save_global_settings(
+    State(state): State<FirewallState>,
+    Json(request): Json<SaveFirewallGlobalSettingsRequest>,
+) -> Result<Json<SaveFirewallGlobalSettingsResponse>, AppError> {
+    info!("Saving firewall global settings");
+    state.db.save_firewall_global_settings(&request.settings).await?;
+    Ok(Json(SaveFirewallGlobalSettingsResponse {
+        success: true,
+        message: "Settings saved".to_string(),
     }))
 }
 

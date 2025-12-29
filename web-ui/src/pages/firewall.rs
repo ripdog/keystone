@@ -10,8 +10,8 @@
 
 use crate::api;
 use keystone_core::{
-    FirewallAction, FirewallPolicy, FirewallZone, ForwardRule, InputRule, PortForward,
-    RuleProtocol, ZoneForwardPolicy,
+    FirewallAction, FirewallGlobalSettings, FirewallPolicy, FirewallZone, ForwardRule, InputRule,
+    PortForward, RuleProtocol, ZoneForwardPolicy,
 };
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
@@ -32,6 +32,7 @@ enum FirewallTab {
     PortForwards,
     InputRules,
     ForwardRules,
+    Settings,
     Preview,
 }
 
@@ -160,6 +161,12 @@ pub fn FirewallPage(
                         "Forward Rules"
                     </button>
                     <button
+                        class=move || tab_class(FirewallTab::Settings)
+                        on:click=move |_| active_tab.set(FirewallTab::Settings)
+                    >
+                        "Settings"
+                    </button>
+                    <button
                         class=move || tab_class(FirewallTab::Preview)
                         on:click=move |_| active_tab.set(FirewallTab::Preview)
                     >
@@ -176,6 +183,7 @@ pub fn FirewallPage(
                     FirewallTab::PortForwards => view! { <PortForwardsTab token=token reload_trigger=reload_trigger /> }.into_any(),
                     FirewallTab::InputRules => view! { <InputRulesTab token=token reload_trigger=reload_trigger /> }.into_any(),
                     FirewallTab::ForwardRules => view! { <ForwardRulesTab token=token reload_trigger=reload_trigger /> }.into_any(),
+                    FirewallTab::Settings => view! { <SettingsTab token=token /> }.into_any(),
                     FirewallTab::Preview => view! { <PreviewTab token=token reload_trigger=reload_trigger /> }.into_any(),
                 }}
             </div>
@@ -2142,6 +2150,169 @@ fn ForwardRuleEditor(
                     "Cancel"
                 </button>
             </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Settings Tab
+// ============================================================================
+
+#[component]
+fn SettingsTab(token: Signal<String>) -> impl IntoView {
+    let settings = LocalResource::new(move || {
+        let token = token.get();
+        async move { api::fetch_firewall_global_settings(&token).await }
+    });
+
+    // Local state for form
+    let ping_wan_enabled = RwSignal::new(false);
+    let ping_lan_enabled = RwSignal::new(true);
+    let hairpin_nat_enabled = RwSignal::new(true);
+
+    let status_message = RwSignal::new(String::new());
+    let is_saving = RwSignal::new(false);
+    let initialized = RwSignal::new(false);
+
+    // Initialize form values when settings load
+    Effect::new(move |_| {
+        if let Some(Ok(s)) = settings.get() {
+            if !initialized.get() {
+                ping_wan_enabled.set(s.ping_wan_enabled);
+                ping_lan_enabled.set(s.ping_lan_enabled);
+                hairpin_nat_enabled.set(s.hairpin_nat_enabled);
+                initialized.set(true);
+            }
+        }
+    });
+
+    let save_settings = move |_| {
+        let token = token.get();
+        let settings = FirewallGlobalSettings {
+            ping_wan_enabled: ping_wan_enabled.get(),
+            ping_lan_enabled: ping_lan_enabled.get(),
+            hairpin_nat_enabled: hairpin_nat_enabled.get(),
+        };
+
+        is_saving.set(true);
+        status_message.set(String::new());
+
+        leptos::task::spawn_local(async move {
+            match api::save_firewall_global_settings(&token, settings).await {
+                Ok(response) => {
+                    if response.success {
+                        status_message.set("Settings saved successfully".to_string());
+                    } else {
+                        status_message.set(format!("Error: {}", response.message));
+                    }
+                }
+                Err(e) => {
+                    status_message.set(format!("Error: {}", e));
+                }
+            }
+            is_saving.set(false);
+        });
+    };
+
+    view! {
+        <div class="space-y-6">
+            <h2 class="text-lg font-medium text-gray-200">"Global Firewall Settings"</h2>
+
+            <Suspense fallback=move || view! { <p class="text-gray-400">"Loading settings..."</p> }>
+                {move || {
+                    settings.get().map(|result| match result {
+                        Ok(_) => view! {
+                            <div class="space-y-6 max-w-xl">
+                                // ICMP / Ping Settings
+                                <div class="bg-gray-700/50 rounded-lg p-4 space-y-4">
+                                    <h3 class="text-md font-medium text-gray-300">"ICMP Settings"</h3>
+                                    <p class="text-sm text-gray-400">
+                                        "Control whether the router responds to ping requests. "
+                                        "Dangerous ICMP types (timestamp, redirect, address-mask) are always blocked."
+                                    </p>
+
+                                    <div class="space-y-3">
+                                        <label class="flex items-center gap-3 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                class="w-4 h-4 rounded bg-gray-600 border-gray-500 text-blue-500 focus:ring-blue-500"
+                                                prop:checked=move || ping_lan_enabled.get()
+                                                on:change=move |ev| ping_lan_enabled.set(event_target_checked(&ev))
+                                            />
+                                            <span class="text-gray-200">"Allow ping from LAN"</span>
+                                        </label>
+
+                                        <label class="flex items-center gap-3 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                class="w-4 h-4 rounded bg-gray-600 border-gray-500 text-blue-500 focus:ring-blue-500"
+                                                prop:checked=move || ping_wan_enabled.get()
+                                                on:change=move |ev| ping_wan_enabled.set(event_target_checked(&ev))
+                                            />
+                                            <span class="text-gray-200">"Allow ping from WAN"</span>
+                                            <span class="text-sm text-gray-500">"(less secure)"</span>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                // Hairpin NAT Settings
+                                <div class="bg-gray-700/50 rounded-lg p-4 space-y-4">
+                                    <h3 class="text-md font-medium text-gray-300">"NAT Settings"</h3>
+                                    <p class="text-sm text-gray-400">
+                                        "Hairpin NAT (NAT reflection) allows LAN clients to access port-forwarded "
+                                        "services using the router's external IP address."
+                                    </p>
+
+                                    <label class="flex items-center gap-3 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            class="w-4 h-4 rounded bg-gray-600 border-gray-500 text-blue-500 focus:ring-blue-500"
+                                            prop:checked=move || hairpin_nat_enabled.get()
+                                            on:change=move |ev| hairpin_nat_enabled.set(event_target_checked(&ev))
+                                        />
+                                        <span class="text-gray-200">"Enable Hairpin NAT"</span>
+                                    </label>
+                                </div>
+
+                                // Status message
+                                {move || {
+                                    let msg = status_message.get();
+                                    if msg.is_empty() {
+                                        view! { <div></div> }.into_any()
+                                    } else if msg.starts_with("Error") {
+                                        view! {
+                                            <div class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded">
+                                                {msg}
+                                            </div>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <div class="bg-green-900/50 border border-green-700 text-green-200 px-4 py-2 rounded">
+                                                {msg}
+                                            </div>
+                                        }.into_any()
+                                    }
+                                }}
+
+                                // Save button
+                                <div class="pt-2">
+                                    <button
+                                        class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded font-medium"
+                                        on:click=save_settings
+                                        disabled=move || is_saving.get()
+                                    >
+                                        {move || if is_saving.get() { "Saving..." } else { "Save Settings" }}
+                                    </button>
+                                    <p class="text-sm text-gray-500 mt-2">
+                                        "Note: Changes take effect when you apply the firewall configuration."
+                                    </p>
+                                </div>
+                            </div>
+                        }.into_any(),
+                        Err(e) => view! { <p class="text-red-400">"Error loading settings: "{e}</p> }.into_any(),
+                    })
+                }}
+            </Suspense>
         </div>
     }
 }

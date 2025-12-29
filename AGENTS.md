@@ -456,6 +456,33 @@ keystonectl users delete --id 2
 keystonectl interfaces list
 keystonectl interfaces save -f interfaces.json
 
+# Firewall management
+keystonectl firewall zones list
+keystonectl firewall zones add --name wan --interfaces eth0 --input-policy drop --forward-policy drop
+keystonectl firewall zones delete --id 1
+
+keystonectl firewall zone-forwards list
+keystonectl firewall zone-forwards add --source lan --dest wan --policy accept
+keystonectl firewall zone-forwards delete --id 1
+
+keystonectl firewall port-forwards list
+keystonectl firewall port-forwards add --name "SSH to server" --protocol tcp --external-port 2222 --dest-ip 192.168.1.100 --dest-port 22
+keystonectl firewall port-forwards delete --id 1
+
+keystonectl firewall input-rules list
+keystonectl firewall input-rules add --name "Allow SSH" --zone lan --protocol tcp --port 22 --action accept
+keystonectl firewall input-rules delete --id 1
+
+keystonectl firewall forward-rules list
+keystonectl firewall forward-rules add --name "Block traffic" --source-zone guest --dest-zone lan --action drop
+keystonectl firewall forward-rules delete --id 1
+
+keystonectl firewall preview    # Preview generated nftables ruleset
+keystonectl firewall apply      # Apply firewall (60s rollback timeout)
+keystonectl firewall confirm --session-id <id>  # Confirm changes
+keystonectl firewall rollback   # Rollback to previous config
+keystonectl firewall status     # Check pending confirmation status
+
 # Override saved token with -t flag or KEYSTONE_TOKEN env var
 export KEYSTONE_TOKEN="different_token"
 keystonectl state  # uses env var
@@ -509,5 +536,5 @@ keystonectl -s /custom/path/keystone.sock health
 
 ---
 
-**Last Updated**: 2025-12-26
+**Last Updated**: 2025-12-29
 **Maintained By**: Keystone Project Team

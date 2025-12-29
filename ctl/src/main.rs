@@ -2,6 +2,9 @@
 //!
 //! Communicates with the keystone-daemon over Unix socket at /run/keystone.sock
 
+// CLI argument enums naturally have variant size differences - this is expected
+#![allow(clippy::large_enum_variant)]
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use http_body_util::{BodyExt, Full};
@@ -9,9 +12,20 @@ use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use keystone_core::{
     ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
-    DeleteUserResponse, LoginRequest, LoginResponse, ManagedInterfacesResponse,
-    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SaveUserRequest,
-    SaveUserResponse, SystemState, UsersResponse,
+    DeleteUserResponse, FirewallAction, FirewallApplyRequest, FirewallApplyResponse,
+    FirewallConfirmRequest, FirewallConfirmResponse, FirewallPolicy, FirewallPreviewResponse,
+    FirewallRollbackResponse, FirewallStatusResponse, FirewallZone, FirewallZonesResponse,
+    ForwardRule, ForwardRulesResponse, InputRule, InputRulesResponse, LoginRequest, LoginResponse,
+    ManagedInterfacesResponse, PortForward, PortForwardsResponse, RuleProtocol,
+    SaveFirewallZoneRequest, SaveFirewallZoneResponse, SaveForwardRuleRequest,
+    SaveForwardRuleResponse, SaveInputRuleRequest, SaveInputRuleResponse,
+    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SavePortForwardRequest,
+    SavePortForwardResponse, SaveUserRequest, SaveUserResponse, SaveZoneForwardRequest,
+    SaveZoneForwardResponse, SystemState, UsersResponse, ZoneForwardPolicy, ZoneForwardsResponse,
+    DeleteFirewallZoneRequest, DeleteFirewallZoneResponse, DeleteZoneForwardRequest,
+    DeleteZoneForwardResponse, DeletePortForwardRequest, DeletePortForwardResponse,
+    DeleteInputRuleRequest, DeleteInputRuleResponse, DeleteForwardRuleRequest, 
+    DeleteForwardRuleResponse,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -137,6 +151,10 @@ enum Commands {
     /// Manage interfaces
     #[command(subcommand)]
     Interfaces(InterfacesCommands),
+
+    /// Manage firewall configuration
+    #[command(subcommand)]
+    Firewall(FirewallCommands),
 }
 
 #[derive(Subcommand)]
@@ -220,6 +238,396 @@ enum InterfacesCommands {
         /// Path to JSON config file (reads from stdin if not provided)
         #[arg(short, long)]
         file: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum FirewallCommands {
+    /// Manage firewall zones
+    #[command(subcommand)]
+    Zones(ZonesCommands),
+
+    /// Manage zone-to-zone forwarding policies
+    #[command(subcommand)]
+    ZoneForwards(ZoneForwardsCommands),
+
+    /// Manage port forwards (DNAT)
+    #[command(subcommand)]
+    PortForwards(PortForwardsCommands),
+
+    /// Manage input rules (traffic to router)
+    #[command(subcommand)]
+    InputRules(InputRulesCommands),
+
+    /// Manage forward rules (traffic between zones)
+    #[command(subcommand)]
+    ForwardRules(ForwardRulesCommands),
+
+    /// Preview generated nftables ruleset
+    Preview {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Apply firewall configuration (with 60s rollback timeout)
+    Apply {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Confirm applied changes (prevents rollback)
+    Confirm {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Session ID from apply command
+        #[arg(short, long)]
+        session_id: String,
+    },
+
+    /// Rollback to previous firewall configuration
+    Rollback {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Show firewall apply status
+    Status {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ZonesCommands {
+    /// List all firewall zones
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a new firewall zone
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Zone name
+        #[arg(short, long)]
+        name: String,
+
+        /// Description
+        #[arg(short, long)]
+        description: Option<String>,
+
+        /// Comma-separated list of interfaces
+        #[arg(short, long)]
+        interfaces: Option<String>,
+
+        /// Default input policy (accept or drop)
+        #[arg(long, default_value = "drop")]
+        input_policy: String,
+
+        /// Default forward policy (accept or drop)
+        #[arg(long, default_value = "drop")]
+        forward_policy: String,
+    },
+
+    /// Delete a firewall zone
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Zone ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum ZoneForwardsCommands {
+    /// List all zone-to-zone forwarding policies
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a zone forwarding policy
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Source zone name
+        #[arg(long)]
+        source: String,
+
+        /// Destination zone name
+        #[arg(long)]
+        dest: String,
+
+        /// Policy (accept, drop, or reject)
+        #[arg(long, default_value = "drop")]
+        policy: String,
+
+        /// Whether the policy is enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete a zone forwarding policy
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Policy ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum PortForwardsCommands {
+    /// List all port forwards
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a port forward
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Port forward name
+        #[arg(short, long)]
+        name: String,
+
+        /// Description
+        #[arg(short, long)]
+        description: Option<String>,
+
+        /// Protocol (tcp, udp, or tcp+udp)
+        #[arg(long, default_value = "tcp")]
+        protocol: String,
+
+        /// Source zone (optional)
+        #[arg(long)]
+        source_zone: Option<String>,
+
+        /// External port (or start of range)
+        #[arg(long)]
+        external_port: u16,
+
+        /// External port range end (optional)
+        #[arg(long)]
+        external_port_end: Option<u16>,
+
+        /// Source IP restriction (optional)
+        #[arg(long)]
+        source_ip: Option<String>,
+
+        /// Destination IP
+        #[arg(long)]
+        dest_ip: String,
+
+        /// Destination port (optional, defaults to external port)
+        #[arg(long)]
+        dest_port: Option<u16>,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete a port forward
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Port forward ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum InputRulesCommands {
+    /// List all input rules
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add an input rule
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Rule name
+        #[arg(short, long)]
+        name: String,
+
+        /// Description
+        #[arg(short, long)]
+        description: Option<String>,
+
+        /// Source zone (optional)
+        #[arg(long)]
+        zone: Option<String>,
+
+        /// Protocol (any, tcp, udp, icmp, icmpv6)
+        #[arg(long)]
+        protocol: Option<String>,
+
+        /// Port (or start of range)
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Port range end (optional)
+        #[arg(long)]
+        port_end: Option<u16>,
+
+        /// Source IP/CIDR (optional)
+        #[arg(long)]
+        source_ip: Option<String>,
+
+        /// Action (accept, drop, or reject)
+        #[arg(long, default_value = "accept")]
+        action: String,
+
+        /// Enable logging
+        #[arg(long, default_value = "false")]
+        log: bool,
+
+        /// Log prefix
+        #[arg(long)]
+        log_prefix: Option<String>,
+
+        /// Rate limit (e.g. "10/minute")
+        #[arg(long)]
+        rate_limit: Option<String>,
+
+        /// Position/priority (lower = evaluated first)
+        #[arg(long, default_value = "0")]
+        position: i32,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete an input rule
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Rule ID to delete
+        #[arg(long)]
+        id: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum ForwardRulesCommands {
+    /// List all forward rules
+    List {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Add a forward rule
+    Add {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Rule name
+        #[arg(short, long)]
+        name: String,
+
+        /// Description
+        #[arg(short, long)]
+        description: Option<String>,
+
+        /// Source zone (optional)
+        #[arg(long)]
+        source_zone: Option<String>,
+
+        /// Destination zone (optional)
+        #[arg(long)]
+        dest_zone: Option<String>,
+
+        /// Protocol (any, tcp, udp, icmp, icmpv6)
+        #[arg(long)]
+        protocol: Option<String>,
+
+        /// Destination port (or start of range)
+        #[arg(long)]
+        dest_port: Option<u16>,
+
+        /// Destination port range end (optional)
+        #[arg(long)]
+        dest_port_end: Option<u16>,
+
+        /// Source IP/CIDR (optional)
+        #[arg(long)]
+        source_ip: Option<String>,
+
+        /// Destination IP/CIDR (optional)
+        #[arg(long)]
+        dest_ip: Option<String>,
+
+        /// Action (accept, drop, or reject)
+        #[arg(long, default_value = "accept")]
+        action: String,
+
+        /// Enable logging
+        #[arg(long, default_value = "false")]
+        log: bool,
+
+        /// Log prefix
+        #[arg(long)]
+        log_prefix: Option<String>,
+
+        /// Rate limit (e.g. "10/minute")
+        #[arg(long)]
+        rate_limit: Option<String>,
+
+        /// Position/priority (lower = evaluated first)
+        #[arg(long, default_value = "0")]
+        position: i32,
+
+        /// Whether enabled
+        #[arg(long, default_value = "true")]
+        enabled: bool,
+    },
+
+    /// Delete a forward rule
+    Delete {
+        /// JWT token for authentication
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Rule ID to delete
+        #[arg(long)]
+        id: i64,
     },
 }
 
@@ -481,6 +889,293 @@ mod pretty {
             println!("✗ {}", response.message);
         }
     }
+
+    // ========================================================================
+    // Firewall pretty print functions
+    // ========================================================================
+
+    pub fn firewall_zones(response: &FirewallZonesResponse) {
+        println!("=== Firewall Zones ===\n");
+        if response.zones.is_empty() {
+            println!("No zones configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<15} {:<25} {:<10} {:<10}",
+            "ID", "Name", "Interfaces", "Input", "Forward"
+        );
+        println!("{}", "-".repeat(70));
+        for zone in &response.zones {
+            let id = zone.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let interfaces = if zone.interfaces.is_empty() {
+                "(none)".to_string()
+            } else {
+                zone.interfaces.join(", ")
+            };
+            println!(
+                "{:<6} {:<15} {:<25} {:<10} {:<10}",
+                id,
+                zone.name,
+                interfaces,
+                zone.default_input_policy,
+                zone.default_forward_policy
+            );
+        }
+    }
+
+    pub fn save_zone(response: &SaveFirewallZoneResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.zone_id {
+                println!("  Zone ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn delete_zone(response: &DeleteFirewallZoneResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn zone_forwards(response: &ZoneForwardsResponse) {
+        println!("=== Zone Forward Policies ===\n");
+        if response.forwards.is_empty() {
+            println!("No zone forwarding policies configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<15} {:<15} {:<10} {:<8}",
+            "ID", "Source", "Destination", "Policy", "Enabled"
+        );
+        println!("{}", "-".repeat(60));
+        for fwd in &response.forwards {
+            let id = fwd.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let enabled = if fwd.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<15} {:<15} {:<10} {:<8}",
+                id, fwd.source_zone, fwd.dest_zone, fwd.policy, enabled
+            );
+        }
+    }
+
+    pub fn save_zone_forward(response: &SaveZoneForwardResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.forward_id {
+                println!("  Forward Policy ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn delete_zone_forward(response: &DeleteZoneForwardResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn port_forwards(response: &PortForwardsResponse) {
+        println!("=== Port Forwards ===\n");
+        if response.port_forwards.is_empty() {
+            println!("No port forwards configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<20} {:<8} {:<12} {:<18} {:<8}",
+            "ID", "Name", "Proto", "Ext Port", "Destination", "Enabled"
+        );
+        println!("{}", "-".repeat(80));
+        for pf in &response.port_forwards {
+            let id = pf.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let ext_port = match pf.external_port_end {
+                Some(end) => format!("{}-{}", pf.external_port_start, end),
+                None => pf.external_port_start.to_string(),
+            };
+            let dest = match pf.dest_port {
+                Some(port) => format!("{}:{}", pf.dest_ip, port),
+                None => format!("{}:{}", pf.dest_ip, pf.external_port_start),
+            };
+            let enabled = if pf.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<20} {:<8} {:<12} {:<18} {:<8}",
+                id, pf.name, pf.protocol, ext_port, dest, enabled
+            );
+        }
+    }
+
+    pub fn save_port_forward(response: &SavePortForwardResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.port_forward_id {
+                println!("  Port Forward ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn delete_port_forward(response: &DeletePortForwardResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn input_rules(response: &InputRulesResponse) {
+        println!("=== Input Rules ===\n");
+        if response.rules.is_empty() {
+            println!("No input rules configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<4} {:<20} {:<10} {:<8} {:<12} {:<8} {:<8}",
+            "ID", "Pos", "Name", "Zone", "Proto", "Port", "Action", "Enabled"
+        );
+        println!("{}", "-".repeat(85));
+        for rule in &response.rules {
+            let id = rule.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let zone = rule.zone.as_deref().unwrap_or("any");
+            let proto = rule.protocol.map(|p| p.to_string()).unwrap_or("any".to_string());
+            let port = match (rule.port_start, rule.port_end) {
+                (None, _) => "any".to_string(),
+                (Some(start), None) => start.to_string(),
+                (Some(start), Some(end)) => format!("{}-{}", start, end),
+            };
+            let enabled = if rule.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<4} {:<20} {:<10} {:<8} {:<12} {:<8} {:<8}",
+                id, rule.position, rule.name, zone, proto, port, rule.action, enabled
+            );
+        }
+    }
+
+    pub fn save_input_rule(response: &SaveInputRuleResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.rule_id {
+                println!("  Input Rule ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn delete_input_rule(response: &DeleteInputRuleResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn forward_rules(response: &ForwardRulesResponse) {
+        println!("=== Forward Rules ===\n");
+        if response.rules.is_empty() {
+            println!("No forward rules configured.");
+            return;
+        }
+        println!(
+            "{:<6} {:<4} {:<18} {:<10} {:<10} {:<8} {:<10} {:<8} {:<8}",
+            "ID", "Pos", "Name", "Src Zone", "Dst Zone", "Proto", "Dst Port", "Action", "Enabled"
+        );
+        println!("{}", "-".repeat(95));
+        for rule in &response.rules {
+            let id = rule.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+            let src_zone = rule.source_zone.as_deref().unwrap_or("any");
+            let dst_zone = rule.dest_zone.as_deref().unwrap_or("any");
+            let proto = rule.protocol.map(|p| p.to_string()).unwrap_or("any".to_string());
+            let port = match (rule.dest_port_start, rule.dest_port_end) {
+                (None, _) => "any".to_string(),
+                (Some(start), None) => start.to_string(),
+                (Some(start), Some(end)) => format!("{}-{}", start, end),
+            };
+            let enabled = if rule.enabled { "yes" } else { "no" };
+            println!(
+                "{:<6} {:<4} {:<18} {:<10} {:<10} {:<8} {:<10} {:<8} {:<8}",
+                id, rule.position, rule.name, src_zone, dst_zone, proto, port, rule.action, enabled
+            );
+        }
+    }
+
+    pub fn save_forward_rule(response: &SaveForwardRuleResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if let Some(id) = response.rule_id {
+                println!("  Forward Rule ID: {}", id);
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn delete_forward_rule(response: &DeleteForwardRuleResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn firewall_preview(response: &FirewallPreviewResponse) {
+        println!("=== nftables Ruleset Preview ===\n");
+        println!("{}", response.ruleset);
+    }
+
+    pub fn firewall_apply(response: &FirewallApplyResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+            if response.pending_confirmation && response.session_id.is_some() {
+                let session_id = response.session_id.as_ref().unwrap();
+                println!("\n  Session ID: {}", session_id);
+                println!("  IMPORTANT: Confirm within 60 seconds or changes will be rolled back!");
+                println!("\n  To confirm: keystonectl firewall confirm --session-id {}", session_id);
+                println!("  To rollback: keystonectl firewall rollback");
+            }
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn firewall_confirm(response: &FirewallConfirmResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn firewall_rollback(response: &FirewallRollbackResponse) {
+        if response.success {
+            println!("✓ {}", response.message);
+        } else {
+            println!("✗ {}", response.message);
+        }
+    }
+
+    pub fn firewall_status(response: &FirewallStatusResponse) {
+        println!("=== Firewall Status ===\n");
+        if response.pending_confirmation {
+            println!("Status: PENDING CONFIRMATION");
+            if let Some(session_id) = &response.session_id {
+                println!("Session ID: {}", session_id);
+            }
+            if let Some(secs) = response.seconds_remaining {
+                println!("Time remaining: {} seconds", secs);
+                println!("\nChanges will be rolled back automatically if not confirmed!");
+            }
+        } else {
+            println!("Status: No pending changes");
+        }
+    }
 }
 
 fn output<T: Serialize>(json_mode: bool, value: &T, pretty_fn: impl FnOnce(&T)) {
@@ -672,6 +1367,365 @@ async fn main() -> Result<()> {
                 if !response.success {
                     std::process::exit(1);
                 }
+            }
+        },
+
+        Commands::Firewall(subcmd) => match subcmd {
+            FirewallCommands::Zones(zones_cmd) => match zones_cmd {
+                ZonesCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: FirewallZonesResponse =
+                        client.get("/firewall/zones", Some(&token)).await?;
+                    output(cli.json, &response, pretty::firewall_zones);
+                }
+
+                ZonesCommands::Add {
+                    token,
+                    name,
+                    description,
+                    interfaces,
+                    input_policy,
+                    forward_policy,
+                } => {
+                    let token = get_token(token)?;
+                    let interfaces_vec: Vec<String> = interfaces
+                        .map(|s| s.split(',').map(|i| i.trim().to_string()).collect())
+                        .unwrap_or_default();
+                    let input_policy: FirewallPolicy = input_policy
+                        .parse()
+                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let forward_policy: FirewallPolicy = forward_policy
+                        .parse()
+                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let zone = FirewallZone {
+                        id: None,
+                        name,
+                        description,
+                        interfaces: interfaces_vec,
+                        default_input_policy: input_policy,
+                        default_forward_policy: forward_policy,
+                    };
+                    let request = SaveFirewallZoneRequest { zone };
+                    let response: SaveFirewallZoneResponse =
+                        client.post("/firewall/zones", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::save_zone);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                ZonesCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteFirewallZoneRequest { id };
+                    let response: DeleteFirewallZoneResponse =
+                        client.delete("/firewall/zones", &request, Some(&token)).await?;
+                    output(cli.json, &response, pretty::delete_zone);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            FirewallCommands::ZoneForwards(zf_cmd) => match zf_cmd {
+                ZoneForwardsCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: ZoneForwardsResponse =
+                        client.get("/firewall/zone-forwards", Some(&token)).await?;
+                    output(cli.json, &response, pretty::zone_forwards);
+                }
+
+                ZoneForwardsCommands::Add {
+                    token,
+                    source,
+                    dest,
+                    policy,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    let policy: FirewallAction = policy
+                        .parse()
+                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let forward = ZoneForwardPolicy {
+                        id: None,
+                        source_zone: source,
+                        dest_zone: dest,
+                        policy,
+                        enabled,
+                    };
+                    let request = SaveZoneForwardRequest { forward };
+                    let response: SaveZoneForwardResponse = client
+                        .post("/firewall/zone-forwards", &request, Some(&token))
+                        .await?;
+                    output(cli.json, &response, pretty::save_zone_forward);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                ZoneForwardsCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteZoneForwardRequest { id };
+                    let response: DeleteZoneForwardResponse = client
+                        .delete("/firewall/zone-forwards", &request, Some(&token))
+                        .await?;
+                    output(cli.json, &response, pretty::delete_zone_forward);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            FirewallCommands::PortForwards(pf_cmd) => match pf_cmd {
+                PortForwardsCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: PortForwardsResponse =
+                        client.get("/firewall/port-forwards", Some(&token)).await?;
+                    output(cli.json, &response, pretty::port_forwards);
+                }
+
+                PortForwardsCommands::Add {
+                    token,
+                    name,
+                    description,
+                    protocol,
+                    source_zone,
+                    external_port,
+                    external_port_end,
+                    source_ip,
+                    dest_ip,
+                    dest_port,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    let protocol: RuleProtocol = protocol
+                        .parse()
+                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let port_forward = PortForward {
+                        id: None,
+                        name,
+                        description,
+                        enabled,
+                        protocol,
+                        source_zone,
+                        external_port_start: external_port,
+                        external_port_end,
+                        source_ip,
+                        dest_ip,
+                        dest_port,
+                    };
+                    let request = SavePortForwardRequest { port_forward };
+                    let response: SavePortForwardResponse = client
+                        .post("/firewall/port-forwards", &request, Some(&token))
+                        .await?;
+                    output(cli.json, &response, pretty::save_port_forward);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                PortForwardsCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeletePortForwardRequest { id };
+                    let response: DeletePortForwardResponse = client
+                        .delete("/firewall/port-forwards", &request, Some(&token))
+                        .await?;
+                    output(cli.json, &response, pretty::delete_port_forward);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            FirewallCommands::InputRules(ir_cmd) => match ir_cmd {
+                InputRulesCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: InputRulesResponse =
+                        client.get("/firewall/input-rules", Some(&token)).await?;
+                    output(cli.json, &response, pretty::input_rules);
+                }
+
+                InputRulesCommands::Add {
+                    token,
+                    name,
+                    description,
+                    zone,
+                    protocol,
+                    port,
+                    port_end,
+                    source_ip,
+                    action,
+                    log,
+                    log_prefix,
+                    rate_limit,
+                    position,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    let protocol: Option<RuleProtocol> = protocol
+                        .map(|p| p.parse())
+                        .transpose()
+                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let action: FirewallAction = action
+                        .parse()
+                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let rule = InputRule {
+                        id: None,
+                        name,
+                        description,
+                        enabled,
+                        position,
+                        zone,
+                        protocol,
+                        port_start: port,
+                        port_end,
+                        source_ip,
+                        action,
+                        log_enabled: log,
+                        log_prefix,
+                        rate_limit,
+                    };
+                    let request = SaveInputRuleRequest { rule };
+                    let response: SaveInputRuleResponse = client
+                        .post("/firewall/input-rules", &request, Some(&token))
+                        .await?;
+                    output(cli.json, &response, pretty::save_input_rule);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                InputRulesCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteInputRuleRequest { id };
+                    let response: DeleteInputRuleResponse = client
+                        .delete("/firewall/input-rules", &request, Some(&token))
+                        .await?;
+                    output(cli.json, &response, pretty::delete_input_rule);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            FirewallCommands::ForwardRules(fr_cmd) => match fr_cmd {
+                ForwardRulesCommands::List { token } => {
+                    let token = get_token(token)?;
+                    let response: ForwardRulesResponse =
+                        client.get("/firewall/forward-rules", Some(&token)).await?;
+                    output(cli.json, &response, pretty::forward_rules);
+                }
+
+                ForwardRulesCommands::Add {
+                    token,
+                    name,
+                    description,
+                    source_zone,
+                    dest_zone,
+                    protocol,
+                    dest_port,
+                    dest_port_end,
+                    source_ip,
+                    dest_ip,
+                    action,
+                    log,
+                    log_prefix,
+                    rate_limit,
+                    position,
+                    enabled,
+                } => {
+                    let token = get_token(token)?;
+                    let protocol: Option<RuleProtocol> = protocol
+                        .map(|p| p.parse())
+                        .transpose()
+                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let action: FirewallAction = action
+                        .parse()
+                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let rule = ForwardRule {
+                        id: None,
+                        name,
+                        description,
+                        enabled,
+                        position,
+                        source_zone,
+                        dest_zone,
+                        protocol,
+                        dest_port_start: dest_port,
+                        dest_port_end,
+                        source_ip,
+                        dest_ip,
+                        action,
+                        log_enabled: log,
+                        log_prefix,
+                        rate_limit,
+                    };
+                    let request = SaveForwardRuleRequest { rule };
+                    let response: SaveForwardRuleResponse = client
+                        .post("/firewall/forward-rules", &request, Some(&token))
+                        .await?;
+                    output(cli.json, &response, pretty::save_forward_rule);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+
+                ForwardRulesCommands::Delete { token, id } => {
+                    let token = get_token(token)?;
+                    let request = DeleteForwardRuleRequest { id };
+                    let response: DeleteForwardRuleResponse = client
+                        .delete("/firewall/forward-rules", &request, Some(&token))
+                        .await?;
+                    output(cli.json, &response, pretty::delete_forward_rule);
+                    if !response.success {
+                        std::process::exit(1);
+                    }
+                }
+            },
+
+            FirewallCommands::Preview { token } => {
+                let token = get_token(token)?;
+                let response: FirewallPreviewResponse =
+                    client.get("/firewall/preview", Some(&token)).await?;
+                output(cli.json, &response, pretty::firewall_preview);
+            }
+
+            FirewallCommands::Apply { token } => {
+                let token = get_token(token)?;
+                let request = FirewallApplyRequest {};
+                let response: FirewallApplyResponse =
+                    client.post("/firewall/apply", &request, Some(&token)).await?;
+                output(cli.json, &response, pretty::firewall_apply);
+                if !response.success {
+                    std::process::exit(1);
+                }
+            }
+
+            FirewallCommands::Confirm { token, session_id } => {
+                let token = get_token(token)?;
+                let request = FirewallConfirmRequest { session_id };
+                let response: FirewallConfirmResponse =
+                    client.post("/firewall/confirm", &request, Some(&token)).await?;
+                output(cli.json, &response, pretty::firewall_confirm);
+                if !response.success {
+                    std::process::exit(1);
+                }
+            }
+
+            FirewallCommands::Rollback { token } => {
+                let token = get_token(token)?;
+                let response: FirewallRollbackResponse =
+                    client.post("/firewall/rollback", &(), Some(&token)).await?;
+                output(cli.json, &response, pretty::firewall_rollback);
+                if !response.success {
+                    std::process::exit(1);
+                }
+            }
+
+            FirewallCommands::Status { token } => {
+                let token = get_token(token)?;
+                let response: FirewallStatusResponse =
+                    client.get("/firewall/status", Some(&token)).await?;
+                output(cli.json, &response, pretty::firewall_status);
             }
         },
     }

@@ -765,6 +765,13 @@ pub struct BridgeConfigsResponse {
     pub configs: Vec<BridgeConfig>,
 }
 
+/// Generic delete response (used by firewall endpoints)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 // ============================================================================
 // Complete Interface Configuration
 // ============================================================================

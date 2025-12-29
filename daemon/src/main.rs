@@ -108,7 +108,20 @@ async fn main() -> anyhow::Result<()> {
         std::fs::remove_file(SOCKET_PATH)?;
     }
 
-    let state = Arc::new(AppState::new(auth_manager, db));
+    // Create the firewall apply manager
+    let firewall_apply_manager = Arc::new(firewall::FirewallApplyManager::new(Arc::new(db.clone())));
+    
+    // Initialize firewall manager (check for pending rollbacks from previous run)
+    firewall_apply_manager.init().await?;
+    info!("Firewall apply manager initialized");
+
+    let state = Arc::new(AppState::new(auth_manager, db.clone()));
+    
+    // Create firewall state for firewall routes
+    let firewall_state = firewall::routes::FirewallState {
+        db: db.clone(),
+        apply_manager: firewall_apply_manager,
+    };
 
     // Build the router with protected routes
     let protected = Router::new()
@@ -134,6 +147,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/users", get(get_users))
         .route("/users", post(save_user))
         .route("/users", delete(delete_user))
+        // Merge firewall routes
+        .merge(firewall::routes::firewall_routes(firewall_state))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

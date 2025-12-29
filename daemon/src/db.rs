@@ -2228,6 +2228,172 @@ impl Database {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Get a single input rule by ID
+    pub async fn get_input_rule(&self, id: i64) -> Result<Option<keystone_core::InputRule>> {
+        use keystone_core::{FirewallAction, InputRule, RuleProtocol};
+
+        let row = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                Option<String>,
+                bool,
+                i64,
+                Option<i64>,
+                Option<String>,
+                Option<i64>,
+                Option<i64>,
+                Option<String>,
+                String,
+                bool,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
+            r#"SELECT id, name, description, enabled, position, zone_id, protocol,
+                      port_start, port_end, source_ip, action, log_enabled, log_prefix, rate_limit
+               FROM firewall_input_rules WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch input rule")?;
+
+        match row {
+            Some((
+                id,
+                name,
+                description,
+                enabled,
+                position,
+                zone_id,
+                protocol,
+                port_start,
+                port_end,
+                source_ip,
+                action,
+                log_enabled,
+                log_prefix,
+                rate_limit,
+            )) => {
+                // Get zone name if zone_id is set
+                let zone = if let Some(zid) = zone_id {
+                    self.get_firewall_zone(zid).await?.map(|z| z.name)
+                } else {
+                    None
+                };
+
+                Ok(Some(InputRule {
+                    id: Some(id),
+                    name,
+                    description,
+                    enabled,
+                    position: position as i32,
+                    zone,
+                    protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
+                    port_start: port_start.map(|p| p as u16),
+                    port_end: port_end.map(|p| p as u16),
+                    source_ip,
+                    action: action.parse().unwrap_or(FirewallAction::Accept),
+                    log_enabled,
+                    log_prefix,
+                    rate_limit,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Get a single forward rule by ID
+    pub async fn get_forward_rule(&self, id: i64) -> Result<Option<keystone_core::ForwardRule>> {
+        use keystone_core::{FirewallAction, ForwardRule, RuleProtocol};
+
+        let row = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                Option<String>,
+                bool,
+                i64,
+                Option<i64>,
+                Option<i64>,
+                Option<String>,
+                Option<i64>,
+                Option<i64>,
+                Option<String>,
+                Option<String>,
+                String,
+                bool,
+                Option<String>,
+                Option<String>,
+            ),
+        >(
+            r#"SELECT id, name, description, enabled, position, source_zone_id, dest_zone_id,
+                      protocol, dest_port_start, dest_port_end, source_ip, dest_ip,
+                      action, log_enabled, log_prefix, rate_limit
+               FROM firewall_forward_rules WHERE id = ?"#,
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch forward rule")?;
+
+        match row {
+            Some((
+                id,
+                name,
+                description,
+                enabled,
+                position,
+                source_zone_id,
+                dest_zone_id,
+                protocol,
+                dest_port_start,
+                dest_port_end,
+                source_ip,
+                dest_ip,
+                action,
+                log_enabled,
+                log_prefix,
+                rate_limit,
+            )) => {
+                // Get zone names
+                let source_zone = if let Some(zid) = source_zone_id {
+                    self.get_firewall_zone(zid).await?.map(|z| z.name)
+                } else {
+                    None
+                };
+                let dest_zone = if let Some(zid) = dest_zone_id {
+                    self.get_firewall_zone(zid).await?.map(|z| z.name)
+                } else {
+                    None
+                };
+
+                Ok(Some(ForwardRule {
+                    id: Some(id),
+                    name,
+                    description,
+                    enabled,
+                    position: position as i32,
+                    source_zone,
+                    dest_zone,
+                    protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
+                    dest_port_start: dest_port_start.map(|p| p as u16),
+                    dest_port_end: dest_port_end.map(|p| p as u16),
+                    source_ip,
+                    dest_ip,
+                    action: action.parse().unwrap_or(FirewallAction::Accept),
+                    log_enabled,
+                    log_prefix,
+                    rate_limit,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
     // ========================================================================
     // Firewall Config Aggregate Operations
     // ========================================================================

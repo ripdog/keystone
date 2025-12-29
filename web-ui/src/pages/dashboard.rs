@@ -78,11 +78,14 @@ pub fn DashboardPage(
     };
 
     // Start polling (and also do an immediate poll).
-    Effect::new(move |_| {
+    // The Effect stores the returned Interval, which is dropped when the component unmounts,
+    // stopping the polling automatically.
+    Effect::new(move |_prev_interval: Option<Option<Interval>>| {
         if auth_token.get().is_some() {
             do_poll();
-            let interval = Interval::new(1000, do_poll);
-            std::mem::forget(interval);
+            Some(Interval::new(1000, do_poll))
+        } else {
+            None
         }
     });
 

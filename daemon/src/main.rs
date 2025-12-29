@@ -6,6 +6,7 @@
 mod auth;
 mod config;
 mod db;
+mod firewall;
 mod networkd;
 
 use auth::AuthManager;

@@ -172,9 +172,9 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `VLAN=` | string | VLAN netdev to attach | P2 | ⬜ TODO |
-| `Id=` | u16 | VLAN ID (1-4094) | P2 | ⬜ TODO |
-| `Protocol=` | enum | 802.1q or 802.1ad | P3 | ⬜ TODO |
+| `VLAN=` | string | VLAN netdev to attach | P2 | ✅ DONE |
+| `Id=` | u16 | VLAN ID (1-4094) | P2 | ✅ DONE |
+| `Protocol=` | enum | 802.1q or 802.1ad | P3 | ✅ DONE |
 | `GVRP=` | bool | GVRP support | P3 | ⬜ TODO |
 | `MVRP=` | bool | MVRP support | P3 | ⬜ TODO |
 | `LooseBinding=` | bool | Loose binding mode | P3 | ⬜ TODO |
@@ -184,13 +184,13 @@ Advanced features for complex deployments.
 
 | Setting | Type | Description | Priority | Status |
 |---------|------|-------------|----------|--------|
-| `Bridge=` | string | Bridge to join | P2 | ⬜ TODO |
+| `Bridge=` | string | Bridge to join | P2 | ✅ DONE |
 | `HelloTimeSec=` | duration | STP hello time | P3 | ⬜ TODO |
 | `MaxAgeSec=` | duration | STP max age | P3 | ⬜ TODO |
-| `ForwardDelaySec=` | duration | STP forward delay | P3 | ⬜ TODO |
+| `ForwardDelaySec=` | duration | STP forward delay | P3 | ✅ DONE |
 | `AgeingTimeSec=` | duration | MAC aging time | P3 | ⬜ TODO |
 | `Priority=` | u16 | Bridge priority | P3 | ⬜ TODO |
-| `STP=` | bool | Enable STP | P2 | ⬜ TODO |
+| `STP=` | bool | Enable STP | P2 | ✅ DONE |
 | `VLANFiltering=` | bool | Enable VLAN filtering | P3 | ⬜ TODO |
 
 ### Bridge Port Settings (in [Bridge] section of .network)
@@ -805,14 +805,14 @@ pub struct InterfaceConfig {
 11. [x] Static lease management
 12. [x] Config file generation
 
-### Sprint 4: IPv6 ✅ PARTIALLY COMPLETE
-13. [ ] IPv6 RA settings (server-side for LAN)
+### Sprint 4: IPv6 ✅ COMPLETE
+13. [x] IPv6 RA settings (server-side for LAN)
 14. [x] DHCPv6 client settings
 15. [x] IPv6 prefix delegation hint
 
 ### Sprint 5: Advanced
-16. [ ] VLAN configuration
-17. [ ] Bridge configuration
+16. [x] VLAN configuration
+17. [x] Bridge configuration
 18. [ ] Routing policy rules
 
 ### Sprint 6: Enterprise
@@ -850,6 +850,6 @@ pub struct InterfaceConfig {
 
 ---
 
-*Last Updated: 2024-12-28*
+*Last Updated: 2024-12-29*
 *Author: AI Agent (Claude)*
-*Status: Sprints 1-3 Complete, Sprint 4 Partially Complete*
+*Status: Sprints 1-4 Complete, Sprint 5 VLAN & Bridge Complete*

@@ -21,11 +21,12 @@ use config::Config;
 use db::Database;
 use keystone_core::{
     ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
-    DeleteUserResponse, InterfaceConfigResponse, InterfaceConfigsResponse,
-    InterfaceCounters, KeystoneError, LoginRequest, LoginResponse,
+    DeleteUserResponse, DeleteVlanResponse, InterfaceConfigResponse,
+    InterfaceConfigsResponse, InterfaceCounters, KeystoneError, LoginRequest, LoginResponse,
     ManagedInterfacesResponse, SaveInterfaceConfigRequest, SaveInterfaceConfigResponse,
-    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
-    SaveUserRequest, SaveUserResponse, SystemState, UsersResponse,
+    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SaveUserRequest,
+    SaveUserResponse, SaveVlanConfigRequest, SaveVlanConfigResponse, SystemState, UsersResponse,
+    VlanConfigResponse, VlanConfigsResponse,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -121,6 +122,14 @@ async fn main() -> anyhow::Result<()> {
         .route("/interface-config/{name}", get(get_interface_config))
         .route("/interface-config", post(save_interface_config))
         .route("/interface-config/{name}", delete(delete_interface_config))
+        .route("/vlans", get(get_vlans))
+        .route("/vlans/{id}", get(get_vlan))
+        .route("/vlans", post(save_vlan))
+        .route("/vlans/{id}", delete(delete_vlan))
+        .route("/bridges", get(get_bridges))
+        .route("/bridges/{id}", get(get_bridge))
+        .route("/bridges", post(save_bridge))
+        .route("/bridges/{id}", delete(delete_bridge))
         .route("/users", get(get_users))
         .route("/users", post(save_user))
         .route("/users", delete(delete_user))
@@ -585,6 +594,195 @@ async fn delete_interface_config(
     }))
 }
 
+// ============================================================================
+// VLAN Configuration Endpoints
+// ============================================================================
+
+/// GET /vlans - Get all VLAN configurations
+async fn get_vlans(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<VlanConfigsResponse>, AppError> {
+    info!("Retrieving VLAN configurations");
+
+    let configs = state.db.get_all_vlans().await?;
+
+    Ok(Json(VlanConfigsResponse { configs }))
+}
+
+/// GET /vlans/:id - Get a single VLAN configuration
+async fn get_vlan(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<VlanConfigResponse>, AppError> {
+    info!("Retrieving VLAN config for id: {}", id);
+
+    let config = state.db.get_vlan(id).await?;
+
+    Ok(Json(VlanConfigResponse { config }))
+}
+
+/// POST /vlans - Save a VLAN configuration
+async fn save_vlan(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SaveVlanConfigRequest>,
+) -> Result<Json<SaveVlanConfigResponse>, AppError> {
+    info!("Saving VLAN config: {}", request.config.name);
+
+    // Validate VLAN name
+    if request.config.name.is_empty() {
+        return Ok(Json(SaveVlanConfigResponse {
+            success: false,
+            message: "VLAN name is required".to_string(),
+            vlan_id: None,
+        }));
+    }
+
+    // Validate parent interface
+    if request.config.parent_interface.is_empty() {
+        return Ok(Json(SaveVlanConfigResponse {
+            success: false,
+            message: "Parent interface is required".to_string(),
+            vlan_id: None,
+        }));
+    }
+
+    // Validate VLAN ID range
+    if request.config.vlan_id < 1 || request.config.vlan_id > 4094 {
+        return Ok(Json(SaveVlanConfigResponse {
+            success: false,
+            message: "VLAN ID must be between 1 and 4094".to_string(),
+            vlan_id: None,
+        }));
+    }
+
+    let vlan_id = state.db.save_vlan(&request.config).await?;
+
+    Ok(Json(SaveVlanConfigResponse {
+        success: true,
+        message: "VLAN configuration saved".to_string(),
+        vlan_id: Some(vlan_id),
+    }))
+}
+
+/// DELETE /vlans/:id - Delete a VLAN configuration
+async fn delete_vlan(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<DeleteVlanResponse>, AppError> {
+    info!("Deleting VLAN config id: {}", id);
+
+    // Get the VLAN first to know its name for file cleanup
+    let vlan = state.db.get_vlan(id).await?;
+
+    let deleted = state.db.delete_vlan(id).await?;
+
+    if deleted {
+        // Also remove the netdev file if it exists
+        if let Some(vlan) = vlan {
+            if let Err(e) = networkd::remove_vlan_netdev_file(&vlan.name) {
+                warn!("Failed to remove VLAN netdev file for {}: {}", vlan.name, e);
+            }
+        }
+    }
+
+    Ok(Json(DeleteVlanResponse {
+        success: deleted,
+        message: if deleted {
+            "VLAN configuration deleted".to_string()
+        } else {
+            "VLAN configuration not found".to_string()
+        },
+    }))
+}
+
+// ============================================================================
+// Bridge Configuration Handlers
+// ============================================================================
+
+/// GET /bridges - Get all bridge configurations
+async fn get_bridges(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<keystone_core::BridgeConfigsResponse>, AppError> {
+    info!("Getting all bridge configs");
+    let configs = state.db.get_all_bridges().await?;
+    Ok(Json(keystone_core::BridgeConfigsResponse { configs }))
+}
+
+/// GET /bridges/:id - Get a single bridge configuration
+async fn get_bridge(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<keystone_core::BridgeConfigResponse>, AppError> {
+    info!("Getting bridge config id: {}", id);
+    let config = state.db.get_bridge(id).await?;
+    Ok(Json(keystone_core::BridgeConfigResponse { config }))
+}
+
+/// POST /bridges - Save a bridge configuration
+async fn save_bridge(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<keystone_core::SaveBridgeConfigRequest>,
+) -> Result<Json<keystone_core::SaveBridgeConfigResponse>, AppError> {
+    info!("Saving bridge config: {:?}", request.config.name);
+
+    // Validate bridge name
+    if request.config.name.is_empty() {
+        return Ok(Json(keystone_core::SaveBridgeConfigResponse {
+            success: false,
+            message: "Bridge name cannot be empty".to_string(),
+            bridge_id: None,
+        }));
+    }
+
+    // Validate STP forward delay (2-30 seconds per IEEE 802.1D)
+    if request.config.stp && (request.config.stp_forward_delay < 2 || request.config.stp_forward_delay > 30) {
+        return Ok(Json(keystone_core::SaveBridgeConfigResponse {
+            success: false,
+            message: "STP forward delay must be between 2 and 30 seconds".to_string(),
+            bridge_id: None,
+        }));
+    }
+
+    let bridge_id = state.db.save_bridge(&request.config).await?;
+
+    Ok(Json(keystone_core::SaveBridgeConfigResponse {
+        success: true,
+        message: "Bridge configuration saved".to_string(),
+        bridge_id: Some(bridge_id),
+    }))
+}
+
+/// DELETE /bridges/:id - Delete a bridge configuration
+async fn delete_bridge(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<Json<keystone_core::DeleteBridgeResponse>, AppError> {
+    info!("Deleting bridge config id: {}", id);
+
+    // Get the bridge first to know its name for file cleanup
+    let bridge = state.db.get_bridge(id).await?;
+
+    let deleted = state.db.delete_bridge(id).await?;
+
+    if deleted {
+        // Also remove the netdev file if it exists
+        if let Some(bridge) = bridge {
+            if let Err(e) = networkd::remove_bridge_netdev_file(&bridge.name) {
+                warn!("Failed to remove bridge netdev file for {}: {}", bridge.name, e);
+            }
+        }
+    }
+
+    Ok(Json(keystone_core::DeleteBridgeResponse {
+        success: deleted,
+        message: if deleted {
+            "Bridge configuration deleted".to_string()
+        } else {
+            "Bridge configuration not found".to_string()
+        },
+    }))
+}
+
 /// GET /networkd-preview - Preview networkd files without writing to disk
 async fn networkd_preview(
     State(state): State<Arc<AppState>>,
@@ -594,8 +792,14 @@ async fn networkd_preview(
     // Get all interface configs from database
     let configs = state.db.get_interface_configs().await?;
 
-    // Generate preview for all enabled configs
-    let files: Vec<keystone_core::NetworkdFilePreview> = configs
+    // Get all VLAN configs from database
+    let vlans = state.db.get_all_vlans().await?;
+
+    // Get all bridge configs from database
+    let bridges = state.db.get_all_bridges().await?;
+
+    // Generate preview for all enabled interface configs
+    let mut files: Vec<keystone_core::NetworkdFilePreview> = configs
         .iter()
         .filter(|config| config.enabled)
         .map(|config| keystone_core::NetworkdFilePreview {
@@ -603,6 +807,29 @@ async fn networkd_preview(
             content: networkd::generate_network_file(config),
         })
         .collect();
+
+    // Add VLAN .netdev files
+    for vlan in &vlans {
+        files.push(keystone_core::NetworkdFilePreview {
+            filename: networkd::get_vlan_netdev_filename(&vlan.name),
+            content: networkd::generate_vlan_netdev_file(vlan),
+        });
+    }
+
+    // Add bridge .netdev files
+    for bridge in &bridges {
+        files.push(keystone_core::NetworkdFilePreview {
+            filename: networkd::get_bridge_netdev_filename(&bridge.name),
+            content: networkd::generate_bridge_netdev_file(bridge),
+        });
+        // Also add bridge member .network files
+        for member in &bridge.members {
+            files.push(keystone_core::NetworkdFilePreview {
+                filename: format!("50-keystone-{}.network", member),
+                content: networkd::generate_bridge_member_network_file(member, &bridge.name),
+            });
+        }
+    }
 
     Ok(Json(keystone_core::NetworkdPreviewResponse { files }))
 }
@@ -616,11 +843,19 @@ async fn apply_networkd(
     // Get all interface configs from database
     let configs = state.db.get_interface_configs().await?;
 
+    // Get all VLAN configs from database
+    let vlans = state.db.get_all_vlans().await?;
+
+    // Get all bridge configs from database
+    let bridges = state.db.get_all_bridges().await?;
+
     // Ensure networkd directory exists
     networkd::ensure_networkd_dir()?;
 
     // Write all enabled configs to disk
     let mut written = Vec::new();
+    let mut vlan_written = Vec::new();
+    let mut bridge_written = Vec::new();
     let mut errors = Vec::new();
 
     for config in &configs {
@@ -638,6 +873,34 @@ async fn apply_networkd(
             if let Err(e) = networkd::remove_network_file(&config.name) {
                 warn!("Failed to remove network file for disabled interface {}: {}", config.name, e);
             }
+        }
+    }
+
+    // Write all VLAN .netdev files
+    for vlan in &vlans {
+        match networkd::write_vlan_netdev_file(vlan) {
+            Ok(()) => {
+                vlan_written.push(vlan.name.clone());
+            }
+            Err(e) => {
+                errors.push(format!("VLAN {}: {}", vlan.name, e));
+            }
+        }
+    }
+
+    // Write all bridge .netdev files and member .network files
+    for bridge in &bridges {
+        match networkd::write_bridge_netdev_file(bridge) {
+            Ok(()) => {
+                bridge_written.push(bridge.name.clone());
+            }
+            Err(e) => {
+                errors.push(format!("Bridge {}: {}", bridge.name, e));
+            }
+        }
+        // Write bridge member .network files
+        if let Err(e) = networkd::write_bridge_member_network_files(bridge) {
+            errors.push(format!("Bridge {} members: {}", bridge.name, e));
         }
     }
 
@@ -660,7 +923,12 @@ async fn apply_networkd(
 
     Ok(Json(ApplyConfigResponse {
         success: true,
-        message: format!("Applied networkd config for {} interfaces", written.len()),
+        message: format!(
+            "Applied networkd config for {} interfaces, {} VLANs, and {} bridges",
+            written.len(),
+            vlan_written.len(),
+            bridge_written.len()
+        ),
         errors: Vec::new(),
     }))
 }

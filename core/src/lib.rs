@@ -564,6 +564,211 @@ impl Default for Ipv6RaConfig {
     }
 }
 
+// ============================================================================
+// VLAN Configuration Types
+// ============================================================================
+
+/// VLAN encapsulation protocol
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum VlanProtocol {
+    /// Standard 802.1Q VLAN tagging
+    #[default]
+    #[serde(rename = "802.1q")]
+    Dot1Q,
+    /// 802.1ad (QinQ/Provider Bridging)
+    #[serde(rename = "802.1ad")]
+    Dot1Ad,
+}
+
+impl std::fmt::Display for VlanProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VlanProtocol::Dot1Q => write!(f, "802.1q"),
+            VlanProtocol::Dot1Ad => write!(f, "802.1ad"),
+        }
+    }
+}
+
+impl std::str::FromStr for VlanProtocol {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "802.1q" | "dot1q" | "1q" => Ok(VlanProtocol::Dot1Q),
+            "802.1ad" | "dot1ad" | "1ad" | "qinq" => Ok(VlanProtocol::Dot1Ad),
+            _ => Err(format!("Unknown VLAN protocol: {}", s)),
+        }
+    }
+}
+
+/// VLAN configuration for virtual network interfaces
+/// 
+/// VLANs create virtual interfaces on top of physical interfaces,
+/// allowing traffic segmentation using IEEE 802.1Q tagging.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VlanConfig {
+    /// Database ID (None for new configs)
+    pub id: Option<i64>,
+    /// VLAN interface name (e.g., "vlan10", "eth0.10")
+    /// This becomes the netdev name in systemd-networkd
+    pub name: String,
+    /// Parent interface name (e.g., "eth0", "enp3s0")
+    pub parent_interface: String,
+    /// VLAN ID (1-4094)
+    pub vlan_id: u16,
+    /// VLAN protocol (802.1Q or 802.1ad for QinQ)
+    #[serde(default)]
+    pub protocol: VlanProtocol,
+    /// Optional description
+    pub description: Option<String>,
+    /// Associated InterfaceConfig ID for the VLAN's network settings
+    /// This links to an InterfaceConfig that configures the VLAN interface
+    pub interface_config_id: Option<i64>,
+}
+
+impl Default for VlanConfig {
+    fn default() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            parent_interface: String::new(),
+            vlan_id: 1,
+            protocol: VlanProtocol::default(),
+            description: None,
+            interface_config_id: None,
+        }
+    }
+}
+
+/// Request to save a VLAN configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveVlanConfigRequest {
+    pub config: VlanConfig,
+}
+
+/// Response from saving VLAN configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveVlanConfigResponse {
+    pub success: bool,
+    pub message: String,
+    pub vlan_id: Option<i64>,
+}
+
+/// Request to delete a VLAN
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteVlanRequest {
+    pub id: i64,
+}
+
+/// Response from deleting a VLAN
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteVlanResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Response containing a single VLAN configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VlanConfigResponse {
+    pub config: Option<VlanConfig>,
+}
+
+/// Response containing all VLAN configurations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VlanConfigsResponse {
+    pub configs: Vec<VlanConfig>,
+}
+
+// ============================================================================
+// Bridge Configuration
+// ============================================================================
+
+/// Bridge configuration for combining multiple interfaces
+/// 
+/// Bridges create virtual switches that connect multiple network interfaces,
+/// allowing them to communicate as if on the same physical network.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BridgeConfig {
+    /// Database ID (None for new configs)
+    pub id: Option<i64>,
+    /// Bridge interface name (e.g., "br0", "bridge-lan")
+    pub name: String,
+    /// Interfaces that are members of this bridge (e.g., ["eth1", "eth2"])
+    pub members: Vec<String>,
+    /// Enable Spanning Tree Protocol (STP)
+    #[serde(default)]
+    pub stp: bool,
+    /// STP forward delay in seconds (2-30, default 15)
+    #[serde(default = "default_stp_forward_delay")]
+    pub stp_forward_delay: u32,
+    /// Optional description
+    pub description: Option<String>,
+    /// Associated InterfaceConfig ID for the bridge's network settings
+    /// This links to an InterfaceConfig that configures the bridge interface
+    pub interface_config_id: Option<i64>,
+}
+
+fn default_stp_forward_delay() -> u32 {
+    15
+}
+
+impl Default for BridgeConfig {
+    fn default() -> Self {
+        Self {
+            id: None,
+            name: String::new(),
+            members: Vec::new(),
+            stp: false,
+            stp_forward_delay: 15,
+            description: None,
+            interface_config_id: None,
+        }
+    }
+}
+
+/// Request to save a bridge configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveBridgeConfigRequest {
+    pub config: BridgeConfig,
+}
+
+/// Response from saving bridge configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveBridgeConfigResponse {
+    pub success: bool,
+    pub message: String,
+    pub bridge_id: Option<i64>,
+}
+
+/// Request to delete a bridge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteBridgeRequest {
+    pub id: i64,
+}
+
+/// Response from deleting a bridge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteBridgeResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Response containing a single bridge configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeConfigResponse {
+    pub config: Option<BridgeConfig>,
+}
+
+/// Response containing all bridge configurations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeConfigsResponse {
+    pub configs: Vec<BridgeConfig>,
+}
+
+// ============================================================================
+// Complete Interface Configuration
+// ============================================================================
+
 /// Complete interface configuration for systemd-networkd
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InterfaceConfig {
@@ -635,6 +840,12 @@ pub struct InterfaceConfig {
     /// Common values: 1500 (default), 1492 (PPPoE), 9000 (jumbo frames)
     #[serde(default)]
     pub mtu: Option<u32>,
+    
+    // VLAN settings
+    /// VLANs attached to this interface (only populated when this is a parent interface)
+    /// This is used to generate VLAN= lines in the .network file
+    #[serde(default)]
+    pub vlans: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -667,6 +878,7 @@ impl Default for InterfaceConfig {
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
             mtu: None,
+            vlans: Vec::new(),
         }
     }
 }
@@ -1120,6 +1332,7 @@ mod tests {
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::Ipv4,
             mtu: Some(1492),
+            vlans: vec!["vlan10".to_string(), "vlan20".to_string()],
         };
 
         let json = serde_json::to_string(&config).unwrap();
@@ -1150,5 +1363,32 @@ mod tests {
         assert_eq!("both".parse::<IpMasqueradeMode>().unwrap(), IpMasqueradeMode::Both);
         assert_eq!("ipv4".parse::<IpMasqueradeMode>().unwrap(), IpMasqueradeMode::Ipv4);
         assert_eq!(IpMasqueradeMode::Both.to_string(), "both");
+    }
+
+    #[test]
+    fn test_vlan_config_serialization() {
+        let vlan = VlanConfig {
+            id: Some(1),
+            name: "vlan10".to_string(),
+            parent_interface: "eth0".to_string(),
+            vlan_id: 10,
+            protocol: VlanProtocol::Dot1Q,
+            description: Some("Management VLAN".to_string()),
+            interface_config_id: Some(5),
+        };
+
+        let json = serde_json::to_string(&vlan).unwrap();
+        let deserialized: VlanConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(vlan, deserialized);
+    }
+
+    #[test]
+    fn test_vlan_protocol_parsing() {
+        assert_eq!("802.1q".parse::<VlanProtocol>().unwrap(), VlanProtocol::Dot1Q);
+        assert_eq!("802.1ad".parse::<VlanProtocol>().unwrap(), VlanProtocol::Dot1Ad);
+        assert_eq!("qinq".parse::<VlanProtocol>().unwrap(), VlanProtocol::Dot1Ad);
+        assert_eq!(VlanProtocol::Dot1Q.to_string(), "802.1q");
+        assert_eq!(VlanProtocol::Dot1Ad.to_string(), "802.1ad");
     }
 }

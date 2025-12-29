@@ -215,6 +215,7 @@ pub fn InterfaceEditPage(
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
                             mtu: None,
+                            vlans: vec![],
                         };
                         set_dhcp_mode.set(DhcpMode::Ipv4);
                         set_config.set(Some(new_cfg));
@@ -444,6 +445,7 @@ pub fn InterfaceEditPage(
                     ip_forward: ip_forward.get(),
                     ip_masquerade: ip_masquerade.get(),
                     mtu: link_mtu.get().parse().ok(),
+                    vlans: current.vlans.clone(),
                 };
 
                 match api::save_interface_config(&token, updated.clone()).await {

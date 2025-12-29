@@ -1,11 +1,15 @@
 //! API client functions for communicating with the Keystone daemon
 
 use keystone_core::{
-    ApplyConfigResponse, DashboardResponse, DeleteUserRequest, DeleteUserResponse,
-    InterfaceConfig, InterfaceConfigResponse, InterfaceConfigsResponse, LoginRequest,
-    LoginResponse, ManagedInterface, ManagedInterfacesResponse, NetworkdPreviewResponse,
+    ApplyConfigResponse, BridgeConfig, BridgeConfigResponse, BridgeConfigsResponse,
+    DashboardResponse, DeleteBridgeResponse, DeleteUserRequest, DeleteUserResponse,
+    DeleteVlanResponse, InterfaceConfig, InterfaceConfigResponse, InterfaceConfigsResponse,
+    LoginRequest, LoginResponse, ManagedInterface, ManagedInterfacesResponse,
+    NetworkdPreviewResponse, SaveBridgeConfigRequest, SaveBridgeConfigResponse,
     SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
-    SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse, UserInfo, UsersResponse,
+    SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest,
+    SaveVlanConfigResponse, UserInfo, UsersResponse, VlanConfig, VlanConfigResponse,
+    VlanConfigsResponse,
 };
 
 /// Login to the API and get a JWT token
@@ -324,6 +328,205 @@ pub async fn apply_networkd(token: &str) -> Result<ApplyConfigResponse, String> 
 /// Get networkd configuration preview without writing to disk
 pub async fn get_networkd_preview(token: &str) -> Result<NetworkdPreviewResponse, String> {
     let response = gloo_net::http::Request::get("/api/networkd-preview")
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+// ============================================================================
+// VLAN Configuration API
+// ============================================================================
+
+/// Fetch all VLAN configurations
+pub async fn fetch_vlans(token: &str) -> Result<Vec<VlanConfig>, String> {
+    let response = gloo_net::http::Request::get("/api/vlans")
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        let data: VlanConfigsResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(data.configs)
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Fetch a single VLAN configuration by ID
+#[allow(dead_code)]
+pub async fn fetch_vlan(token: &str, id: i64) -> Result<Option<VlanConfig>, String> {
+    let response = gloo_net::http::Request::get(&format!("/api/vlans/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        let data: VlanConfigResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(data.config)
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save a VLAN configuration (create or update)
+pub async fn save_vlan(token: &str, config: VlanConfig) -> Result<SaveVlanConfigResponse, String> {
+    let request = SaveVlanConfigRequest { config };
+
+    let response = gloo_net::http::Request::post("/api/vlans")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&request).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Delete a VLAN configuration
+pub async fn delete_vlan(token: &str, id: i64) -> Result<DeleteVlanResponse, String> {
+    let response = gloo_net::http::Request::delete(&format!("/api/vlans/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+// ============================================================================
+// Bridge Configuration API
+// ============================================================================
+
+/// Fetch all bridge configurations
+pub async fn fetch_bridges(token: &str) -> Result<Vec<BridgeConfig>, String> {
+    let response = gloo_net::http::Request::get("/api/bridges")
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        let data: BridgeConfigsResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(data.configs)
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Fetch a single bridge configuration by ID
+pub async fn fetch_bridge(token: &str, id: i64) -> Result<Option<BridgeConfig>, String> {
+    let response = gloo_net::http::Request::get(&format!("/api/bridges/{}", id))
+        .header("Authorization", &format!("Bearer {}", token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        let data: BridgeConfigResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(data.config)
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Save a bridge configuration (create or update)
+pub async fn save_bridge(token: &str, config: BridgeConfig) -> Result<SaveBridgeConfigResponse, String> {
+    let request = SaveBridgeConfigRequest { config };
+
+    let response = gloo_net::http::Request::post("/api/bridges")
+        .header("Authorization", &format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&request).unwrap())
+        .map_err(|e| format!("Failed to build request: {}", e))?
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+
+    if response.ok() {
+        response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))
+    } else {
+        Err(format!("Server error: {}", response.status()))
+    }
+}
+
+/// Delete a bridge configuration
+pub async fn delete_bridge(token: &str, id: i64) -> Result<DeleteBridgeResponse, String> {
+    let response = gloo_net::http::Request::delete(&format!("/api/bridges/{}", id))
         .header("Authorization", &format!("Bearer {}", token))
         .send()
         .await

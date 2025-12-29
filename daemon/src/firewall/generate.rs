@@ -4,8 +4,8 @@
 //! nftables JSON format using the `nftables` crate.
 
 use keystone_core::{
-    FirewallAction, FirewallConfig, FirewallPolicy, FirewallZone, ForwardRule, InputRule,
-    PortForward, RuleProtocol, ZoneForwardPolicy,
+    FirewallAction, FirewallConfig, FirewallGlobalSettings, FirewallPolicy, FirewallZone,
+    ForwardRule, InputRule, PortForward, RuleProtocol, ZoneForwardPolicy,
 };
 use nftables::{
     batch::Batch,

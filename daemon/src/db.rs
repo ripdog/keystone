@@ -1056,34 +1056,7 @@ impl Database {
         Ok(vlans)
     }
 
-    /// Get VLANs for a specific parent interface
-    pub async fn get_vlans_for_interface(&self, parent_interface: &str) -> Result<Vec<VlanConfig>> {
-        let rows = sqlx::query_as::<_, (i64, String, String, i64, String, Option<String>, Option<i64>)>(
-            r#"SELECT id, name, parent_interface, vlan_id, protocol, description, interface_config_id
-               FROM vlan_config WHERE parent_interface = ? ORDER BY vlan_id"#
-        )
-        .bind(parent_interface)
-        .fetch_all(&self.pool)
-        .await
-        .context("Failed to fetch VLANs for interface")?;
-
-        let vlans = rows
-            .into_iter()
-            .map(|(id, name, parent_interface, vlan_id, protocol, description, interface_config_id)| {
-                VlanConfig {
-                    id: Some(id),
-                    name,
-                    parent_interface,
-                    vlan_id: vlan_id as u16,
-                    protocol: protocol.parse().unwrap_or_default(),
-                    description,
-                    interface_config_id,
-                }
-            })
-            .collect();
-
-        Ok(vlans)
-    }
+    
 
     /// Get a single VLAN by ID
     pub async fn get_vlan(&self, id: i64) -> Result<Option<VlanConfig>> {
@@ -1109,29 +1082,7 @@ impl Database {
         }))
     }
 
-    /// Get a VLAN by name
-    pub async fn get_vlan_by_name(&self, name: &str) -> Result<Option<VlanConfig>> {
-        let row = sqlx::query_as::<_, (i64, String, String, i64, String, Option<String>, Option<i64>)>(
-            r#"SELECT id, name, parent_interface, vlan_id, protocol, description, interface_config_id
-               FROM vlan_config WHERE name = ?"#
-        )
-        .bind(name)
-        .fetch_optional(&self.pool)
-        .await
-        .context("Failed to fetch VLAN by name")?;
-
-        Ok(row.map(|(id, name, parent_interface, vlan_id, protocol, description, interface_config_id)| {
-            VlanConfig {
-                id: Some(id),
-                name,
-                parent_interface,
-                vlan_id: vlan_id as u16,
-                protocol: protocol.parse().unwrap_or_default(),
-                description,
-                interface_config_id,
-            }
-        }))
-    }
+    
 
     /// Save (insert or update) a VLAN configuration
     pub async fn save_vlan(&self, config: &VlanConfig) -> Result<i64> {
@@ -1275,31 +1226,7 @@ impl Database {
         }))
     }
 
-    /// Get a bridge by name
-    pub async fn get_bridge_by_name(&self, name: &str) -> Result<Option<BridgeConfig>> {
-        let row = sqlx::query_as::<_, (i64, String, String, i64, i64, Option<String>, Option<i64>)>(
-            "SELECT id, name, members, stp, stp_forward_delay, description, interface_config_id 
-             FROM bridge_config 
-             WHERE name = ?"
-        )
-        .bind(name)
-        .fetch_optional(&self.pool)
-        .await
-        .context("Failed to fetch bridge by name")?;
-
-        Ok(row.map(|(id, name, members_json, stp, stp_forward_delay, description, interface_config_id)| {
-            let members: Vec<String> = serde_json::from_str(&members_json).unwrap_or_default();
-            BridgeConfig {
-                id: Some(id),
-                name,
-                members,
-                stp: stp != 0,
-                stp_forward_delay: stp_forward_delay as u32,
-                description,
-                interface_config_id,
-            }
-        }))
-    }
+    
 
     /// Save (insert or update) a bridge configuration
     pub async fn save_bridge(&self, config: &BridgeConfig) -> Result<i64> {

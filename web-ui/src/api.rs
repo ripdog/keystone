@@ -1,7 +1,7 @@
 //! API client functions for communicating with the Keystone daemon
 
 use keystone_core::{
-    ApplyConfigResponse, BridgeConfig, BridgeConfigResponse, BridgeConfigsResponse,
+    ApplyConfigResponse, BridgeConfig, BridgeConfigsResponse,
     DashboardResponse, DeleteBridgeResponse, DeleteUserRequest, DeleteUserResponse,
     DeleteVlanResponse, InterfaceConfig, InterfaceConfigResponse, InterfaceConfigsResponse,
     LoginRequest, LoginResponse, ManagedInterface, ManagedInterfacesResponse,
@@ -474,28 +474,7 @@ pub async fn fetch_bridges(token: &str) -> Result<Vec<BridgeConfig>, String> {
     }
 }
 
-/// Fetch a single bridge configuration by ID
-pub async fn fetch_bridge(token: &str, id: i64) -> Result<Option<BridgeConfig>, String> {
-    let response = gloo_net::http::Request::get(&format!("/api/bridges/{}", id))
-        .header("Authorization", &format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
 
-    if response.status() == 401 {
-        return Err("Unauthorized".to_string());
-    }
-
-    if response.ok() {
-        let data: BridgeConfigResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
-        Ok(data.config)
-    } else {
-        Err(format!("Server error: {}", response.status()))
-    }
-}
 
 /// Save a bridge configuration (create or update)
 pub async fn save_bridge(token: &str, config: BridgeConfig) -> Result<SaveBridgeConfigResponse, String> {
@@ -552,35 +531,13 @@ pub async fn delete_bridge(token: &str, id: i64) -> Result<DeleteBridgeResponse,
 
 use keystone_core::{
     DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest, FirewallConfirmResponse,
-    FirewallConfig, FirewallConfigResponse, FirewallGlobalSettings,
-    FirewallGlobalSettingsResponse, FirewallPreviewResponse, FirewallRollbackResponse,
-    FirewallStatusResponse, FirewallZone, FirewallZonesResponse, ForwardRule, InputRule,
+    FirewallGlobalSettings, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
+    FirewallRollbackResponse, FirewallZone, FirewallZonesResponse, ForwardRule, InputRule,
     PortForward, SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
     ZoneForwardPolicy,
 };
 
-/// Fetch complete firewall configuration
-pub async fn fetch_firewall_config(token: &str) -> Result<FirewallConfig, String> {
-    let response = gloo_net::http::Request::get("/api/firewall/config")
-        .header("Authorization", &format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
 
-    if response.status() == 401 {
-        return Err("Unauthorized".to_string());
-    }
-
-    if response.ok() {
-        let data: FirewallConfigResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
-        Ok(data.config)
-    } else {
-        Err(format!("Server error: {}", response.status()))
-    }
-}
 
 /// Fetch all firewall zones
 pub async fn fetch_firewall_zones(token: &str) -> Result<Vec<FirewallZone>, String> {
@@ -1085,27 +1042,7 @@ pub async fn rollback_firewall(token: &str) -> Result<FirewallRollbackResponse, 
     }
 }
 
-/// Get firewall apply status
-pub async fn fetch_firewall_status(token: &str) -> Result<FirewallStatusResponse, String> {
-    let response = gloo_net::http::Request::get("/api/firewall/status")
-        .header("Authorization", &format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
 
-    if response.status() == 401 {
-        return Err("Unauthorized".to_string());
-    }
-
-    if response.ok() {
-        response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))
-    } else {
-        Err(format!("Server error: {}", response.status()))
-    }
-}
 
 /// Fetch firewall global settings
 pub async fn fetch_firewall_global_settings(token: &str) -> Result<FirewallGlobalSettings, String> {

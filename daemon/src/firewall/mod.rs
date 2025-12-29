@@ -25,4 +25,3 @@ mod generate;
 pub mod routes;
 
 pub use apply::*;
-pub use generate::*;

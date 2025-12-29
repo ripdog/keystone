@@ -2,6 +2,7 @@
 //!
 //! Zone-based firewall UI with tabs for:
 //! - Zones (define interface groups with default policies)
+//! - Zone Forwards (zone-to-zone forwarding policies)
 //! - Port Forwards (DNAT rules)
 //! - Input Rules (traffic to the router)
 //! - Forward Rules (traffic through the router)
@@ -9,8 +10,8 @@
 
 use crate::api;
 use keystone_core::{
-    FirewallAction, FirewallPolicy, FirewallZone, PortForward,
-    RuleProtocol,
+    FirewallAction, FirewallPolicy, FirewallZone, ForwardRule, InputRule, PortForward,
+    RuleProtocol, ZoneForwardPolicy,
 };
 use leptos::prelude::*;
 use wasm_bindgen::prelude::*;
@@ -27,6 +28,7 @@ extern "C" {
 enum FirewallTab {
     #[default]
     Zones,
+    ZoneForwards,
     PortForwards,
     InputRules,
     ForwardRules,
@@ -126,12 +128,18 @@ pub fn FirewallPage(
 
             // Tab bar
             <div class="border-b border-gray-700">
-                <nav class="flex -mb-px">
+                <nav class="flex -mb-px flex-wrap">
                     <button
                         class=move || tab_class(FirewallTab::Zones)
                         on:click=move |_| active_tab.set(FirewallTab::Zones)
                     >
                         "Zones"
+                    </button>
+                    <button
+                        class=move || tab_class(FirewallTab::ZoneForwards)
+                        on:click=move |_| active_tab.set(FirewallTab::ZoneForwards)
+                    >
+                        "Zone Forwards"
                     </button>
                     <button
                         class=move || tab_class(FirewallTab::PortForwards)
@@ -164,6 +172,7 @@ pub fn FirewallPage(
             <div class="bg-gray-800 rounded-lg shadow-lg p-6">
                 {move || match active_tab.get() {
                     FirewallTab::Zones => view! { <ZonesTab token=token reload_trigger=reload_trigger /> }.into_any(),
+                    FirewallTab::ZoneForwards => view! { <ZoneForwardsTab token=token reload_trigger=reload_trigger /> }.into_any(),
                     FirewallTab::PortForwards => view! { <PortForwardsTab token=token reload_trigger=reload_trigger /> }.into_any(),
                     FirewallTab::InputRules => view! { <InputRulesTab token=token reload_trigger=reload_trigger /> }.into_any(),
                     FirewallTab::ForwardRules => view! { <ForwardRulesTab token=token reload_trigger=reload_trigger /> }.into_any(),
@@ -598,6 +607,289 @@ fn ZoneEditor(
 }
 
 // ============================================================================
+// Zone Forwards Tab (Zone-to-Zone Forwarding Policies)
+// ============================================================================
+
+#[component]
+fn ZoneForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoView {
+    let zone_forwards = LocalResource::new(move || {
+        let token = token.get();
+        let _ = reload_trigger.get();
+        async move { api::fetch_zone_forwards(&token).await }
+    });
+
+    let editing = RwSignal::new(Option::<ZoneForwardPolicy>::None);
+    let error_message = RwSignal::new(String::new());
+
+    view! {
+        <div class="space-y-4">
+            <div class="flex justify-between items-center">
+                <div>
+                    <h2 class="text-lg font-medium text-gray-200">"Zone-to-Zone Forwarding Policies"</h2>
+                    <p class="text-sm text-gray-400">"Define default forwarding behavior between zones"</p>
+                </div>
+                <button
+                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"
+                    on:click=move |_| {
+                        editing.set(Some(ZoneForwardPolicy {
+                            id: None,
+                            source_zone: String::new(),
+                            dest_zone: String::new(),
+                            policy: FirewallAction::Drop,
+                            enabled: true,
+                        }));
+                    }
+                >
+                    "+ Add Policy"
+                </button>
+            </div>
+
+            {move || {
+                let msg = error_message.get();
+                if msg.is_empty() {
+                    view! { <div></div> }.into_any()
+                } else {
+                    view! {
+                        <div class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">
+                            {msg}
+                        </div>
+                    }.into_any()
+                }
+            }}
+
+            // Editor
+            {move || {
+                if let Some(policy) = editing.get() {
+                    view! {
+                        <ZoneForwardEditor
+                            policy=policy
+                            token=token.get()
+                            on_save=move |_| {
+                                editing.set(None);
+                                reload_trigger.update(|v| *v += 1);
+                            }
+                            on_cancel=move || editing.set(None)
+                            error_message=error_message
+                        />
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
+
+            <Suspense fallback=move || view! { <p class="text-gray-400">"Loading..."</p> }>
+                {move || {
+                    zone_forwards.get().map(|result| match result {
+                        Ok(policies) => {
+                            let is_empty = policies.is_empty();
+                            let policies_for_loop = policies.clone();
+                            view! {
+                                <div class="overflow-x-auto">
+                                    <table class="w-full text-sm">
+                                        <thead class="text-gray-400 border-b border-gray-600">
+                                            <tr>
+                                                <th class="text-left py-2 px-2">"Source Zone"</th>
+                                                <th class="text-left py-2 px-2">"Dest Zone"</th>
+                                                <th class="text-left py-2 px-2">"Policy"</th>
+                                                <th class="text-left py-2 px-2">"Enabled"</th>
+                                                <th class="text-right py-2 px-2">"Actions"</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <For
+                                                each=move || policies_for_loop.clone()
+                                                key=|p| (p.id, p.source_zone.clone(), p.dest_zone.clone())
+                                                children=move |policy| {
+                                                    let policy_for_edit = policy.clone();
+                                                    let policy_for_delete = policy.clone();
+                                                    let token_del = token.get();
+                                                    view! {
+                                                        <tr class="border-b border-gray-700 hover:bg-gray-700/30">
+                                                            <td class="py-2 px-2 text-gray-200">{policy.source_zone.clone()}</td>
+                                                            <td class="py-2 px-2 text-gray-200">{policy.dest_zone.clone()}</td>
+                                                            <td class="py-2 px-2">
+                                                                <span class=match policy.policy {
+                                                                    FirewallAction::Accept => "text-green-400",
+                                                                    FirewallAction::Drop => "text-red-400",
+                                                                    FirewallAction::Reject => "text-yellow-400",
+                                                                }>
+                                                                    {format!("{:?}", policy.policy)}
+                                                                </span>
+                                                            </td>
+                                                            <td class="py-2 px-2">
+                                                                {if policy.enabled {
+                                                                    view! { <span class="text-green-400">"Yes"</span> }.into_any()
+                                                                } else {
+                                                                    view! { <span class="text-gray-500">"No"</span> }.into_any()
+                                                                }}
+                                                            </td>
+                                                            <td class="py-2 px-2 text-right whitespace-nowrap">
+                                                                <button
+                                                                    class="text-blue-400 hover:text-blue-300 mr-2"
+                                                                    on:click=move |_| editing.set(Some(policy_for_edit.clone()))
+                                                                >
+                                                                    "Edit"
+                                                                </button>
+                                                                <button
+                                                                    class="text-red-400 hover:text-red-300"
+                                                                    on:click=move |_| {
+                                                                        if let Some(id) = policy_for_delete.id {
+                                                                            let token = token_del.clone();
+                                                                            leptos::task::spawn_local(async move {
+                                                                                if let Err(e) = api::delete_zone_forward(&token, id).await {
+                                                                                    error_message.set(e);
+                                                                                } else {
+                                                                                    reload_trigger.update(|v| *v += 1);
+                                                                                }
+                                                                            });
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    "Delete"
+                                                                </button>
+                                                            </td>
+                                                        </tr>
+                                                    }
+                                                }
+                                            />
+                                        </tbody>
+                                    </table>
+                                    {if is_empty {
+                                        view! { <p class="text-gray-500 text-center py-4">"No zone forwarding policies configured"</p> }.into_any()
+                                    } else {
+                                        view! { <div></div> }.into_any()
+                                    }}
+                                </div>
+                            }.into_any()
+                        },
+                        Err(e) => view! { <p class="text-red-400">"Error: "{e}</p> }.into_any(),
+                    })
+                }}
+            </Suspense>
+        </div>
+    }
+}
+
+#[component]
+fn ZoneForwardEditor(
+    policy: ZoneForwardPolicy,
+    token: String,
+    on_save: impl Fn(()) + 'static,
+    on_cancel: impl Fn() + 'static,
+    error_message: RwSignal<String>,
+) -> impl IntoView {
+    let source_zone = RwSignal::new(policy.source_zone.clone());
+    let dest_zone = RwSignal::new(policy.dest_zone.clone());
+    let policy_action = RwSignal::new(policy.policy);
+    let enabled = RwSignal::new(policy.enabled);
+    let saving = RwSignal::new(false);
+    let policy_id = policy.id;
+
+    let on_save = std::rc::Rc::new(on_save);
+    let on_save_clone = on_save.clone();
+
+    let save = move |_| {
+        saving.set(true);
+        error_message.set(String::new());
+        
+        let token = token.clone();
+        let on_save = on_save_clone.clone();
+        
+        let new_policy = ZoneForwardPolicy {
+            id: policy_id,
+            source_zone: source_zone.get(),
+            dest_zone: dest_zone.get(),
+            policy: policy_action.get(),
+            enabled: enabled.get(),
+        };
+
+        leptos::task::spawn_local(async move {
+            match api::save_zone_forward(&token, new_policy).await {
+                Ok(_) => on_save(()),
+                Err(e) => error_message.set(e),
+            }
+            saving.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-gray-700 p-4 rounded-lg space-y-4">
+            <h3 class="text-lg font-medium text-gray-200">
+                {if policy_id.is_some() { "Edit Zone Forward Policy" } else { "New Zone Forward Policy" }}
+            </h3>
+
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Source Zone"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || source_zone.get()
+                        on:input=move |ev| source_zone.set(event_target_value(&ev))
+                        placeholder="e.g., lan"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Destination Zone"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || dest_zone.get()
+                        on:input=move |ev| dest_zone.set(event_target_value(&ev))
+                        placeholder="e.g., wan"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Policy"</label>
+                    <select
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        on:change=move |ev| {
+                            let value = event_target_value(&ev);
+                            policy_action.set(match value.as_str() {
+                                "accept" => FirewallAction::Accept,
+                                "reject" => FirewallAction::Reject,
+                                _ => FirewallAction::Drop,
+                            });
+                        }
+                    >
+                        <option value="accept" selected=move || policy_action.get() == FirewallAction::Accept>"Accept"</option>
+                        <option value="drop" selected=move || policy_action.get() == FirewallAction::Drop>"Drop"</option>
+                        <option value="reject" selected=move || policy_action.get() == FirewallAction::Reject>"Reject"</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2">
+                <input
+                    type="checkbox"
+                    id="zf-enabled"
+                    class="w-4 h-4"
+                    prop:checked=move || enabled.get()
+                    on:change=move |ev| enabled.set(event_target_checked(&ev))
+                />
+                <label for="zf-enabled" class="text-gray-300">"Enabled"</label>
+            </div>
+
+            <div class="flex gap-2 pt-2">
+                <button
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
+                    on:click=save
+                    disabled=move || saving.get() || source_zone.get().is_empty() || dest_zone.get().is_empty()
+                >
+                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                </button>
+                <button
+                    class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+                    on:click=move |_| on_cancel()
+                >
+                    "Cancel"
+                </button>
+            </div>
+        </div>
+    }
+}
+
+// ============================================================================
 // Port Forwards Tab
 // ============================================================================
 
@@ -928,13 +1220,49 @@ fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl I
         async move { api::fetch_input_rules(&token).await }
     });
 
+    let editing = RwSignal::new(Option::<InputRule>::None);
     let error_message = RwSignal::new(String::new());
+
+    // Create a new default rule
+    let new_rule = move || InputRule {
+        id: None,
+        name: String::new(),
+        description: None,
+        enabled: true,
+        position: 100,
+        zone: None,
+        protocol: None,
+        port_start: None,
+        port_end: None,
+        source_ip: None,
+        action: FirewallAction::Accept,
+        log_enabled: false,
+        log_prefix: None,
+        rate_limit: None,
+    };
+
+    // Clone a rule (create copy with no ID)
+    let clone_rule = move |rule: &InputRule| -> InputRule {
+        InputRule {
+            id: None,
+            name: format!("{} (copy)", rule.name),
+            ..rule.clone()
+        }
+    };
 
     view! {
         <div class="space-y-4">
             <div class="flex justify-between items-center">
-                <h2 class="text-lg font-medium text-gray-200">"Input Rules (Traffic to Router)"</h2>
-                <p class="text-sm text-gray-400">"Rules are evaluated in order; first match wins"</p>
+                <div>
+                    <h2 class="text-lg font-medium text-gray-200">"Input Rules (Traffic to Router)"</h2>
+                    <p class="text-sm text-gray-400">"Rules are evaluated in order; first match wins"</p>
+                </div>
+                <button
+                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"
+                    on:click=move |_| editing.set(Some(new_rule()))
+                >
+                    "+ Add Rule"
+                </button>
             </div>
 
             {move || {
@@ -947,6 +1275,26 @@ fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl I
                             {msg}
                         </div>
                     }.into_any()
+                }
+            }}
+
+            // Editor modal
+            {move || {
+                if let Some(rule) = editing.get() {
+                    view! {
+                        <InputRuleEditor
+                            rule=rule
+                            token=token.get()
+                            on_save=move |_| {
+                                editing.set(None);
+                                reload_trigger.update(|v| *v += 1);
+                            }
+                            on_cancel=move || editing.set(None)
+                            error_message=error_message
+                        />
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
                 }
             }}
 
@@ -968,15 +1316,20 @@ fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl I
                                                 <th class="text-left py-2 px-2">"Port"</th>
                                                 <th class="text-left py-2 px-2">"Action"</th>
                                                 <th class="text-left py-2 px-2">"Enabled"</th>
+                                                <th class="text-right py-2 px-2">"Actions"</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             <For
                                                 each=move || rules_for_loop.clone()
-                                                key=|r| (r.id, r.name.clone())
+                                                key=|r| (r.id, r.name.clone(), r.enabled)
                                                 children=move |rule| {
+                                                    let rule_for_edit = rule.clone();
+                                                    let rule_for_clone = rule.clone();
+                                                    let rule_for_delete = rule.clone();
+                                                    let token_del = token.get();
                                                     view! {
-                                                        <tr class="border-b border-gray-700">
+                                                        <tr class="border-b border-gray-700 hover:bg-gray-700/30">
                                                             <td class="py-2 px-2 text-gray-400">{rule.position}</td>
                                                             <td class="py-2 px-2 text-gray-200">{rule.name.clone()}</td>
                                                             <td class="py-2 px-2 text-gray-300">{rule.zone.clone().unwrap_or_else(|| "any".to_string())}</td>
@@ -1008,6 +1361,40 @@ fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl I
                                                                     view! { <span class="text-gray-500">"No"</span> }.into_any()
                                                                 }}
                                                             </td>
+                                                            <td class="py-2 px-2 text-right whitespace-nowrap">
+                                                                <button
+                                                                    class="text-blue-400 hover:text-blue-300 mr-2"
+                                                                    title="Edit"
+                                                                    on:click=move |_| editing.set(Some(rule_for_edit.clone()))
+                                                                >
+                                                                    "Edit"
+                                                                </button>
+                                                                <button
+                                                                    class="text-purple-400 hover:text-purple-300 mr-2"
+                                                                    title="Clone"
+                                                                    on:click=move |_| editing.set(Some(clone_rule(&rule_for_clone)))
+                                                                >
+                                                                    "Clone"
+                                                                </button>
+                                                                <button
+                                                                    class="text-red-400 hover:text-red-300"
+                                                                    title="Delete"
+                                                                    on:click=move |_| {
+                                                                        if let Some(id) = rule_for_delete.id {
+                                                                            let token = token_del.clone();
+                                                                            leptos::task::spawn_local(async move {
+                                                                                if let Err(e) = api::delete_input_rule(&token, id).await {
+                                                                                    error_message.set(e);
+                                                                                } else {
+                                                                                    reload_trigger.update(|v| *v += 1);
+                                                                                }
+                                                                            });
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    "Delete"
+                                                                </button>
+                                                            </td>
                                                         </tr>
                                                     }
                                                 }
@@ -1030,6 +1417,257 @@ fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl I
     }
 }
 
+#[component]
+fn InputRuleEditor(
+    rule: InputRule,
+    token: String,
+    on_save: impl Fn(()) + 'static,
+    on_cancel: impl Fn() + 'static,
+    error_message: RwSignal<String>,
+) -> impl IntoView {
+    let name = RwSignal::new(rule.name.clone());
+    let description = RwSignal::new(rule.description.clone().unwrap_or_default());
+    let enabled = RwSignal::new(rule.enabled);
+    let position = RwSignal::new(rule.position.to_string());
+    let zone = RwSignal::new(rule.zone.clone().unwrap_or_default());
+    let protocol = RwSignal::new(rule.protocol.clone());
+    let port_start = RwSignal::new(rule.port_start.map(|p| p.to_string()).unwrap_or_default());
+    let port_end = RwSignal::new(rule.port_end.map(|p| p.to_string()).unwrap_or_default());
+    let source_ip = RwSignal::new(rule.source_ip.clone().unwrap_or_default());
+    let action = RwSignal::new(rule.action);
+    let log_enabled = RwSignal::new(rule.log_enabled);
+    let log_prefix = RwSignal::new(rule.log_prefix.clone().unwrap_or_default());
+    let rate_limit = RwSignal::new(rule.rate_limit.clone().unwrap_or_default());
+    let saving = RwSignal::new(false);
+    let rule_id = rule.id;
+
+    let on_save = std::rc::Rc::new(on_save);
+    let on_save_clone = on_save.clone();
+
+    let save = move |_| {
+        saving.set(true);
+        error_message.set(String::new());
+        
+        let token = token.clone();
+        let on_save = on_save_clone.clone();
+        
+        let new_rule = InputRule {
+            id: rule_id,
+            name: name.get(),
+            description: if description.get().is_empty() { None } else { Some(description.get()) },
+            enabled: enabled.get(),
+            position: position.get().parse().unwrap_or(100),
+            zone: if zone.get().is_empty() { None } else { Some(zone.get()) },
+            protocol: protocol.get(),
+            port_start: port_start.get().parse().ok(),
+            port_end: port_end.get().parse().ok(),
+            source_ip: if source_ip.get().is_empty() { None } else { Some(source_ip.get()) },
+            action: action.get(),
+            log_enabled: log_enabled.get(),
+            log_prefix: if log_prefix.get().is_empty() { None } else { Some(log_prefix.get()) },
+            rate_limit: if rate_limit.get().is_empty() { None } else { Some(rate_limit.get()) },
+        };
+
+        leptos::task::spawn_local(async move {
+            match api::save_input_rule(&token, new_rule).await {
+                Ok(_) => on_save(()),
+                Err(e) => error_message.set(e),
+            }
+            saving.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-gray-700 p-4 rounded-lg space-y-4">
+            <h3 class="text-lg font-medium text-gray-200">
+                {if rule_id.is_some() { "Edit Input Rule" } else { "New Input Rule" }}
+            </h3>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Name"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || name.get()
+                        on:input=move |ev| name.set(event_target_value(&ev))
+                        placeholder="e.g., Allow SSH"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Position (lower = higher priority)"</label>
+                    <input
+                        type="number"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || position.get()
+                        on:input=move |ev| position.set(event_target_value(&ev))
+                    />
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">"Description"</label>
+                <input
+                    type="text"
+                    class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                    prop:value=move || description.get()
+                    on:input=move |ev| description.set(event_target_value(&ev))
+                    placeholder="Optional description"
+                />
+            </div>
+
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Zone (blank = any)"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || zone.get()
+                        on:input=move |ev| zone.set(event_target_value(&ev))
+                        placeholder="e.g., wan"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Protocol"</label>
+                    <select
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        on:change=move |ev| {
+                            let value = event_target_value(&ev);
+                            protocol.set(match value.as_str() {
+                                "tcp" => Some(RuleProtocol::Tcp),
+                                "udp" => Some(RuleProtocol::Udp),
+                                "tcp+udp" => Some(RuleProtocol::TcpUdp),
+                                "icmp" => Some(RuleProtocol::Icmp),
+                                "icmpv6" => Some(RuleProtocol::Icmpv6),
+                                _ => None,
+                            });
+                        }
+                    >
+                        <option value="" selected=move || protocol.get().is_none()>"Any"</option>
+                        <option value="tcp" selected=move || protocol.get() == Some(RuleProtocol::Tcp)>"TCP"</option>
+                        <option value="udp" selected=move || protocol.get() == Some(RuleProtocol::Udp)>"UDP"</option>
+                        <option value="tcp+udp" selected=move || protocol.get() == Some(RuleProtocol::TcpUdp)>"TCP+UDP"</option>
+                        <option value="icmp" selected=move || protocol.get() == Some(RuleProtocol::Icmp)>"ICMP"</option>
+                        <option value="icmpv6" selected=move || protocol.get() == Some(RuleProtocol::Icmpv6)>"ICMPv6"</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Action"</label>
+                    <select
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        on:change=move |ev| {
+                            let value = event_target_value(&ev);
+                            action.set(match value.as_str() {
+                                "accept" => FirewallAction::Accept,
+                                "reject" => FirewallAction::Reject,
+                                _ => FirewallAction::Drop,
+                            });
+                        }
+                    >
+                        <option value="accept" selected=move || action.get() == FirewallAction::Accept>"Accept"</option>
+                        <option value="drop" selected=move || action.get() == FirewallAction::Drop>"Drop"</option>
+                        <option value="reject" selected=move || action.get() == FirewallAction::Reject>"Reject"</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Port Start"</label>
+                    <input
+                        type="number"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || port_start.get()
+                        on:input=move |ev| port_start.set(event_target_value(&ev))
+                        placeholder="e.g., 22"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Port End (for range)"</label>
+                    <input
+                        type="number"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || port_end.get()
+                        on:input=move |ev| port_end.set(event_target_value(&ev))
+                        placeholder="blank = single port"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Source IP/CIDR"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || source_ip.get()
+                        on:input=move |ev| source_ip.set(event_target_value(&ev))
+                        placeholder="e.g., 192.168.1.0/24"
+                    />
+                </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Rate Limit"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || rate_limit.get()
+                        on:input=move |ev| rate_limit.set(event_target_value(&ev))
+                        placeholder="e.g., 10/minute"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Log Prefix"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || log_prefix.get()
+                        on:input=move |ev| log_prefix.set(event_target_value(&ev))
+                        placeholder="e.g., INPUT_DROP"
+                    />
+                </div>
+                <div class="flex items-end gap-4">
+                    <div class="flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            id="input-enabled"
+                            class="w-4 h-4"
+                            prop:checked=move || enabled.get()
+                            on:change=move |ev| enabled.set(event_target_checked(&ev))
+                        />
+                        <label for="input-enabled" class="text-gray-300">"Enabled"</label>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            id="input-log"
+                            class="w-4 h-4"
+                            prop:checked=move || log_enabled.get()
+                            on:change=move |ev| log_enabled.set(event_target_checked(&ev))
+                        />
+                        <label for="input-log" class="text-gray-300">"Log"</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex gap-2 pt-2">
+                <button
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
+                    on:click=save
+                    disabled=move || saving.get() || name.get().is_empty()
+                >
+                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                </button>
+                <button
+                    class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+                    on:click=move |_| on_cancel()
+                >
+                    "Cancel"
+                </button>
+            </div>
+        </div>
+    }
+}
+
 // ============================================================================
 // Forward Rules Tab
 // ============================================================================
@@ -1042,12 +1680,85 @@ fn ForwardRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
         async move { api::fetch_forward_rules(&token).await }
     });
 
+    let editing = RwSignal::new(Option::<ForwardRule>::None);
+    let error_message = RwSignal::new(String::new());
+
+    // Create a new default rule
+    let new_rule = move || ForwardRule {
+        id: None,
+        name: String::new(),
+        description: None,
+        enabled: true,
+        position: 100,
+        source_zone: None,
+        dest_zone: None,
+        protocol: None,
+        dest_port_start: None,
+        dest_port_end: None,
+        source_ip: None,
+        dest_ip: None,
+        action: FirewallAction::Accept,
+        log_enabled: false,
+        log_prefix: None,
+        rate_limit: None,
+    };
+
+    // Clone a rule
+    let clone_rule = move |rule: &ForwardRule| -> ForwardRule {
+        ForwardRule {
+            id: None,
+            name: format!("{} (copy)", rule.name),
+            ..rule.clone()
+        }
+    };
+
     view! {
         <div class="space-y-4">
             <div class="flex justify-between items-center">
-                <h2 class="text-lg font-medium text-gray-200">"Forward Rules (Traffic Through Router)"</h2>
-                <p class="text-sm text-gray-400">"Rules are evaluated in order; first match wins"</p>
+                <div>
+                    <h2 class="text-lg font-medium text-gray-200">"Forward Rules (Traffic Through Router)"</h2>
+                    <p class="text-sm text-gray-400">"Rules are evaluated in order; first match wins"</p>
+                </div>
+                <button
+                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"
+                    on:click=move |_| editing.set(Some(new_rule()))
+                >
+                    "+ Add Rule"
+                </button>
             </div>
+
+            {move || {
+                let msg = error_message.get();
+                if msg.is_empty() {
+                    view! { <div></div> }.into_any()
+                } else {
+                    view! {
+                        <div class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">
+                            {msg}
+                        </div>
+                    }.into_any()
+                }
+            }}
+
+            // Editor modal
+            {move || {
+                if let Some(rule) = editing.get() {
+                    view! {
+                        <ForwardRuleEditor
+                            rule=rule
+                            token=token.get()
+                            on_save=move |_| {
+                                editing.set(None);
+                                reload_trigger.update(|v| *v += 1);
+                            }
+                            on_cancel=move || editing.set(None)
+                            error_message=error_message
+                        />
+                    }.into_any()
+                } else {
+                    view! { <div></div> }.into_any()
+                }
+            }}
 
             <Suspense fallback=move || view! { <p class="text-gray-400">"Loading..."</p> }>
                 {move || {
@@ -1067,15 +1778,20 @@ fn ForwardRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                                                 <th class="text-left py-2 px-2">"Protocol"</th>
                                                 <th class="text-left py-2 px-2">"Action"</th>
                                                 <th class="text-left py-2 px-2">"Enabled"</th>
+                                                <th class="text-right py-2 px-2">"Actions"</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             <For
                                                 each=move || rules_for_loop.clone()
-                                                key=|r| (r.id, r.name.clone())
+                                                key=|r| (r.id, r.name.clone(), r.enabled)
                                                 children=move |rule| {
+                                                    let rule_for_edit = rule.clone();
+                                                    let rule_for_clone = rule.clone();
+                                                    let rule_for_delete = rule.clone();
+                                                    let token_del = token.get();
                                                     view! {
-                                                        <tr class="border-b border-gray-700">
+                                                        <tr class="border-b border-gray-700 hover:bg-gray-700/30">
                                                             <td class="py-2 px-2 text-gray-400">{rule.position}</td>
                                                             <td class="py-2 px-2 text-gray-200">{rule.name.clone()}</td>
                                                             <td class="py-2 px-2 text-gray-300">{rule.source_zone.clone().unwrap_or_else(|| "any".to_string())}</td>
@@ -1099,6 +1815,40 @@ fn ForwardRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                                                                     view! { <span class="text-gray-500">"No"</span> }.into_any()
                                                                 }}
                                                             </td>
+                                                            <td class="py-2 px-2 text-right whitespace-nowrap">
+                                                                <button
+                                                                    class="text-blue-400 hover:text-blue-300 mr-2"
+                                                                    title="Edit"
+                                                                    on:click=move |_| editing.set(Some(rule_for_edit.clone()))
+                                                                >
+                                                                    "Edit"
+                                                                </button>
+                                                                <button
+                                                                    class="text-purple-400 hover:text-purple-300 mr-2"
+                                                                    title="Clone"
+                                                                    on:click=move |_| editing.set(Some(clone_rule(&rule_for_clone)))
+                                                                >
+                                                                    "Clone"
+                                                                </button>
+                                                                <button
+                                                                    class="text-red-400 hover:text-red-300"
+                                                                    title="Delete"
+                                                                    on:click=move |_| {
+                                                                        if let Some(id) = rule_for_delete.id {
+                                                                            let token = token_del.clone();
+                                                                            leptos::task::spawn_local(async move {
+                                                                                if let Err(e) = api::delete_forward_rule(&token, id).await {
+                                                                                    error_message.set(e);
+                                                                                } else {
+                                                                                    reload_trigger.update(|v| *v += 1);
+                                                                                }
+                                                                            });
+                                                                        }
+                                                                    }
+                                                                >
+                                                                    "Delete"
+                                                                </button>
+                                                            </td>
                                                         </tr>
                                                     }
                                                 }
@@ -1117,6 +1867,281 @@ fn ForwardRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                     })
                 }}
             </Suspense>
+        </div>
+    }
+}
+
+#[component]
+fn ForwardRuleEditor(
+    rule: ForwardRule,
+    token: String,
+    on_save: impl Fn(()) + 'static,
+    on_cancel: impl Fn() + 'static,
+    error_message: RwSignal<String>,
+) -> impl IntoView {
+    let name = RwSignal::new(rule.name.clone());
+    let description = RwSignal::new(rule.description.clone().unwrap_or_default());
+    let enabled = RwSignal::new(rule.enabled);
+    let position = RwSignal::new(rule.position.to_string());
+    let source_zone = RwSignal::new(rule.source_zone.clone().unwrap_or_default());
+    let dest_zone = RwSignal::new(rule.dest_zone.clone().unwrap_or_default());
+    let protocol = RwSignal::new(rule.protocol.clone());
+    let dest_port_start = RwSignal::new(rule.dest_port_start.map(|p| p.to_string()).unwrap_or_default());
+    let dest_port_end = RwSignal::new(rule.dest_port_end.map(|p| p.to_string()).unwrap_or_default());
+    let source_ip = RwSignal::new(rule.source_ip.clone().unwrap_or_default());
+    let dest_ip = RwSignal::new(rule.dest_ip.clone().unwrap_or_default());
+    let action = RwSignal::new(rule.action);
+    let log_enabled = RwSignal::new(rule.log_enabled);
+    let log_prefix = RwSignal::new(rule.log_prefix.clone().unwrap_or_default());
+    let rate_limit = RwSignal::new(rule.rate_limit.clone().unwrap_or_default());
+    let saving = RwSignal::new(false);
+    let rule_id = rule.id;
+
+    let on_save = std::rc::Rc::new(on_save);
+    let on_save_clone = on_save.clone();
+
+    let save = move |_| {
+        saving.set(true);
+        error_message.set(String::new());
+        
+        let token = token.clone();
+        let on_save = on_save_clone.clone();
+        
+        let new_rule = ForwardRule {
+            id: rule_id,
+            name: name.get(),
+            description: if description.get().is_empty() { None } else { Some(description.get()) },
+            enabled: enabled.get(),
+            position: position.get().parse().unwrap_or(100),
+            source_zone: if source_zone.get().is_empty() { None } else { Some(source_zone.get()) },
+            dest_zone: if dest_zone.get().is_empty() { None } else { Some(dest_zone.get()) },
+            protocol: protocol.get(),
+            dest_port_start: dest_port_start.get().parse().ok(),
+            dest_port_end: dest_port_end.get().parse().ok(),
+            source_ip: if source_ip.get().is_empty() { None } else { Some(source_ip.get()) },
+            dest_ip: if dest_ip.get().is_empty() { None } else { Some(dest_ip.get()) },
+            action: action.get(),
+            log_enabled: log_enabled.get(),
+            log_prefix: if log_prefix.get().is_empty() { None } else { Some(log_prefix.get()) },
+            rate_limit: if rate_limit.get().is_empty() { None } else { Some(rate_limit.get()) },
+        };
+
+        leptos::task::spawn_local(async move {
+            match api::save_forward_rule(&token, new_rule).await {
+                Ok(_) => on_save(()),
+                Err(e) => error_message.set(e),
+            }
+            saving.set(false);
+        });
+    };
+
+    view! {
+        <div class="bg-gray-700 p-4 rounded-lg space-y-4">
+            <h3 class="text-lg font-medium text-gray-200">
+                {if rule_id.is_some() { "Edit Forward Rule" } else { "New Forward Rule" }}
+            </h3>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Name"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || name.get()
+                        on:input=move |ev| name.set(event_target_value(&ev))
+                        placeholder="e.g., Allow LAN to WAN"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Position (lower = higher priority)"</label>
+                    <input
+                        type="number"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || position.get()
+                        on:input=move |ev| position.set(event_target_value(&ev))
+                    />
+                </div>
+            </div>
+
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">"Description"</label>
+                <input
+                    type="text"
+                    class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                    prop:value=move || description.get()
+                    on:input=move |ev| description.set(event_target_value(&ev))
+                    placeholder="Optional description"
+                />
+            </div>
+
+            <div class="grid grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Source Zone"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || source_zone.get()
+                        on:input=move |ev| source_zone.set(event_target_value(&ev))
+                        placeholder="e.g., lan (blank=any)"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Dest Zone"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || dest_zone.get()
+                        on:input=move |ev| dest_zone.set(event_target_value(&ev))
+                        placeholder="e.g., wan (blank=any)"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Protocol"</label>
+                    <select
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        on:change=move |ev| {
+                            let value = event_target_value(&ev);
+                            protocol.set(match value.as_str() {
+                                "tcp" => Some(RuleProtocol::Tcp),
+                                "udp" => Some(RuleProtocol::Udp),
+                                "tcp+udp" => Some(RuleProtocol::TcpUdp),
+                                "icmp" => Some(RuleProtocol::Icmp),
+                                "icmpv6" => Some(RuleProtocol::Icmpv6),
+                                _ => None,
+                            });
+                        }
+                    >
+                        <option value="" selected=move || protocol.get().is_none()>"Any"</option>
+                        <option value="tcp" selected=move || protocol.get() == Some(RuleProtocol::Tcp)>"TCP"</option>
+                        <option value="udp" selected=move || protocol.get() == Some(RuleProtocol::Udp)>"UDP"</option>
+                        <option value="tcp+udp" selected=move || protocol.get() == Some(RuleProtocol::TcpUdp)>"TCP+UDP"</option>
+                        <option value="icmp" selected=move || protocol.get() == Some(RuleProtocol::Icmp)>"ICMP"</option>
+                        <option value="icmpv6" selected=move || protocol.get() == Some(RuleProtocol::Icmpv6)>"ICMPv6"</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Action"</label>
+                    <select
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        on:change=move |ev| {
+                            let value = event_target_value(&ev);
+                            action.set(match value.as_str() {
+                                "accept" => FirewallAction::Accept,
+                                "reject" => FirewallAction::Reject,
+                                _ => FirewallAction::Drop,
+                            });
+                        }
+                    >
+                        <option value="accept" selected=move || action.get() == FirewallAction::Accept>"Accept"</option>
+                        <option value="drop" selected=move || action.get() == FirewallAction::Drop>"Drop"</option>
+                        <option value="reject" selected=move || action.get() == FirewallAction::Reject>"Reject"</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-4 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Dest Port Start"</label>
+                    <input
+                        type="number"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || dest_port_start.get()
+                        on:input=move |ev| dest_port_start.set(event_target_value(&ev))
+                        placeholder="e.g., 80"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Dest Port End"</label>
+                    <input
+                        type="number"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || dest_port_end.get()
+                        on:input=move |ev| dest_port_end.set(event_target_value(&ev))
+                        placeholder="blank = single port"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Source IP/CIDR"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || source_ip.get()
+                        on:input=move |ev| source_ip.set(event_target_value(&ev))
+                        placeholder="blank = any"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Dest IP/CIDR"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || dest_ip.get()
+                        on:input=move |ev| dest_ip.set(event_target_value(&ev))
+                        placeholder="blank = any"
+                    />
+                </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Rate Limit"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || rate_limit.get()
+                        on:input=move |ev| rate_limit.set(event_target_value(&ev))
+                        placeholder="e.g., 10/minute"
+                    />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Log Prefix"</label>
+                    <input
+                        type="text"
+                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                        prop:value=move || log_prefix.get()
+                        on:input=move |ev| log_prefix.set(event_target_value(&ev))
+                        placeholder="e.g., FORWARD_DROP"
+                    />
+                </div>
+                <div class="flex items-end gap-4">
+                    <div class="flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            id="fwd-enabled"
+                            class="w-4 h-4"
+                            prop:checked=move || enabled.get()
+                            on:change=move |ev| enabled.set(event_target_checked(&ev))
+                        />
+                        <label for="fwd-enabled" class="text-gray-300">"Enabled"</label>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <input
+                            type="checkbox"
+                            id="fwd-log"
+                            class="w-4 h-4"
+                            prop:checked=move || log_enabled.get()
+                            on:change=move |ev| log_enabled.set(event_target_checked(&ev))
+                        />
+                        <label for="fwd-log" class="text-gray-300">"Log"</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex gap-2 pt-2">
+                <button
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
+                    on:click=save
+                    disabled=move || saving.get() || name.get().is_empty()
+                >
+                    {move || if saving.get() { "Saving..." } else { "Save" }}
+                </button>
+                <button
+                    class="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+                    on:click=move |_| on_cancel()
+                >
+                    "Cancel"
+                </button>
+            </div>
         </div>
     }
 }

@@ -20,6 +20,8 @@
 //! - `keystone` - Filter rules (input/forward/output chains)
 //! - `keystone_nat` - NAT rules (prerouting/postrouting chains)
 
+mod apply;
 mod generate;
 
+pub use apply::*;
 pub use generate::*;

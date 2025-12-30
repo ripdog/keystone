@@ -517,11 +517,24 @@ fn ZoneEditor(
 ) -> impl IntoView {
     let name = RwSignal::new(zone.name.clone());
     let description = RwSignal::new(zone.description.clone().unwrap_or_default());
-    let interfaces_str = RwSignal::new(zone.interfaces.join(", "));
+    let selected_interfaces = RwSignal::new(zone.interfaces.clone());
     let input_policy = RwSignal::new(zone.default_input_policy);
     let forward_policy = RwSignal::new(zone.default_forward_policy);
     let saving = RwSignal::new(false);
     let zone_id = zone.id;
+
+    // Fetch available interfaces
+    let token_for_fetch = token.clone();
+    let available_interfaces = LocalResource::new(move || {
+        let token = token_for_fetch.clone();
+        async move {
+            api::fetch_managed_interfaces(&token)
+                .await
+                .map(|interfaces| {
+                    interfaces.into_iter().map(|i| i.name).collect::<Vec<_>>()
+                })
+        }
+    });
 
     let on_save = std::rc::Rc::new(on_save);
     let on_save_clone = on_save.clone();
@@ -541,12 +554,7 @@ fn ZoneEditor(
             } else {
                 Some(description.get())
             },
-            interfaces: interfaces_str
-                .get()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect(),
+            interfaces: selected_interfaces.get(),
             default_input_policy: input_policy.get(),
             default_forward_policy: forward_policy.get(),
         };
@@ -597,16 +605,37 @@ fn ZoneEditor(
                 </div>
             </div>
 
-            <div>
-                <label class="block text-sm text-gray-400 mb-1">"Interfaces (comma-separated)"</label>
-                <input
-                    type="text"
-                    class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500 focus:border-blue-500 focus:outline-none"
-                    prop:value=move || interfaces_str.get()
-                    on:input=move |ev| interfaces_str.set(event_target_value(&ev))
-                    placeholder="e.g., eth0, eth1"
-                />
-            </div>
+            // Interface selector
+            <Suspense fallback=move || view! {
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">"Interfaces"</label>
+                    <p class="text-gray-500 text-sm">"Loading interfaces..."</p>
+                </div>
+            }>
+                {move || {
+                    available_interfaces.get().map(|result| match result {
+                        Ok(interfaces) => {
+                            let interfaces_signal = Signal::derive(move || interfaces.clone());
+                            view! {
+                                <crate::components::form_utils::MultiSearchSelector
+                                    available_items=interfaces_signal
+                                    selected_items=selected_interfaces
+                                    placeholder="Search and select interfaces..."
+                                    label="Interfaces"
+                                />
+                            }.into_any()
+                        },
+                        Err(e) => {
+                            view! {
+                                <div>
+                                    <label class="block text-sm text-gray-400 mb-1">"Interfaces"</label>
+                                    <p class="text-red-400 text-sm">"Error loading interfaces: "{e}</p>
+                                </div>
+                            }.into_any()
+                        }
+                    })
+                }}
+            </Suspense>
 
             <div class="grid grid-cols-2 gap-4">
                 <div>

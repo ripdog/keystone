@@ -2216,4 +2216,47 @@ impl Database {
         info!("Cleared rollback state");
         Ok(())
     }
+
+    // ========================================================================
+    // Global Application Settings Operations
+    // ========================================================================
+
+    /// Get global application settings
+    pub async fn get_global_settings(&self) -> Result<keystone_core::GlobalSettings> {
+        let row = sqlx::query_as::<_, (bool,)>(
+            "SELECT config_changes_disabled FROM global_settings WHERE id = 1",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .context("Failed to fetch global settings")?;
+
+        match row {
+            Some((config_changes_disabled,)) => Ok(keystone_core::GlobalSettings {
+                config_changes_disabled,
+            }),
+            None => {
+                // Return defaults if no row exists (shouldn't happen after migration)
+                Ok(keystone_core::GlobalSettings::default())
+            }
+        }
+    }
+
+    /// Save global application settings
+    pub async fn save_global_settings(&self, settings: &keystone_core::GlobalSettings) -> Result<()> {
+        sqlx::query(
+            r#"INSERT OR REPLACE INTO global_settings 
+               (id, config_changes_disabled, updated_at)
+               VALUES (1, ?, strftime('%s', 'now'))"#,
+        )
+        .bind(settings.config_changes_disabled)
+        .execute(&self.pool)
+        .await
+        .context("Failed to save global settings")?;
+
+        info!(
+            "Saved global settings: config_changes_disabled={}",
+            settings.config_changes_disabled
+        );
+        Ok(())
+    }
 }

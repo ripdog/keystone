@@ -47,6 +47,10 @@ libc = "0.2.178"
 nftables = "0.6"
 uuid = { version = "1.11", features = ["v4"] }
 
+# Systemd D-Bus client
+zbus_systemd = { version = "0.25900", features = ["systemd1"] }
+zbus = "5.3"
+
 [[bin]]
 name = "keystone-daemon"
 path = "src/main.rs"

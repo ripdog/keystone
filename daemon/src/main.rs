@@ -3,6 +3,7 @@
 //! The privileged backend service that runs as root and performs system mutations.
 //! Listens only on a Unix Domain Socket at /run/keystone.sock for security.
 
+mod apply;
 mod auth;
 mod caddy;
 mod config;
@@ -10,6 +11,7 @@ mod db;
 mod dnsmasq;
 mod firewall;
 mod networkd;
+mod systemd;
 
 use auth::AuthManager;
 use axum::{
@@ -24,8 +26,9 @@ use config::Config;
 use db::Database;
 use keystone_core::{
     ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
-    DeleteUserResponse, DeleteVlanResponse, InterfaceConfigResponse, InterfaceConfigsResponse,
-    InterfaceCounters, KeystoneError, LoginRequest, LoginResponse, ManagedInterfacesResponse,
+    DeleteUserResponse, DeleteVlanResponse, GlobalSettingsResponse, InterfaceConfigResponse,
+    InterfaceConfigsResponse, InterfaceCounters, KeystoneError, LoginRequest, LoginResponse,
+    ManagedInterfacesResponse, SaveGlobalSettingsRequest, SaveGlobalSettingsResponse,
     SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
     SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest,
     SaveVlanConfigResponse, SystemState, UsersResponse, VlanConfigResponse, VlanConfigsResponse,
@@ -45,11 +48,20 @@ const DEV_HTTP_ADDR: &str = "127.0.0.1:3000";
 struct AppState {
     auth: Arc<AuthManager>,
     db: Database,
+    firewall_manager: Arc<firewall::FirewallApplyManager>,
 }
 
 impl AppState {
-    fn new(auth: Arc<AuthManager>, db: Database) -> Self {
-        Self { auth, db }
+    fn new(
+        auth: Arc<AuthManager>,
+        db: Database,
+        firewall_manager: Arc<firewall::FirewallApplyManager>,
+    ) -> Self {
+        Self {
+            auth,
+            db,
+            firewall_manager,
+        }
     }
 }
 
@@ -120,7 +132,11 @@ async fn main() -> anyhow::Result<()> {
     firewall_apply_manager.init().await?;
     info!("Firewall apply manager initialized");
 
-    let state = Arc::new(AppState::new(auth_manager, db.clone()));
+    let state = Arc::new(AppState::new(
+        auth_manager,
+        db.clone(),
+        firewall_apply_manager.clone(),
+    ));
 
     // Create firewall state for firewall routes
     let firewall_state = firewall::routes::FirewallState {
@@ -140,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard", get(get_dashboard))
         .route("/apply", post(apply_config))
         .route("/apply-networkd", post(apply_networkd))
+        .route("/apply-all", post(apply_all))
         .route("/networkd-preview", get(networkd_preview))
         .route("/managed-interfaces", get(get_managed_interfaces))
         .route("/managed-interfaces", post(save_managed_interfaces))
@@ -158,12 +175,16 @@ async fn main() -> anyhow::Result<()> {
         .route("/users", get(get_users))
         .route("/users", post(save_user))
         .route("/users", delete(delete_user))
+        .route("/settings", get(get_global_settings))
+        .route("/settings", post(save_global_settings))
         // Merge firewall routes
         .merge(firewall::routes::firewall_routes(firewall_state))
         // Merge dnsmasq routes
         .merge(dnsmasq::routes::dnsmasq_routes(dnsmasq_state))
         // Merge Caddy routes
         .merge(caddy::routes::caddy_routes(caddy_state))
+        // Merge systemd routes
+        .merge(systemd::routes::systemd_routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -411,14 +432,6 @@ fn read_system_state() -> anyhow::Result<SystemState> {
         dev: Option<String>,
     }
 
-    let ip_forwarding_enabled = fs::read_to_string("/proc/sys/net/ipv4/ip_forward")
-        .ok()
-        .map(|s| s.trim() == "1")
-        .unwrap_or(false);
-
-    // We don't yet introspect nftables; keep this conservative.
-    let nat_enabled = false;
-
     let default_route_ifaces: HashSet<String> = Command::new("ip")
         .args(["-j", "route", "show", "default"])
         .output()
@@ -487,11 +500,7 @@ fn read_system_state() -> anyhow::Result<SystemState> {
     }
     interfaces.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Ok(SystemState {
-        interfaces,
-        ip_forwarding_enabled,
-        nat_enabled,
-    })
+    Ok(SystemState { interfaces })
 }
 
 /// POST /apply - Apply a new configuration
@@ -982,6 +991,17 @@ async fn apply_networkd(
     }))
 }
 
+/// POST /apply-all - Apply all configuration (networkd, firewall, dnsmasq, caddy)
+async fn apply_all(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<apply::ApplyAllResult>, AppError> {
+    info!("Applying all configuration");
+
+    let result = apply::apply_all(&state.db, &state.firewall_manager, None).await?;
+
+    Ok(Json(result))
+}
+
 /// GET /users - Get all users
 async fn get_users(State(state): State<Arc<AppState>>) -> Result<Json<UsersResponse>, AppError> {
     info!("Retrieving users");
@@ -1089,6 +1109,43 @@ async fn delete_user(
     Ok(Json(DeleteUserResponse {
         success: true,
         message: "User deleted successfully".to_string(),
+    }))
+}
+
+// ============================================================================
+// Global Settings Endpoints
+// ============================================================================
+
+/// GET /settings - Get global application settings
+async fn get_global_settings(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<GlobalSettingsResponse>, AppError> {
+    info!("Retrieving global settings");
+
+    let settings = state.db.get_global_settings().await?;
+
+    Ok(Json(GlobalSettingsResponse { settings }))
+}
+
+/// POST /settings - Save global application settings
+async fn save_global_settings(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<SaveGlobalSettingsRequest>,
+) -> Result<Json<SaveGlobalSettingsResponse>, AppError> {
+    info!(
+        "Saving global settings: config_changes_disabled={}",
+        request.settings.config_changes_disabled
+    );
+
+    state.db.save_global_settings(&request.settings).await?;
+
+    Ok(Json(SaveGlobalSettingsResponse {
+        success: true,
+        message: if request.settings.config_changes_disabled {
+            "Configuration lock enabled".to_string()
+        } else {
+            "Configuration lock disabled".to_string()
+        },
     }))
 }
 

@@ -10,6 +10,7 @@
 //! - `firewall` - Firewall zones, rules, and settings
 //! - `dnsmasq` - DNS/DHCP configuration
 //! - `caddy` - Caddy reverse proxy configuration
+//! - `services` - Systemd service management
 //!
 //! All functions use the shared `client` module for HTTP requests,
 //! which provides centralized error handling and authentication.
@@ -22,6 +23,8 @@ pub mod dashboard;
 pub mod dnsmasq;
 pub mod firewall;
 pub mod interfaces;
+pub mod services;
+pub mod settings;
 pub mod users;
 pub mod vlans;
 
@@ -35,5 +38,7 @@ pub use dashboard::*;
 pub use dnsmasq::*;
 pub use firewall::*;
 pub use interfaces::*;
+pub use services::*;
+pub use settings::*;
 pub use users::*;
 pub use vlans::*;

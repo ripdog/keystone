@@ -1,6 +1,6 @@
 //! System settings page
 
-use keystone_core::{SaveUserRequest, SystemState, UserInfo};
+use keystone_core::{GlobalSettings, SaveUserRequest, UserInfo};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -8,7 +8,6 @@ use crate::api;
 
 #[component]
 pub fn SettingsPage(
-    state: ReadSignal<SystemState>,
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
@@ -20,10 +19,13 @@ pub fn SettingsPage(
     let (modal_password, set_modal_password) = signal(String::new());
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
     let (success_msg, set_success_msg) = signal(Option::<String>::None);
+    let (global_settings, set_global_settings) = signal(GlobalSettings::default());
+    let (settings_loading, set_settings_loading) = signal(true);
 
-    // Load users on mount
+    // Load users and global settings on mount
     Effect::new(move || {
         if let Some(token) = auth_token.get() {
+            let token_clone = token.clone();
             spawn_local(async move {
                 match api::fetch_users(&token).await {
                     Ok(users_list) => set_users.set(users_list),
@@ -33,6 +35,18 @@ pub fn SettingsPage(
                         }
                     }
                 }
+            });
+            spawn_local(async move {
+                set_settings_loading.set(true);
+                match api::fetch_global_settings(&token_clone).await {
+                    Ok(settings) => set_global_settings.set(settings),
+                    Err(e) => {
+                        if e.contains("Unauthorized") {
+                            on_unauthorized.run(());
+                        }
+                    }
+                }
+                set_settings_loading.set(false);
             });
         }
     });
@@ -231,82 +245,59 @@ pub fn SettingsPage(
             </div>
 
             <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
-                <h2 class="text-lg font-medium text-white mb-4">"Network Settings"</h2>
+                <h2 class="text-lg font-medium text-white mb-4">"Configuration Lock"</h2>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Show when=move || settings_loading.get()>
+                    <p class="text-gray-400">"Loading settings..."</p>
+                </Show>
+
+                <Show when=move || !settings_loading.get()>
                     <div class="bg-gray-700 rounded p-4">
-                        <h3 class="font-medium mb-2">"IP Forwarding"</h3>
                         <label class="flex items-center cursor-pointer">
                             <input
                                 type="checkbox"
-                                prop:checked=move || state.get().ip_forwarding_enabled
+                                prop:checked=move || global_settings.get().config_changes_disabled
+                                on:change=move |ev| {
+                                    let checked = event_target_checked(&ev);
+                                    let token = match auth_token.get() {
+                                        Some(t) => t,
+                                        None => return,
+                                    };
+                                    let mut settings = global_settings.get();
+                                    settings.config_changes_disabled = checked;
+                                    set_global_settings.set(settings.clone());
+                                    spawn_local(async move {
+                                        match api::save_global_settings(&token, settings).await {
+                                            Ok(response) => {
+                                                if response.success {
+                                                    set_success_msg.set(Some(response.message));
+                                                } else {
+                                                    set_error_msg.set(Some(response.message));
+                                                }
+                                            }
+                                            Err(e) => {
+                                                set_error_msg.set(Some(format!("Error: {}", e)));
+                                            }
+                                        }
+                                    });
+                                }
                                 class="w-5 h-5 rounded border-gray-500 bg-gray-600 text-blue-500"
                             />
                             <span class="ml-3 text-gray-300">
-                                {move || if state.get().ip_forwarding_enabled {
-                                    "Enabled"
+                                {move || if global_settings.get().config_changes_disabled {
+                                    "Configuration changes are DISABLED"
                                 } else {
-                                    "Disabled"
+                                    "Configuration changes are enabled"
                                 }}
                             </span>
                         </label>
                         <p class="text-sm text-gray-500 mt-2">
-                            "Allow traffic to be routed between interfaces"
+                            "When enabled, prevents applying any configuration changes to the router. "
+                            "Useful for preventing accidental changes in production."
                         </p>
                     </div>
-
-                    <div class="bg-gray-700 rounded p-4">
-                        <h3 class="font-medium mb-2">"NAT / Masquerading"</h3>
-                        <label class="flex items-center cursor-pointer">
-                            <input
-                                type="checkbox"
-                                prop:checked=move || state.get().nat_enabled
-                                class="w-5 h-5 rounded border-gray-500 bg-gray-600 text-blue-500"
-                            />
-                            <span class="ml-3 text-gray-300">
-                                {move || if state.get().nat_enabled {
-                                    "Enabled"
-                                } else {
-                                    "Disabled"
-                                }}
-                            </span>
-                        </label>
-                        <p class="text-sm text-gray-500 mt-2">
-                            "Translate private IP addresses to public IP for internet access"
-                        </p>
-                    </div>
-                </div>
+                </Show>
             </div>
-
-            <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
-                <h2 class="text-lg font-medium text-white mb-4">"Danger Zone"</h2>
-
-                <div class="space-y-4">
-                    <div class="flex items-center justify-between p-4 bg-gray-700 rounded border border-gray-600">
-                        <div>
-                            <h3 class="font-medium">"Restart Network Services"</h3>
-                            <p class="text-sm text-gray-400">"Restart systemd-networkd and apply all configuration"</p>
-                        </div>
-                        <button class="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded">
-                            "Restart"
-                        </button>
-                    </div>
-
-                    <div class="flex items-center justify-between p-4 bg-gray-700 rounded border border-red-900">
-                        <div>
-                            <h3 class="font-medium text-red-400">"Reset Configuration"</h3>
-                            <p class="text-sm text-gray-400">"Remove all Keystone configuration and start fresh"</p>
-                        </div>
-                        <button class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded">
-                            "Reset"
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <button class="bg-green-600 hover:bg-green-700 text-white px-6 py-2.5 rounded font-medium">
-                "💾 Apply Configuration"
-            </button>
 
             // User Modal
             <Show when=move || show_user_modal.get()>

@@ -2106,17 +2106,54 @@ pub struct FirewallCountersResponse {
     pub counters: Vec<FirewallRuleCounter>,
 }
 
+// ============================================================================
+// Global Settings Types
+// ============================================================================
+
+/// Global application settings that affect system-wide behavior
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GlobalSettings {
+    /// When true, prevents applying any configuration changes to the router.
+    /// Useful for preventing accidental changes in production.
+    pub config_changes_disabled: bool,
+}
+
+impl Default for GlobalSettings {
+    fn default() -> Self {
+        Self {
+            config_changes_disabled: false,
+        }
+    }
+}
+
+/// Response containing global settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalSettingsResponse {
+    pub settings: GlobalSettings,
+}
+
+/// Request to save global settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveGlobalSettingsRequest {
+    pub settings: GlobalSettings,
+}
+
+/// Response from saving global settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveGlobalSettingsResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+// ============================================================================
+// System State Types
+// ============================================================================
+
 /// Complete system state representing the router configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SystemState {
     /// All configured network interfaces
     pub interfaces: Vec<Interface>,
-
-    /// Whether IP forwarding is enabled
-    pub ip_forwarding_enabled: bool,
-
-    /// Whether NAT/masquerading is enabled
-    pub nat_enabled: bool,
 }
 
 /// Simple interface counters for dashboard/network activity.
@@ -2149,6 +2186,44 @@ pub struct ApplyConfigResponse {
     pub success: bool,
     pub message: String,
     pub errors: Vec<String>,
+}
+
+// ============================================================================
+// Unified Apply Types
+// ============================================================================
+
+/// Result of applying all configuration via /apply-all
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApplyAllResponse {
+    /// Overall success status
+    pub success: bool,
+    /// Summary message
+    pub message: String,
+    /// Individual component results
+    pub components: ApplyComponentResults,
+    /// If firewall requires confirmation
+    pub firewall_pending_confirmation: bool,
+    /// Firewall confirmation deadline (unix timestamp)
+    pub firewall_confirm_deadline: Option<u64>,
+    /// Firewall session ID for confirmation
+    pub firewall_session_id: Option<String>,
+}
+
+/// Results for each component in a unified apply
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApplyComponentResults {
+    pub networkd: ComponentResult,
+    pub firewall: ComponentResult,
+    pub dnsmasq: ComponentResult,
+    pub caddy: ComponentResult,
+}
+
+/// Result for a single component
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ComponentResult {
+    pub success: bool,
+    pub message: String,
+    pub skipped: bool,
 }
 
 /// Login request containing username and password
@@ -2376,6 +2451,189 @@ pub struct CaddyApplyRequest {
 /// Response from applying Caddy configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CaddyApplyResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+// ============================================================================
+// Systemd Service Types
+// ============================================================================
+
+/// Active state of a systemd unit
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SystemdActiveState {
+    /// Unit is active and running
+    Active,
+    /// Unit is being started
+    Activating,
+    /// Unit is being stopped
+    Deactivating,
+    /// Unit is not running
+    #[default]
+    Inactive,
+    /// Unit failed to start
+    Failed,
+    /// Unit is being reloaded
+    Reloading,
+}
+
+impl std::fmt::Display for SystemdActiveState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SystemdActiveState::Active => write!(f, "active"),
+            SystemdActiveState::Activating => write!(f, "activating"),
+            SystemdActiveState::Deactivating => write!(f, "deactivating"),
+            SystemdActiveState::Inactive => write!(f, "inactive"),
+            SystemdActiveState::Failed => write!(f, "failed"),
+            SystemdActiveState::Reloading => write!(f, "reloading"),
+        }
+    }
+}
+
+impl std::str::FromStr for SystemdActiveState {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "active" => Ok(SystemdActiveState::Active),
+            "activating" => Ok(SystemdActiveState::Activating),
+            "deactivating" => Ok(SystemdActiveState::Deactivating),
+            "inactive" => Ok(SystemdActiveState::Inactive),
+            "failed" => Ok(SystemdActiveState::Failed),
+            "reloading" => Ok(SystemdActiveState::Reloading),
+            _ => Err(format!("Unknown active state: {}", s)),
+        }
+    }
+}
+
+/// Load state of a systemd unit
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SystemdLoadState {
+    /// Unit file is loaded
+    #[default]
+    Loaded,
+    /// Unit file could not be found
+    NotFound,
+    /// Unit file has errors
+    Error,
+    /// Unit is masked (disabled permanently)
+    Masked,
+}
+
+impl std::fmt::Display for SystemdLoadState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SystemdLoadState::Loaded => write!(f, "loaded"),
+            SystemdLoadState::NotFound => write!(f, "not-found"),
+            SystemdLoadState::Error => write!(f, "error"),
+            SystemdLoadState::Masked => write!(f, "masked"),
+        }
+    }
+}
+
+impl std::str::FromStr for SystemdLoadState {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('-', "").as_str() {
+            "loaded" => Ok(SystemdLoadState::Loaded),
+            "notfound" => Ok(SystemdLoadState::NotFound),
+            "error" => Ok(SystemdLoadState::Error),
+            "masked" => Ok(SystemdLoadState::Masked),
+            _ => Err(format!("Unknown load state: {}", s)),
+        }
+    }
+}
+
+/// A systemd unit summary for listing
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SystemdUnit {
+    /// Unit name (e.g., "keystone-daemon.service")
+    pub name: String,
+    /// Description from unit file
+    pub description: String,
+    /// Load state (loaded, not-found, masked, etc.)
+    pub load_state: SystemdLoadState,
+    /// Active state (active, inactive, failed, etc.)
+    pub active_state: SystemdActiveState,
+    /// Sub state (running, dead, exited, etc.)
+    pub sub_state: String,
+    /// Whether the unit is enabled (starts on boot)
+    pub enabled: bool,
+}
+
+impl Default for SystemdUnit {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            description: String::new(),
+            load_state: SystemdLoadState::default(),
+            active_state: SystemdActiveState::default(),
+            sub_state: "dead".to_string(),
+            enabled: false,
+        }
+    }
+}
+
+/// Detailed status of a systemd unit
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SystemdUnitDetail {
+    /// Basic unit info
+    pub unit: SystemdUnit,
+    /// Main process PID (if running)
+    pub main_pid: Option<u32>,
+    /// Memory usage in bytes (if available)
+    pub memory_bytes: Option<u64>,
+    /// When the unit was activated (Unix timestamp)
+    pub active_enter_timestamp: Option<u64>,
+    /// When the unit was deactivated (Unix timestamp)
+    pub inactive_enter_timestamp: Option<u64>,
+    /// Result of last run (success, exit-code, signal, etc.)
+    pub result: Option<String>,
+    /// Recent log lines from journald
+    pub recent_logs: Vec<String>,
+}
+
+impl Default for SystemdUnitDetail {
+    fn default() -> Self {
+        Self {
+            unit: SystemdUnit::default(),
+            main_pid: None,
+            memory_bytes: None,
+            active_enter_timestamp: None,
+            inactive_enter_timestamp: None,
+            result: None,
+            recent_logs: Vec::new(),
+        }
+    }
+}
+
+// ============================================================================
+// Systemd API Request/Response Types
+// ============================================================================
+
+/// Response containing list of systemd units
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemdUnitsResponse {
+    pub units: Vec<SystemdUnit>,
+}
+
+/// Response containing detailed unit info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemdUnitDetailResponse {
+    pub unit: Option<SystemdUnitDetail>,
+}
+
+/// Request to control a systemd unit
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemdUnitControlRequest {
+    /// The unit name (e.g., "keystone-daemon.service")
+    pub unit_name: String,
+}
+
+/// Response from unit control operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemdUnitControlResponse {
     pub success: bool,
     pub message: String,
 }

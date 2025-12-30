@@ -1268,25 +1268,7 @@ mod pretty {
     pub fn state(state: &SystemState) {
         println!("=== System State ===\n");
 
-        println!("Global Settings:");
-        println!(
-            "  IP Forwarding: {}",
-            if state.ip_forwarding_enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
-        println!(
-            "  NAT:           {}",
-            if state.nat_enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        );
-
-        println!("\nInterfaces ({}):", state.interfaces.len());
+        println!("Interfaces ({}):", state.interfaces.len());
         for iface in &state.interfaces {
             let status = if iface.enabled { "UP" } else { "DOWN" };
             let addr = iface.address.as_deref().unwrap_or("no address");

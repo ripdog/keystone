@@ -6,7 +6,7 @@
 use crate::components::{AppLayout, LoginPage, clear_stored_token, get_stored_token};
 use crate::pages::{
     BridgesPage, CaddyPage, DashboardPage, DnsmasqPage, FirewallPage, InterfaceEditPage,
-    InterfacesPage, NetworkdPreviewPage, SettingsPage, VlansPage,
+    InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage, SettingsPage, VlansPage,
 };
 use keystone_core::SystemState;
 use leptos::prelude::*;
@@ -36,7 +36,7 @@ pub fn App() -> impl IntoView {
                 when=move || auth_token.get().is_some()
                 fallback=move || view! { <LoginPage on_login=set_auth_token/> }
             >
-                <AppLayout on_logout=logout>
+                <AppLayout auth_token=auth_token on_logout=logout on_unauthorized=on_unauthorized>
                     <Routes fallback=|| "Page not found">
                         <Route
                             path=path!("/")
@@ -126,7 +126,24 @@ pub fn App() -> impl IntoView {
                             path=path!("/settings")
                             view=move || view! {
                                 <SettingsPage
-                                    state=state
+                                    auth_token=auth_token
+                                    on_unauthorized=on_unauthorized
+                                />
+                            }
+                        />
+                        <Route
+                            path=path!("/services")
+                            view=move || view! {
+                                <ServicesPage
+                                    auth_token=auth_token
+                                    on_unauthorized=on_unauthorized
+                                />
+                            }
+                        />
+                        <Route
+                            path=path!("/services/:name")
+                            view=move || view! {
+                                <ServiceDetailPage
                                     auth_token=auth_token
                                     on_unauthorized=on_unauthorized
                                 />

@@ -10,15 +10,15 @@
 //! - Preview generated nftables rules
 
 use crate::db::Database;
-use crate::firewall::{generate_json, generate_preview, FirewallApplyManager};
+use crate::firewall::{FirewallApplyManager, generate_json, generate_preview};
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, post},
-    Json, Router,
 };
 use keystone_core::{
-    DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest, FirewallConfirmResponse,
-    FirewallConfigResponse, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
+    DeleteResponse, FirewallApplyResponse, FirewallConfigResponse, FirewallConfirmRequest,
+    FirewallConfirmResponse, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
     FirewallRollbackResponse, FirewallStatusResponse, FirewallZone, FirewallZonesResponse,
     ForwardRule, InputRule, PortForward, ReorderRulesRequest, ReorderRulesResponse,
     SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, ZoneForwardPolicy,
@@ -84,7 +84,9 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
 // ============================================================================
 
 /// GET /firewall/zones - Get all firewall zones
-async fn get_zones(State(state): State<FirewallState>) -> Result<Json<FirewallZonesResponse>, AppError> {
+async fn get_zones(
+    State(state): State<FirewallState>,
+) -> Result<Json<FirewallZonesResponse>, AppError> {
     info!("Getting firewall zones");
     let zones = state.db.get_firewall_zones().await?;
     Ok(Json(FirewallZonesResponse { zones }))
@@ -203,7 +205,9 @@ async fn delete_zone_forward(
 // ============================================================================
 
 /// GET /firewall/input-rules - Get all input rules
-async fn get_input_rules(State(state): State<FirewallState>) -> Result<Json<Vec<InputRule>>, AppError> {
+async fn get_input_rules(
+    State(state): State<FirewallState>,
+) -> Result<Json<Vec<InputRule>>, AppError> {
     info!("Getting input rules");
     let rules = state.db.get_input_rules().await?;
     Ok(Json(rules))
@@ -424,7 +428,10 @@ async fn save_global_settings(
     Json(request): Json<SaveFirewallGlobalSettingsRequest>,
 ) -> Result<Json<SaveFirewallGlobalSettingsResponse>, AppError> {
     info!("Saving firewall global settings");
-    state.db.save_firewall_global_settings(&request.settings).await?;
+    state
+        .db
+        .save_firewall_global_settings(&request.settings)
+        .await?;
     Ok(Json(SaveFirewallGlobalSettingsResponse {
         success: true,
         message: "Settings saved".to_string(),

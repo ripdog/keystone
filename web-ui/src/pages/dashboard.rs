@@ -46,15 +46,16 @@ pub fn DashboardPage(
 
                     let mut new_rates = Vec::new();
                     for c in resp.interface_counters.iter() {
-                        let (rx_bps, tx_bps) = if let Some((prev_rx, prev_tx)) = prev_map.get(&c.name) {
-                            // Calculate bytes transferred since last poll (1 second)
-                            let rx = c.rx_bytes.saturating_sub(*prev_rx);
-                            let tx = c.tx_bytes.saturating_sub(*prev_tx);
-                            (rx, tx)
-                        } else {
-                            // First poll - no previous data, show 0
-                            (0, 0)
-                        };
+                        let (rx_bps, tx_bps) =
+                            if let Some((prev_rx, prev_tx)) = prev_map.get(&c.name) {
+                                // Calculate bytes transferred since last poll (1 second)
+                                let rx = c.rx_bytes.saturating_sub(*prev_rx);
+                                let tx = c.tx_bytes.saturating_sub(*prev_tx);
+                                (rx, tx)
+                            } else {
+                                // First poll - no previous data, show 0
+                                (0, 0)
+                            };
 
                         new_rates.push(InterfaceRate {
                             name: c.name.clone(),

@@ -2,7 +2,7 @@
 
 use keystone_core::{
     DeleteVlanResponse, SaveVlanConfigRequest, SaveVlanConfigResponse, VlanConfig,
-    VlanConfigResponse, VlanConfigsResponse,
+    VlanConfigsResponse,
 };
 
 use super::client::{delete, get, post};
@@ -11,13 +11,6 @@ use super::client::{delete, get, post};
 pub async fn fetch_vlans(token: &str) -> Result<Vec<VlanConfig>, String> {
     let response: VlanConfigsResponse = get("/api/vlans", token).await?;
     Ok(response.configs)
-}
-
-/// Fetch a single VLAN configuration by ID
-#[allow(dead_code)]
-pub async fn fetch_vlan(token: &str, id: i64) -> Result<Option<VlanConfig>, String> {
-    let response: VlanConfigResponse = get(&format!("/api/vlans/{}", id), token).await?;
-    Ok(response.config)
 }
 
 /// Save a VLAN configuration (create or update)

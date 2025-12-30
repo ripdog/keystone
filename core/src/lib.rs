@@ -448,7 +448,7 @@ impl Default for Ipv6AcceptRaConfig {
 pub struct DnsmasqConfig {
     /// Whether dnsmasq is enabled
     pub enabled: bool,
-    
+
     // --- DNS Settings ---
     /// DNS port (53 by default, 0 to disable DNS)
     pub dns_port: u16,
@@ -464,13 +464,13 @@ pub struct DnsmasqConfig {
     pub local_domain: Option<String>,
     /// Expand simple hostnames with the local domain
     pub expand_hosts: bool,
-    
+
     // --- Upstream DNS ---
     /// DNS forwarding mode
     pub upstream_mode: DnsmasqUpstreamMode,
     /// Custom upstream DNS servers (when mode is Custom)
     pub upstream_servers: Vec<DnsmasqUpstreamServer>,
-    
+
     // --- Interface Binding ---
     /// Interfaces to listen on (empty = all interfaces)
     pub listen_interfaces: Vec<String>,
@@ -480,7 +480,7 @@ pub struct DnsmasqConfig {
     pub no_dhcp_interfaces: Vec<String>,
     /// Use bind-dynamic mode (recommended for routers)
     pub bind_dynamic: bool,
-    
+
     // --- Logging ---
     /// Log DNS queries
     pub log_queries: bool,
@@ -577,7 +577,7 @@ pub struct DnsmasqDhcpRange {
     pub lease_time: String,
     /// Whether this range is enabled
     pub enabled: bool,
-    
+
     // --- DHCPv6 / SLAAC options ---
     /// IPv6 mode for this range
     pub ipv6_mode: Option<DnsmasqIpv6Mode>,
@@ -1049,7 +1049,6 @@ pub struct DnsmasqApplyResponse {
     pub message: String,
 }
 
-
 // ============================================================================
 // VLAN Configuration Types
 // ============================================================================
@@ -1088,7 +1087,7 @@ impl std::str::FromStr for VlanProtocol {
 }
 
 /// VLAN configuration for virtual network interfaces
-/// 
+///
 /// VLANs create virtual interfaces on top of physical interfaces,
 /// allowing traffic segmentation using IEEE 802.1Q tagging.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1170,7 +1169,7 @@ pub struct VlanConfigsResponse {
 // ============================================================================
 
 /// Bridge configuration for combining multiple interfaces
-/// 
+///
 /// Bridges create virtual switches that connect multiple network interfaces,
 /// allowing them to communicate as if on the same physical network.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1275,7 +1274,7 @@ pub struct InterfaceConfig {
     pub enabled: bool,
     /// Human-readable description of the interface
     pub description: Option<String>,
-    
+
     // Basic IP configuration
     /// DHCP mode
     pub dhcp_mode: DhcpMode,
@@ -1289,7 +1288,7 @@ pub struct InterfaceConfig {
     pub search_domains: Vec<String>,
     /// Default gateway (convenience field, also creates a route)
     pub gateway: Option<String>,
-    
+
     // Link-local and interface state settings
     /// Link-local addressing mode
     #[serde(default)]
@@ -1300,32 +1299,32 @@ pub struct InterfaceConfig {
     /// Interface activation policy
     #[serde(default)]
     pub activation_policy: ActivationPolicy,
-    
+
     // DHCP client settings
     /// DHCPv4 client configuration (only used when dhcp_mode includes IPv4)
     pub dhcpv4_client: Option<Dhcpv4ClientConfig>,
     /// DHCPv6 client configuration (only used when dhcp_mode includes IPv6)
     pub dhcpv6_client: Option<Dhcpv6ClientConfig>,
-    
+
     // IPv6 settings
     /// Accept IPv6 Router Advertisements
     pub ipv6_accept_ra: bool,
     /// IPv6 Accept RA client configuration (controls what to accept from RAs)
     #[serde(default)]
     pub ipv6_accept_ra_config: Option<Ipv6AcceptRaConfig>,
-    
+
     // Forwarding & NAT (typically for WAN interfaces)
     /// IP forwarding mode
     pub ip_forward: IpForwardMode,
     /// IP masquerading (NAT) mode
     pub ip_masquerade: IpMasqueradeMode,
-    
+
     // Link settings
     /// Maximum Transmission Unit (MTU) in bytes
     /// Common values: 1500 (default), 1492 (PPPoE), 9000 (jumbo frames)
     #[serde(default)]
     pub mtu: Option<u32>,
-    
+
     // VLAN settings
     /// VLANs attached to this interface (only populated when this is a parent interface)
     /// This is used to generate VLAN= lines in the .network file
@@ -1467,7 +1466,7 @@ impl std::fmt::Display for InterfaceRole {
 
 impl std::str::FromStr for InterfaceRole {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
             "WAN" => Ok(InterfaceRole::WAN),
@@ -1482,14 +1481,14 @@ impl std::str::FromStr for InterfaceRole {
 pub struct ManagedInterface {
     /// Interface name (e.g., "eth0", "enp3s0")
     pub name: String,
-    
+
     /// Role/label for this interface (WAN, LAN)
     pub role: InterfaceRole,
-    
+
     /// Optional static IP configuration (CIDR notation, e.g., "192.168.1.1/24")
     /// If None, DHCP will be used
     pub static_ip: Option<String>,
-    
+
     /// Whether this interface configuration is enabled
     pub enabled: bool,
 }
@@ -2229,6 +2228,158 @@ pub struct UserInfo {
     pub created_at: i64,
 }
 
+// ============================================================================
+// Caddy Configuration Types
+// ============================================================================
+
+/// HTTPS mode for Caddy configuration
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CaddyHttpsMode {
+    /// HTTPS disabled - serve over plain HTTP only
+    #[default]
+    Disabled,
+    /// Use Caddy's internal self-signed certificate
+    SelfSigned,
+    /// Use custom ACME configuration (e.g., DNS challenge with Cloudflare, etc.)
+    AcmeCustom,
+}
+
+impl std::fmt::Display for CaddyHttpsMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CaddyHttpsMode::Disabled => write!(f, "disabled"),
+            CaddyHttpsMode::SelfSigned => write!(f, "self_signed"),
+            CaddyHttpsMode::AcmeCustom => write!(f, "acme_custom"),
+        }
+    }
+}
+
+impl std::str::FromStr for CaddyHttpsMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().replace('-', "_").as_str() {
+            "disabled" | "off" | "no" => Ok(CaddyHttpsMode::Disabled),
+            "self_signed" | "selfsigned" | "internal" => Ok(CaddyHttpsMode::SelfSigned),
+            "acme_custom" | "acmecustom" | "custom" => Ok(CaddyHttpsMode::AcmeCustom),
+            _ => Err(format!("Unknown HTTPS mode: {}", s)),
+        }
+    }
+}
+
+/// Caddy reverse proxy configuration for serving Keystone web UI
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CaddyConfig {
+    /// Whether Caddy is enabled
+    pub enabled: bool,
+    /// Domain name or IP address for the server block
+    /// Examples: "router.lan", "192.168.1.1", "keystone.home.arpa"
+    pub server_address: String,
+    /// LAN interface to bind to (Caddy will only listen on this interface's IP)
+    /// Examples: "eth1", "br-lan", "enp3s0"
+    pub bind_interface: String,
+    /// HTTPS mode
+    pub https_mode: CaddyHttpsMode,
+    /// Custom TLS/ACME configuration block (raw Caddyfile directives)
+    /// This is inserted into the site block for custom certificate handling.
+    ///
+    /// Example for Cloudflare DNS challenge:
+    /// ```text
+    /// tls {
+    ///     dns cloudflare {env.CF_API_TOKEN}
+    /// }
+    /// ```
+    ///
+    /// Example for custom certificate files:
+    /// ```text
+    /// tls /path/to/cert.pem /path/to/key.pem
+    /// ```
+    pub custom_tls_config: String,
+    /// Port for HTTPS (default 443)
+    pub https_port: u16,
+    /// Port for HTTP (default 80, used for redirect when HTTPS is enabled)
+    pub http_port: u16,
+    /// Last validation status from `caddy validate`
+    pub last_validation_status: Option<String>,
+    /// Unix timestamp of last validation
+    pub last_validation_time: Option<i64>,
+}
+
+impl Default for CaddyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            server_address: String::new(),
+            bind_interface: String::new(),
+            https_mode: CaddyHttpsMode::Disabled,
+            custom_tls_config: String::new(),
+            https_port: 443,
+            http_port: 80,
+            last_validation_status: None,
+            last_validation_time: None,
+        }
+    }
+}
+
+// ============================================================================
+// Caddy API Request/Response Types
+// ============================================================================
+
+/// Complete Caddy state for UI
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaddyStateResponse {
+    pub config: CaddyConfig,
+    /// Available interfaces for binding (from system)
+    pub available_interfaces: Vec<String>,
+}
+
+/// Request to save Caddy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveCaddyConfigRequest {
+    pub config: CaddyConfig,
+}
+
+/// Response from saving Caddy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveCaddyConfigResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Preview of generated Caddyfile
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaddyPreviewResponse {
+    pub caddyfile: String,
+}
+
+/// Request to validate Caddyfile
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaddyValidateRequest {
+    // Empty - validates current config from database
+}
+
+/// Response from validating Caddyfile
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaddyValidateResponse {
+    pub valid: bool,
+    pub message: String,
+    /// Full output from caddy validate command
+    pub output: String,
+}
+
+/// Request to apply Caddy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaddyApplyRequest {
+    // Empty - applies current config from database
+}
+
+/// Response from applying Caddy configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaddyApplyResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2290,9 +2441,18 @@ mod tests {
 
     #[test]
     fn test_firewall_action_parsing() {
-        assert_eq!("accept".parse::<FirewallAction>().unwrap(), FirewallAction::Accept);
-        assert_eq!("drop".parse::<FirewallAction>().unwrap(), FirewallAction::Drop);
-        assert_eq!("reject".parse::<FirewallAction>().unwrap(), FirewallAction::Reject);
+        assert_eq!(
+            "accept".parse::<FirewallAction>().unwrap(),
+            FirewallAction::Accept
+        );
+        assert_eq!(
+            "drop".parse::<FirewallAction>().unwrap(),
+            FirewallAction::Drop
+        );
+        assert_eq!(
+            "reject".parse::<FirewallAction>().unwrap(),
+            FirewallAction::Reject
+        );
         assert_eq!(FirewallAction::Accept.to_string(), "accept");
     }
 
@@ -2300,17 +2460,29 @@ mod tests {
     fn test_rule_protocol_parsing() {
         assert_eq!("tcp".parse::<RuleProtocol>().unwrap(), RuleProtocol::Tcp);
         assert_eq!("udp".parse::<RuleProtocol>().unwrap(), RuleProtocol::Udp);
-        assert_eq!("tcp+udp".parse::<RuleProtocol>().unwrap(), RuleProtocol::TcpUdp);
+        assert_eq!(
+            "tcp+udp".parse::<RuleProtocol>().unwrap(),
+            RuleProtocol::TcpUdp
+        );
         assert_eq!("icmp".parse::<RuleProtocol>().unwrap(), RuleProtocol::Icmp);
-        assert_eq!("icmpv6".parse::<RuleProtocol>().unwrap(), RuleProtocol::Icmpv6);
+        assert_eq!(
+            "icmpv6".parse::<RuleProtocol>().unwrap(),
+            RuleProtocol::Icmpv6
+        );
         assert_eq!("any".parse::<RuleProtocol>().unwrap(), RuleProtocol::Any);
         assert_eq!(RuleProtocol::TcpUdp.to_string(), "tcp+udp");
     }
 
     #[test]
     fn test_firewall_policy_parsing() {
-        assert_eq!("accept".parse::<FirewallPolicy>().unwrap(), FirewallPolicy::Accept);
-        assert_eq!("drop".parse::<FirewallPolicy>().unwrap(), FirewallPolicy::Drop);
+        assert_eq!(
+            "accept".parse::<FirewallPolicy>().unwrap(),
+            FirewallPolicy::Accept
+        );
+        assert_eq!(
+            "drop".parse::<FirewallPolicy>().unwrap(),
+            FirewallPolicy::Drop
+        );
         assert_eq!(FirewallPolicy::Drop.to_string(), "drop");
     }
 
@@ -2416,9 +2588,18 @@ mod tests {
 
     #[test]
     fn test_ip_masquerade_mode_parsing() {
-        assert_eq!("no".parse::<IpMasqueradeMode>().unwrap(), IpMasqueradeMode::No);
-        assert_eq!("both".parse::<IpMasqueradeMode>().unwrap(), IpMasqueradeMode::Both);
-        assert_eq!("ipv4".parse::<IpMasqueradeMode>().unwrap(), IpMasqueradeMode::Ipv4);
+        assert_eq!(
+            "no".parse::<IpMasqueradeMode>().unwrap(),
+            IpMasqueradeMode::No
+        );
+        assert_eq!(
+            "both".parse::<IpMasqueradeMode>().unwrap(),
+            IpMasqueradeMode::Both
+        );
+        assert_eq!(
+            "ipv4".parse::<IpMasqueradeMode>().unwrap(),
+            IpMasqueradeMode::Ipv4
+        );
         assert_eq!(IpMasqueradeMode::Both.to_string(), "both");
     }
 
@@ -2442,9 +2623,18 @@ mod tests {
 
     #[test]
     fn test_vlan_protocol_parsing() {
-        assert_eq!("802.1q".parse::<VlanProtocol>().unwrap(), VlanProtocol::Dot1Q);
-        assert_eq!("802.1ad".parse::<VlanProtocol>().unwrap(), VlanProtocol::Dot1Ad);
-        assert_eq!("qinq".parse::<VlanProtocol>().unwrap(), VlanProtocol::Dot1Ad);
+        assert_eq!(
+            "802.1q".parse::<VlanProtocol>().unwrap(),
+            VlanProtocol::Dot1Q
+        );
+        assert_eq!(
+            "802.1ad".parse::<VlanProtocol>().unwrap(),
+            VlanProtocol::Dot1Ad
+        );
+        assert_eq!(
+            "qinq".parse::<VlanProtocol>().unwrap(),
+            VlanProtocol::Dot1Ad
+        );
         assert_eq!(VlanProtocol::Dot1Q.to_string(), "802.1q");
         assert_eq!(VlanProtocol::Dot1Ad.to_string(), "802.1ad");
     }
@@ -2522,26 +2712,100 @@ mod tests {
 
     #[test]
     fn test_dnsmasq_upstream_mode_parsing() {
-        assert_eq!("system".parse::<DnsmasqUpstreamMode>().unwrap(), DnsmasqUpstreamMode::System);
-        assert_eq!("custom".parse::<DnsmasqUpstreamMode>().unwrap(), DnsmasqUpstreamMode::Custom);
-        assert_eq!("localadguard".parse::<DnsmasqUpstreamMode>().unwrap(), DnsmasqUpstreamMode::LocalAdGuard);
-        assert_eq!(DnsmasqUpstreamMode::LocalAdGuard.to_string(), "localadguard");
+        assert_eq!(
+            "system".parse::<DnsmasqUpstreamMode>().unwrap(),
+            DnsmasqUpstreamMode::System
+        );
+        assert_eq!(
+            "custom".parse::<DnsmasqUpstreamMode>().unwrap(),
+            DnsmasqUpstreamMode::Custom
+        );
+        assert_eq!(
+            "localadguard".parse::<DnsmasqUpstreamMode>().unwrap(),
+            DnsmasqUpstreamMode::LocalAdGuard
+        );
+        assert_eq!(
+            DnsmasqUpstreamMode::LocalAdGuard.to_string(),
+            "localadguard"
+        );
     }
 
     #[test]
     fn test_dnsmasq_ipv6_mode_parsing() {
-        assert_eq!("ra-only".parse::<DnsmasqIpv6Mode>().unwrap(), DnsmasqIpv6Mode::RaOnly);
-        assert_eq!("ra-stateless".parse::<DnsmasqIpv6Mode>().unwrap(), DnsmasqIpv6Mode::RaStateless);
-        assert_eq!("slaac".parse::<DnsmasqIpv6Mode>().unwrap(), DnsmasqIpv6Mode::Slaac);
-        assert_eq!("dhcpv6".parse::<DnsmasqIpv6Mode>().unwrap(), DnsmasqIpv6Mode::Dhcpv6);
+        assert_eq!(
+            "ra-only".parse::<DnsmasqIpv6Mode>().unwrap(),
+            DnsmasqIpv6Mode::RaOnly
+        );
+        assert_eq!(
+            "ra-stateless".parse::<DnsmasqIpv6Mode>().unwrap(),
+            DnsmasqIpv6Mode::RaStateless
+        );
+        assert_eq!(
+            "slaac".parse::<DnsmasqIpv6Mode>().unwrap(),
+            DnsmasqIpv6Mode::Slaac
+        );
+        assert_eq!(
+            "dhcpv6".parse::<DnsmasqIpv6Mode>().unwrap(),
+            DnsmasqIpv6Mode::Dhcpv6
+        );
         assert_eq!(DnsmasqIpv6Mode::RaStateless.to_string(), "ra-stateless");
     }
 
     #[test]
     fn test_dnsmasq_address_action_parsing() {
-        assert_eq!("block".parse::<DnsmasqAddressAction>().unwrap(), DnsmasqAddressAction::Block);
-        assert_eq!("redirect".parse::<DnsmasqAddressAction>().unwrap(), DnsmasqAddressAction::Redirect);
-        assert_eq!("null".parse::<DnsmasqAddressAction>().unwrap(), DnsmasqAddressAction::Null);
+        assert_eq!(
+            "block".parse::<DnsmasqAddressAction>().unwrap(),
+            DnsmasqAddressAction::Block
+        );
+        assert_eq!(
+            "redirect".parse::<DnsmasqAddressAction>().unwrap(),
+            DnsmasqAddressAction::Redirect
+        );
+        assert_eq!(
+            "null".parse::<DnsmasqAddressAction>().unwrap(),
+            DnsmasqAddressAction::Null
+        );
         assert_eq!(DnsmasqAddressAction::Block.to_string(), "block");
+    }
+
+    #[test]
+    fn test_caddy_config_serialization() {
+        let config = CaddyConfig {
+            enabled: true,
+            server_address: "router.lan".to_string(),
+            bind_interface: "br-lan".to_string(),
+            https_mode: CaddyHttpsMode::AcmeCustom,
+            custom_tls_config: "tls {\n    dns cloudflare {env.CF_API_TOKEN}\n}".to_string(),
+            https_port: 443,
+            http_port: 80,
+            last_validation_status: Some("Valid configuration".to_string()),
+            last_validation_time: Some(1234567890),
+        };
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: CaddyConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_caddy_https_mode_parsing() {
+        assert_eq!(
+            "disabled".parse::<CaddyHttpsMode>().unwrap(),
+            CaddyHttpsMode::Disabled
+        );
+        assert_eq!(
+            "self_signed".parse::<CaddyHttpsMode>().unwrap(),
+            CaddyHttpsMode::SelfSigned
+        );
+        assert_eq!(
+            "acme_custom".parse::<CaddyHttpsMode>().unwrap(),
+            CaddyHttpsMode::AcmeCustom
+        );
+        assert_eq!(
+            "internal".parse::<CaddyHttpsMode>().unwrap(),
+            CaddyHttpsMode::SelfSigned
+        );
+        assert_eq!(CaddyHttpsMode::SelfSigned.to_string(), "self_signed");
     }
 }

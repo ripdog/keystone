@@ -14,9 +14,9 @@
 use crate::db::Database;
 use crate::dnsmasq::{self, get_active_leases};
 use axum::{
+    Json, Router,
     extract::{Path, State},
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use keystone_core::{
     AddressOverridesResponse, CnameRecordsResponse, DeleteResponse, DhcpLeasesResponse,
@@ -93,9 +93,7 @@ async fn get_dnsmasq_state(
 }
 
 /// GET /dnsmasq/config - Get global dnsmasq config
-async fn get_config(
-    State(state): State<DnsmasqState>,
-) -> Result<Json<DnsmasqConfig>, AppError> {
+async fn get_config(State(state): State<DnsmasqState>) -> Result<Json<DnsmasqConfig>, AppError> {
     info!("Getting dnsmasq config");
     let pool = state.db.pool();
     let config = dnsmasq::load_dnsmasq_config(pool).await?;
@@ -136,7 +134,7 @@ async fn save_range(
     Json(request): Json<SaveDhcpRangeRequest>,
 ) -> Result<Json<SaveDhcpRangeResponse>, AppError> {
     info!("Saving DHCP range: {}", request.range.name);
-    
+
     // Validate
     if request.range.name.is_empty() {
         return Ok(Json(SaveDhcpRangeResponse {
@@ -207,7 +205,7 @@ async fn save_static_lease(
     Json(request): Json<SaveStaticLeaseRequest>,
 ) -> Result<Json<SaveStaticLeaseResponse>, AppError> {
     info!("Saving static lease: {}", request.lease.mac_address);
-    
+
     // Validate
     if request.lease.mac_address.is_empty() && request.lease.client_id.is_none() {
         return Ok(Json(SaveStaticLeaseResponse {
@@ -271,7 +269,7 @@ async fn save_option(
     Json(request): Json<SaveDhcpOptionRequest>,
 ) -> Result<Json<SaveDhcpOptionResponse>, AppError> {
     info!("Saving DHCP option: {}", request.option.option);
-    
+
     // Validate
     if request.option.option.is_empty() {
         return Ok(Json(SaveDhcpOptionResponse {
@@ -335,7 +333,7 @@ async fn save_host(
     Json(request): Json<SaveHostRecordRequest>,
 ) -> Result<Json<SaveHostRecordResponse>, AppError> {
     info!("Saving host record");
-    
+
     // Validate
     if request.record.hostnames.is_empty() {
         return Ok(Json(SaveHostRecordResponse {
@@ -398,8 +396,11 @@ async fn save_cname(
     State(state): State<DnsmasqState>,
     Json(request): Json<SaveCnameRecordRequest>,
 ) -> Result<Json<SaveCnameRecordResponse>, AppError> {
-    info!("Saving CNAME record: {} -> {}", request.record.alias, request.record.target);
-    
+    info!(
+        "Saving CNAME record: {} -> {}",
+        request.record.alias, request.record.target
+    );
+
     // Validate
     if request.record.alias.is_empty() {
         return Ok(Json(SaveCnameRecordResponse {
@@ -463,7 +464,7 @@ async fn save_override(
     Json(request): Json<SaveAddressOverrideRequest>,
 ) -> Result<Json<SaveAddressOverrideResponse>, AppError> {
     info!("Saving address override: {}", request.override_entry.domain);
-    
+
     // Validate
     if request.override_entry.domain.is_empty() {
         return Ok(Json(SaveAddressOverrideResponse {
@@ -533,7 +534,7 @@ async fn apply_dnsmasq(
 ) -> Result<Json<DnsmasqApplyResponse>, AppError> {
     info!("Applying dnsmasq configuration");
     let pool = state.db.pool();
-    
+
     match dnsmasq::apply_dnsmasq_config(pool).await {
         Ok(()) => Ok(Json(DnsmasqApplyResponse {
             success: true,

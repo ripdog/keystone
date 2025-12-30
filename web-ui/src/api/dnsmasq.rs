@@ -1,8 +1,8 @@
 //! Dnsmasq (DNS/DHCP) configuration API functions
 
 use keystone_core::{
-    DhcpLease, DhcpLeasesResponse, DnsmasqAddressOverride, DnsmasqApplyResponse, DnsmasqConfig,
-    DnsmasqCnameRecord, DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord,
+    DhcpLease, DhcpLeasesResponse, DnsmasqAddressOverride, DnsmasqApplyResponse,
+    DnsmasqCnameRecord, DnsmasqConfig, DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord,
     DnsmasqPreviewResponse, DnsmasqStateResponse, DnsmasqStaticLease,
 };
 

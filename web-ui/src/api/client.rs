@@ -3,23 +3,12 @@
 //! Provides centralized request handling with consistent error handling
 //! and authentication support.
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Serialize, de::DeserializeOwned};
 
 /// Perform a GET request with authentication
 pub async fn get<T: DeserializeOwned>(url: &str, token: &str) -> Result<T, String> {
     let response = gloo_net::http::Request::get(url)
         .header("Authorization", &format!("Bearer {}", token))
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
-
-    handle_response(response).await
-}
-
-/// Perform a GET request without authentication (for login, etc.)
-#[allow(dead_code)]
-pub async fn get_public<T: DeserializeOwned>(url: &str) -> Result<T, String> {
-    let response = gloo_net::http::Request::get(url)
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
@@ -67,25 +56,6 @@ pub async fn post_empty<T: DeserializeOwned>(url: &str, token: &str) -> Result<T
         .header("Authorization", &format!("Bearer {}", token))
         .header("Content-Type", "application/json")
         .body("{}")
-        .map_err(|e| format!("Failed to build request: {}", e))?
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {}", e))?;
-
-    handle_response(response).await
-}
-
-/// Perform a PUT request with authentication and JSON body
-#[allow(dead_code)]
-pub async fn put<T: DeserializeOwned, B: Serialize>(
-    url: &str,
-    token: &str,
-    body: &B,
-) -> Result<T, String> {
-    let response = gloo_net::http::Request::put(url)
-        .header("Authorization", &format!("Bearer {}", token))
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(body).unwrap())
         .map_err(|e| format!("Failed to build request: {}", e))?
         .send()
         .await

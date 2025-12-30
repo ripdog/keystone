@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig,
-    IpForwardMode, IpMasqueradeMode, VlanConfig,
+    DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, IpForwardMode,
+    IpMasqueradeMode, VlanConfig,
 };
 use std::fmt::Write;
 use std::path::Path;
@@ -42,7 +42,7 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
 
     // [Network] section
     writeln!(output, "[Network]").unwrap();
-    
+
     if let Some(desc) = &config.description {
         writeln!(output, "Description={}", desc).unwrap();
     }
@@ -54,7 +54,12 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
     writeln!(output, "LinkLocalAddressing={}", config.link_local).unwrap();
 
     // IPv6 Accept RA
-    writeln!(output, "IPv6AcceptRA={}", bool_to_yesno(config.ipv6_accept_ra)).unwrap();
+    writeln!(
+        output,
+        "IPv6AcceptRA={}",
+        bool_to_yesno(config.ipv6_accept_ra)
+    )
+    .unwrap();
 
     // IP Forwarding
     if config.ip_forward != IpForwardMode::No {
@@ -145,10 +150,10 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
     }
 
     // [IPv6AcceptRA] section if accepting RAs with custom settings
-    if config.ipv6_accept_ra {
-        if let Some(ra_client_cfg) = &config.ipv6_accept_ra_config {
-            output.push_str(&generate_ipv6_accept_ra_section(ra_client_cfg));
-        }
+    if config.ipv6_accept_ra
+        && let Some(ra_client_cfg) = &config.ipv6_accept_ra_config
+    {
+        output.push_str(&generate_ipv6_accept_ra_section(ra_client_cfg));
     }
 
     output
@@ -200,8 +205,18 @@ fn generate_ipv6_accept_ra_section(cfg: &keystone_core::Ipv6AcceptRaConfig) -> S
     writeln!(output, "[IPv6AcceptRA]").unwrap();
     writeln!(output, "UseDNS={}", bool_to_yesno(cfg.use_dns)).unwrap();
     writeln!(output, "UseGateway={}", bool_to_yesno(cfg.use_gateway)).unwrap();
-    writeln!(output, "UseRoutePrefix={}", bool_to_yesno(cfg.use_route_prefix)).unwrap();
-    writeln!(output, "UseAutonomousPrefix={}", bool_to_yesno(cfg.use_autonomous_prefix)).unwrap();
+    writeln!(
+        output,
+        "UseRoutePrefix={}",
+        bool_to_yesno(cfg.use_route_prefix)
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "UseAutonomousPrefix={}",
+        bool_to_yesno(cfg.use_autonomous_prefix)
+    )
+    .unwrap();
     writeln!(output).unwrap();
     output
 }
@@ -224,10 +239,10 @@ pub fn get_network_filepath(interface_name: &str) -> std::path::PathBuf {
 pub fn write_network_file(config: &InterfaceConfig) -> Result<()> {
     let content = generate_network_file(config);
     let path = get_network_filepath(&config.name);
-    
+
     std::fs::write(&path, &content)
         .with_context(|| format!("Failed to write network file: {:?}", path))?;
-    
+
     info!("Wrote network config to {:?}", path);
     Ok(())
 }
@@ -243,23 +258,10 @@ pub fn remove_network_file(interface_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write all interface configs to disk
-#[allow(dead_code)]
-pub fn write_all_network_files(configs: &[InterfaceConfig]) -> Result<Vec<String>> {
-    let mut written = Vec::new();
-    for config in configs {
-        if config.enabled {
-            write_network_file(config)?;
-            written.push(config.name.clone());
-        }
-    }
-    Ok(written)
-}
-
 /// Reload systemd-networkd to apply changes
 pub fn reload_networkd() -> Result<()> {
     use std::process::Command;
-    
+
     let output = Command::new("systemctl")
         .args(["reload", "systemd-networkd"])
         .output()
@@ -271,7 +273,7 @@ pub fn reload_networkd() -> Result<()> {
             .args(["restart", "systemd-networkd"])
             .output()
             .context("Failed to execute systemctl restart")?;
-        
+
         if !output.status.success() {
             anyhow::bail!(
                 "Failed to restart systemd-networkd: {}",
@@ -344,10 +346,10 @@ pub fn get_vlan_netdev_filepath(vlan_name: &str) -> std::path::PathBuf {
 pub fn write_vlan_netdev_file(config: &VlanConfig) -> Result<()> {
     let content = generate_vlan_netdev_file(config);
     let path = get_vlan_netdev_filepath(&config.name);
-    
+
     std::fs::write(&path, &content)
         .with_context(|| format!("Failed to write VLAN netdev file: {:?}", path))?;
-    
+
     info!("Wrote VLAN netdev config to {:?}", path);
     Ok(())
 }
@@ -361,17 +363,6 @@ pub fn remove_vlan_netdev_file(vlan_name: &str) -> Result<()> {
         info!("Removed VLAN netdev config: {:?}", path);
     }
     Ok(())
-}
-
-/// Write all VLAN configs to disk
-#[allow(dead_code)]
-pub fn write_all_vlan_netdev_files(configs: &[VlanConfig]) -> Result<Vec<String>> {
-    let mut written = Vec::new();
-    for config in configs {
-        write_vlan_netdev_file(config)?;
-        written.push(config.name.clone());
-    }
-    Ok(written)
 }
 
 // ============================================================================
@@ -426,10 +417,10 @@ pub fn get_bridge_netdev_filepath(bridge_name: &str) -> std::path::PathBuf {
 pub fn write_bridge_netdev_file(config: &keystone_core::BridgeConfig) -> Result<()> {
     let content = generate_bridge_netdev_file(config);
     let path = get_bridge_netdev_filepath(&config.name);
-    
+
     std::fs::write(&path, &content)
         .with_context(|| format!("Failed to write bridge netdev file: {:?}", path))?;
-    
+
     info!("Wrote bridge netdev config to {:?}", path);
     Ok(())
 }
@@ -445,17 +436,6 @@ pub fn remove_bridge_netdev_file(bridge_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write all bridge configs to disk
-#[allow(dead_code)]
-pub fn write_all_bridge_netdev_files(configs: &[keystone_core::BridgeConfig]) -> Result<Vec<String>> {
-    let mut written = Vec::new();
-    for config in configs {
-        write_bridge_netdev_file(config)?;
-        written.push(config.name.clone());
-    }
-    Ok(written)
-}
-
 /// Generate .network file for a bridge member interface
 /// Bridge members need a simple .network file that attaches them to the bridge
 pub fn generate_bridge_member_network_file(interface_name: &str, bridge_name: &str) -> String {
@@ -463,7 +443,12 @@ pub fn generate_bridge_member_network_file(interface_name: &str, bridge_name: &s
     let mut output = String::new();
 
     writeln!(output, "# Generated by Keystone - do not edit manually").unwrap();
-    writeln!(output, "# Bridge member: {} -> {}", interface_name, bridge_name).unwrap();
+    writeln!(
+        output,
+        "# Bridge member: {} -> {}",
+        interface_name, bridge_name
+    )
+    .unwrap();
     writeln!(output).unwrap();
 
     writeln!(output, "[Match]").unwrap();
@@ -478,16 +463,18 @@ pub fn generate_bridge_member_network_file(interface_name: &str, bridge_name: &s
 }
 
 /// Write bridge member .network files for all members
-pub fn write_bridge_member_network_files(config: &keystone_core::BridgeConfig) -> Result<Vec<String>> {
+pub fn write_bridge_member_network_files(
+    config: &keystone_core::BridgeConfig,
+) -> Result<Vec<String>> {
     let mut written = Vec::new();
     for member in &config.members {
         let content = generate_bridge_member_network_file(member, &config.name);
         let filename = format!("{}{}.network", KEYSTONE_PREFIX, member);
         let path = Path::new(NETWORKD_DIR).join(&filename);
-        
+
         std::fs::write(&path, &content)
             .with_context(|| format!("Failed to write bridge member network file: {:?}", path))?;
-        
+
         info!("Wrote bridge member config for {} to {:?}", member, path);
         written.push(member.clone());
     }
@@ -498,8 +485,7 @@ pub fn write_bridge_member_network_files(config: &keystone_core::BridgeConfig) -
 mod tests {
     use super::*;
     use keystone_core::{
-        ActivationPolicy, AddressScope, InterfaceRole, LinkLocalMode,
-        StaticAddress, VlanProtocol,
+        ActivationPolicy, AddressScope, InterfaceRole, LinkLocalMode, StaticAddress, VlanProtocol,
     };
 
     #[test]
@@ -545,13 +531,11 @@ mod tests {
             enabled: true,
             description: Some("LAN Interface".to_string()),
             dhcp_mode: DhcpMode::No,
-            addresses: vec![
-                StaticAddress {
-                    address: "192.168.1.1/24".to_string(),
-                    label: None,
-                    scope: AddressScope::Global,
-                },
-            ],
+            addresses: vec![StaticAddress {
+                address: "192.168.1.1/24".to_string(),
+                label: None,
+                scope: AddressScope::Global,
+            }],
             routes: vec![],
             dns_servers: vec!["8.8.8.8".to_string()],
             search_domains: vec!["example.com".to_string()],
@@ -632,13 +616,11 @@ mod tests {
             enabled: true,
             description: None,
             dhcp_mode: DhcpMode::No,
-            addresses: vec![
-                StaticAddress {
-                    address: "192.168.1.1/24".to_string(),
-                    label: None,
-                    scope: AddressScope::Global,
-                },
-            ],
+            addresses: vec![StaticAddress {
+                address: "192.168.1.1/24".to_string(),
+                label: None,
+                scope: AddressScope::Global,
+            }],
             routes: vec![],
             dns_servers: vec![],
             search_domains: vec![],
@@ -663,8 +645,14 @@ mod tests {
 
     #[test]
     fn test_get_vlan_netdev_filename() {
-        assert_eq!(get_vlan_netdev_filename("vlan10"), "50-keystone-vlan10.netdev");
-        assert_eq!(get_vlan_netdev_filename("eth0.100"), "50-keystone-eth0.100.netdev");
+        assert_eq!(
+            get_vlan_netdev_filename("vlan10"),
+            "50-keystone-vlan10.netdev"
+        );
+        assert_eq!(
+            get_vlan_netdev_filename("eth0.100"),
+            "50-keystone-eth0.100.netdev"
+        );
     }
 
     #[test]
@@ -724,6 +712,9 @@ mod tests {
     #[test]
     fn test_get_bridge_netdev_filename() {
         assert_eq!(get_bridge_netdev_filename("br0"), "50-keystone-br0.netdev");
-        assert_eq!(get_bridge_netdev_filename("bridge-lan"), "50-keystone-bridge-lan.netdev");
+        assert_eq!(
+            get_bridge_netdev_filename("bridge-lan"),
+            "50-keystone-bridge-lan.netdev"
+        );
     }
 }

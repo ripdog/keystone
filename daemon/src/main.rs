@@ -4,6 +4,7 @@
 //! Listens only on a Unix Domain Socket at /run/keystone.sock for security.
 
 mod auth;
+mod caddy;
 mod config;
 mod db;
 mod dnsmasq;
@@ -17,18 +18,17 @@ use axum::{
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post, delete},
+    routing::{delete, get, post},
 };
 use config::Config;
 use db::Database;
 use keystone_core::{
     ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
-    DeleteUserResponse, DeleteVlanResponse, InterfaceConfigResponse,
-    InterfaceConfigsResponse, InterfaceCounters, KeystoneError, LoginRequest, LoginResponse,
-    ManagedInterfacesResponse, SaveInterfaceConfigRequest, SaveInterfaceConfigResponse,
-    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SaveUserRequest,
-    SaveUserResponse, SaveVlanConfigRequest, SaveVlanConfigResponse, SystemState, UsersResponse,
-    VlanConfigResponse, VlanConfigsResponse,
+    DeleteUserResponse, DeleteVlanResponse, InterfaceConfigResponse, InterfaceConfigsResponse,
+    InterfaceCounters, KeystoneError, LoginRequest, LoginResponse, ManagedInterfacesResponse,
+    SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
+    SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest,
+    SaveVlanConfigResponse, SystemState, UsersResponse, VlanConfigResponse, VlanConfigsResponse,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -89,7 +89,8 @@ async fn main() -> anyhow::Result<()> {
         if users.is_empty() {
             info!("Migrating admin user from config file");
             // Create default admin user with the password from config
-            db.create_user("admin", None, &old_config.admin_password_hash).await?;
+            db.create_user("admin", None, &old_config.admin_password_hash)
+                .await?;
             info!("Created admin user from config file");
         }
     } else {
@@ -99,7 +100,9 @@ async fn main() -> anyhow::Result<()> {
             info!("Creating default admin user");
             let default_hash = AuthManager::hash_password("admin")?;
             db.create_user("admin", None, &default_hash).await?;
-            warn!("⚠️  Created default admin user with password 'admin' - CHANGE THIS IMMEDIATELY!");
+            warn!(
+                "⚠️  Created default admin user with password 'admin' - CHANGE THIS IMMEDIATELY!"
+            );
         }
     }
 
@@ -110,14 +113,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create the firewall apply manager
-    let firewall_apply_manager = Arc::new(firewall::FirewallApplyManager::new(Arc::new(db.clone())));
-    
+    let firewall_apply_manager =
+        Arc::new(firewall::FirewallApplyManager::new(Arc::new(db.clone())));
+
     // Initialize firewall manager (check for pending rollbacks from previous run)
     firewall_apply_manager.init().await?;
     info!("Firewall apply manager initialized");
 
     let state = Arc::new(AppState::new(auth_manager, db.clone()));
-    
+
     // Create firewall state for firewall routes
     let firewall_state = firewall::routes::FirewallState {
         db: db.clone(),
@@ -125,9 +129,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Create dnsmasq state for dnsmasq routes
-    let dnsmasq_state = dnsmasq::routes::DnsmasqState {
-        db: db.clone(),
-    };
+    let dnsmasq_state = dnsmasq::routes::DnsmasqState { db: db.clone() };
+
+    // Create Caddy state for Caddy routes
+    let caddy_state = caddy::routes::CaddyState { db: db.clone() };
 
     // Build the router with protected routes
     let protected = Router::new()
@@ -157,6 +162,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(firewall::routes::firewall_routes(firewall_state))
         // Merge dnsmasq routes
         .merge(dnsmasq::routes::dnsmasq_routes(dnsmasq_state))
+        // Merge Caddy routes
+        .merge(caddy::routes::caddy_routes(caddy_state))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -176,10 +183,10 @@ async fn main() -> anyhow::Result<()> {
         // Development mode: Listen on HTTP for easy proxying from Trunk
         warn!("⚠️  Running in DEVELOPMENT mode - HTTP listener enabled!");
         warn!("⚠️  Do NOT use this in production!");
-        
+
         let listener = tokio::net::TcpListener::bind(DEV_HTTP_ADDR).await?;
         info!("Daemon listening on http://{}", DEV_HTTP_ADDR);
-        
+
         axum::serve(listener, app).await?;
     } else {
         // Production mode: Unix socket only
@@ -227,10 +234,11 @@ async fn main() -> anyhow::Result<()> {
                 let hyper_service =
                     hyper::service::service_fn(move |request| app.clone().oneshot(request));
 
-                if let Err(err) =
-                    hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
-                        .serve_connection(socket, hyper_service)
-                        .await
+                if let Err(err) = hyper_util::server::conn::auto::Builder::new(
+                    hyper_util::rt::TokioExecutor::new(),
+                )
+                .serve_connection(socket, hyper_service)
+                .await
                 {
                     error!("Error serving connection: {:?}", err);
                 }
@@ -258,10 +266,14 @@ async fn login(
 
     // Look up user in database
     let user = state.db.get_user_by_username(&request.username).await?;
-    
+
     match user {
         Some(user) => {
-            match state.auth.verify_and_login(&user.username, &request.password, &user.password_hash) {
+            match state.auth.verify_and_login(
+                &user.username,
+                &request.password,
+                &user.password_hash,
+            ) {
                 Ok(token) => {
                     info!("Login successful for user: {}", request.username);
                     Ok(Json(LoginResponse {
@@ -525,7 +537,10 @@ async fn save_managed_interfaces(
 ) -> Result<Json<SaveManagedInterfacesResponse>, AppError> {
     info!("Saving {} managed interfaces", request.interfaces.len());
 
-    state.db.save_managed_interfaces(&request.interfaces).await?;
+    state
+        .db
+        .save_managed_interfaces(&request.interfaces)
+        .await?;
 
     Ok(Json(SaveManagedInterfacesResponse {
         success: true,
@@ -581,7 +596,10 @@ async fn save_interface_config(
         if !addr.address.contains('/') {
             return Ok(Json(SaveInterfaceConfigResponse {
                 success: false,
-                message: format!("Address '{}' must be in CIDR notation (e.g., 192.168.1.1/24)", addr.address),
+                message: format!(
+                    "Address '{}' must be in CIDR notation (e.g., 192.168.1.1/24)",
+                    addr.address
+                ),
                 config_id: None,
             }));
         }
@@ -701,10 +719,10 @@ async fn delete_vlan(
 
     if deleted {
         // Also remove the netdev file if it exists
-        if let Some(vlan) = vlan {
-            if let Err(e) = networkd::remove_vlan_netdev_file(&vlan.name) {
-                warn!("Failed to remove VLAN netdev file for {}: {}", vlan.name, e);
-            }
+        if let Some(vlan) = vlan
+            && let Err(e) = networkd::remove_vlan_netdev_file(&vlan.name)
+        {
+            warn!("Failed to remove VLAN netdev file for {}: {}", vlan.name, e);
         }
     }
 
@@ -758,7 +776,9 @@ async fn save_bridge(
     }
 
     // Validate STP forward delay (2-30 seconds per IEEE 802.1D)
-    if request.config.stp && (request.config.stp_forward_delay < 2 || request.config.stp_forward_delay > 30) {
+    if request.config.stp
+        && (request.config.stp_forward_delay < 2 || request.config.stp_forward_delay > 30)
+    {
         return Ok(Json(keystone_core::SaveBridgeConfigResponse {
             success: false,
             message: "STP forward delay must be between 2 and 30 seconds".to_string(),
@@ -789,10 +809,13 @@ async fn delete_bridge(
 
     if deleted {
         // Also remove the netdev file if it exists
-        if let Some(bridge) = bridge {
-            if let Err(e) = networkd::remove_bridge_netdev_file(&bridge.name) {
-                warn!("Failed to remove bridge netdev file for {}: {}", bridge.name, e);
-            }
+        if let Some(bridge) = bridge
+            && let Err(e) = networkd::remove_bridge_netdev_file(&bridge.name)
+        {
+            warn!(
+                "Failed to remove bridge netdev file for {}: {}",
+                bridge.name, e
+            );
         }
     }
 
@@ -894,7 +917,10 @@ async fn apply_networkd(
         } else {
             // Remove disabled interface configs
             if let Err(e) = networkd::remove_network_file(&config.name) {
-                warn!("Failed to remove network file for disabled interface {}: {}", config.name, e);
+                warn!(
+                    "Failed to remove network file for disabled interface {}: {}",
+                    config.name, e
+                );
             }
         }
     }
@@ -957,9 +983,7 @@ async fn apply_networkd(
 }
 
 /// GET /users - Get all users
-async fn get_users(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<UsersResponse>, AppError> {
+async fn get_users(State(state): State<Arc<AppState>>) -> Result<Json<UsersResponse>, AppError> {
     info!("Retrieving users");
 
     let users = state.db.get_users().await?;
@@ -999,7 +1023,15 @@ async fn save_user(
                 None
             };
 
-            state.db.update_user(id, &request.username, request.email.as_deref(), password_hash.as_deref()).await?;
+            state
+                .db
+                .update_user(
+                    id,
+                    &request.username,
+                    request.email.as_deref(),
+                    password_hash.as_deref(),
+                )
+                .await?;
 
             Ok(Json(SaveUserResponse {
                 success: true,
@@ -1009,8 +1041,10 @@ async fn save_user(
         }
         None => {
             // Create new user
-            let password = request.password.ok_or_else(|| anyhow::anyhow!("Password required for new user"))?;
-            
+            let password = request
+                .password
+                .ok_or_else(|| anyhow::anyhow!("Password required for new user"))?;
+
             if password.len() < 6 {
                 return Ok(Json(SaveUserResponse {
                     success: false,
@@ -1020,7 +1054,10 @@ async fn save_user(
             }
 
             let password_hash = AuthManager::hash_password(&password)?;
-            let user_id = state.db.create_user(&request.username, request.email.as_deref(), &password_hash).await?;
+            let user_id = state
+                .db
+                .create_user(&request.username, request.email.as_deref(), &password_hash)
+                .await?;
 
             Ok(Json(SaveUserResponse {
                 success: true,

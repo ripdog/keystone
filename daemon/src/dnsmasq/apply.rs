@@ -7,26 +7,32 @@ use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
-use super::config::{generate_dnsmasq_config, DNSMASQ_CONF_DIR, DNSMASQ_CONFIG_PATH, DNSMASQ_LEASE_FILE};
+use super::config::{
+    DNSMASQ_CONF_DIR, DNSMASQ_CONFIG_PATH, DNSMASQ_LEASE_FILE, generate_dnsmasq_config,
+};
 use super::db::load_dnsmasq_state;
 
 /// Ensure the dnsmasq configuration directory exists
 pub fn ensure_dnsmasq_dir() -> Result<()> {
     let path = Path::new(DNSMASQ_CONF_DIR);
     if !path.exists() {
-        fs::create_dir_all(path)
-            .with_context(|| format!("Failed to create dnsmasq config directory: {}", DNSMASQ_CONF_DIR))?;
+        fs::create_dir_all(path).with_context(|| {
+            format!(
+                "Failed to create dnsmasq config directory: {}",
+                DNSMASQ_CONF_DIR
+            )
+        })?;
     }
     Ok(())
 }
 
 /// Ensure the dnsmasq lease file directory exists
 pub fn ensure_lease_dir() -> Result<()> {
-    if let Some(parent) = Path::new(DNSMASQ_LEASE_FILE).parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create lease directory: {:?}", parent))?;
-        }
+    if let Some(parent) = Path::new(DNSMASQ_LEASE_FILE).parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create lease directory: {:?}", parent))?;
     }
     Ok(())
 }
@@ -118,9 +124,7 @@ pub fn enable_dnsmasq() -> Result<()> {
 /// Disable and stop dnsmasq service
 pub fn disable_dnsmasq() -> Result<()> {
     // Stop the service
-    let _ = Command::new("systemctl")
-        .args(["stop", "dnsmasq"])
-        .output();
+    let _ = Command::new("systemctl").args(["stop", "dnsmasq"]).output();
 
     // Disable the service
     let output = Command::new("systemctl")

@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Failed to get binary directory"))?;
     let dist_dir = exe_dir.join("dist");
-    
+
     info!("Serving static assets from: {}", dist_dir.display());
 
     // Build the router

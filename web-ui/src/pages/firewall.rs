@@ -39,14 +39,13 @@ enum FirewallTab {
 #[component]
 pub fn FirewallPage(
     auth_token: ReadSignal<Option<String>>,
-    #[allow(unused_variables)]
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     // Get the token as a derived signal that returns empty string if not set
     let token = Signal::derive(move || auth_token.get().unwrap_or_default());
-    
+
     let active_tab = RwSignal::new(FirewallTab::Zones);
-    
+
     // Status message for apply/confirm workflow
     let status_message = RwSignal::new(String::new());
     let pending_session = RwSignal::new(Option::<String>::None);
@@ -77,6 +76,7 @@ pub fn FirewallPage(
                         status_message=status_message
                         pending_session=pending_session
                         seconds_remaining=seconds_remaining
+                        on_unauthorized=on_unauthorized
                     />
                 </div>
             </div>
@@ -113,11 +113,13 @@ pub fn FirewallPage(
                                     session_id=session_id.clone()
                                     status_message=status_message
                                     pending_session=pending_session
+                                    on_unauthorized=on_unauthorized
                                 />
                                 <RollbackButton
                                     token=token.get()
                                     status_message=status_message
                                     pending_session=pending_session
+                                    on_unauthorized=on_unauthorized
                                 />
                             </div>
                         </div>
@@ -178,13 +180,13 @@ pub fn FirewallPage(
             // Tab content
             <div class="bg-gray-800 rounded-lg shadow-lg p-6">
                 {move || match active_tab.get() {
-                    FirewallTab::Zones => view! { <ZonesTab token=token reload_trigger=reload_trigger /> }.into_any(),
-                    FirewallTab::ZoneForwards => view! { <ZoneForwardsTab token=token reload_trigger=reload_trigger /> }.into_any(),
-                    FirewallTab::PortForwards => view! { <PortForwardsTab token=token reload_trigger=reload_trigger /> }.into_any(),
-                    FirewallTab::InputRules => view! { <InputRulesTab token=token reload_trigger=reload_trigger /> }.into_any(),
-                    FirewallTab::ForwardRules => view! { <ForwardRulesTab token=token reload_trigger=reload_trigger /> }.into_any(),
-                    FirewallTab::Settings => view! { <SettingsTab token=token /> }.into_any(),
-                    FirewallTab::Preview => view! { <PreviewTab token=token reload_trigger=reload_trigger /> }.into_any(),
+                    FirewallTab::Zones => view! { <ZonesTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::ZoneForwards => view! { <ZoneForwardsTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::PortForwards => view! { <PortForwardsTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::InputRules => view! { <InputRulesTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::ForwardRules => view! { <ForwardRulesTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::Settings => view! { <SettingsTab token=token on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::Preview => view! { <PreviewTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
                 }}
             </div>
         </div>
@@ -201,6 +203,7 @@ fn ApplyButton(
     status_message: RwSignal<String>,
     pending_session: RwSignal<Option<String>>,
     seconds_remaining: RwSignal<u32>,
+    on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let applying = RwSignal::new(false);
 
@@ -225,7 +228,11 @@ fn ApplyButton(
                     }
                 }
                 Err(e) => {
-                    status_message.set(format!("Error: {}", e));
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        status_message.set(format!("Error: {}", e));
+                    }
                 }
             }
             applying.set(false);
@@ -249,6 +256,7 @@ fn ConfirmButton(
     session_id: String,
     status_message: RwSignal<String>,
     pending_session: RwSignal<Option<String>>,
+    on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let confirming = RwSignal::new(false);
     let token = token.clone();
@@ -262,14 +270,18 @@ fn ConfirmButton(
             match api::confirm_firewall(&token, &session_id).await {
                 Ok(response) => {
                     if response.success {
-                        status_message.set("Changes confirmed and saved.".to_string());
+                        status_message.set(response.message);
                         pending_session.set(None);
                     } else {
                         status_message.set(format!("Confirm failed: {}", response.message));
                     }
                 }
                 Err(e) => {
-                    status_message.set(format!("Error: {}", e));
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        status_message.set(format!("Error: {}", e));
+                    }
                 }
             }
             confirming.set(false);
@@ -292,6 +304,7 @@ fn RollbackButton(
     token: String,
     status_message: RwSignal<String>,
     pending_session: RwSignal<Option<String>>,
+    on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let rolling_back = RwSignal::new(false);
     let token = token.clone();
@@ -303,14 +316,18 @@ fn RollbackButton(
             match api::rollback_firewall(&token).await {
                 Ok(response) => {
                     if response.success {
-                        status_message.set("Changes rolled back.".to_string());
+                        status_message.set(response.message);
                         pending_session.set(None);
                     } else {
                         status_message.set(format!("Rollback failed: {}", response.message));
                     }
                 }
                 Err(e) => {
-                    status_message.set(format!("Error: {}", e));
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        status_message.set(format!("Error: {}", e));
+                    }
                 }
             }
             rolling_back.set(false);
@@ -333,7 +350,11 @@ fn RollbackButton(
 // ============================================================================
 
 #[component]
-fn ZonesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoView {
+fn ZonesTab(
+    token: Signal<String>,
+    reload_trigger: RwSignal<i32>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
     let zones = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -391,6 +412,7 @@ fn ZonesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoVi
                             }
                             on_cancel=move || editing_zone.set(None)
                             error_message=error_message
+                            on_unauthorized=on_unauthorized
                         />
                     }.into_any()
                 } else {
@@ -444,14 +466,19 @@ fn ZonesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoVi
                                                     </button>
                                                     <button
                                                         class="px-2 py-1 text-sm text-red-400 hover:text-red-300"
-                                                        on:click=move |_| {
+                                                         on:click=move |_| {
                                                             if let Some(id) = zone_for_delete.id {
                                                                 let token = token_for_delete.clone();
                                                                 leptos::task::spawn_local(async move {
-                                                                    if let Err(e) = api::delete_firewall_zone(&token, id).await {
-                                                                        error_message.set(e);
-                                                                    } else {
-                                                                        reload_trigger.update(|v| *v += 1);
+                                                                    match api::delete_firewall_zone(&token, id).await {
+                                                                        Ok(_) => reload_trigger.update(|v| *v += 1),
+                                                                        Err(e) => {
+                                                                            if e.contains("Unauthorized") {
+                                                                                on_unauthorized.run(());
+                                                                            } else {
+                                                                                error_message.set(e);
+                                                                            }
+                                                                        }
                                                                     }
                                                                 });
                                                             }
@@ -466,7 +493,12 @@ fn ZonesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoVi
                                 />
                             </div>
                         }.into_any(),
-                        Err(e) => view! { <p class="text-red-400">"Error: "{e}</p> }.into_any(),
+                        Err(e) => {
+                            if e.contains("Unauthorized") {
+                                on_unauthorized.run(());
+                            }
+                            view! { <p class="text-red-400">"Error: "{e}</p> }.into_any()
+                        }
                     })
                 }}
             </Suspense>
@@ -481,6 +513,7 @@ fn ZoneEditor(
     on_save: impl Fn(()) + 'static,
     on_cancel: impl Fn() + 'static,
     error_message: RwSignal<String>,
+    on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let name = RwSignal::new(zone.name.clone());
     let description = RwSignal::new(zone.description.clone().unwrap_or_default());
@@ -496,15 +529,20 @@ fn ZoneEditor(
     let save_zone = move |_| {
         saving.set(true);
         error_message.set(String::new());
-        
+
         let token = token.clone();
         let on_save = on_save_clone.clone();
-        
+
         let new_zone = FirewallZone {
             id: zone_id,
             name: name.get(),
-            description: if description.get().is_empty() { None } else { Some(description.get()) },
-            interfaces: interfaces_str.get()
+            description: if description.get().is_empty() {
+                None
+            } else {
+                Some(description.get())
+            },
+            interfaces: interfaces_str
+                .get()
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
@@ -519,7 +557,11 @@ fn ZoneEditor(
                     on_save(());
                 }
                 Err(e) => {
-                    error_message.set(e);
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        error_message.set(e);
+                    }
                 }
             }
             saving.set(false);
@@ -619,7 +661,11 @@ fn ZoneEditor(
 // ============================================================================
 
 #[component]
-fn ZoneForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoView {
+fn ZoneForwardsTab(
+    token: Signal<String>,
+    reload_trigger: RwSignal<i32>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
     let zone_forwards = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -678,6 +724,7 @@ fn ZoneForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                             }
                             on_cancel=move || editing.set(None)
                             error_message=error_message
+                            on_unauthorized=on_unauthorized
                         />
                     }.into_any()
                 } else {
@@ -740,14 +787,19 @@ fn ZoneForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                                                                 </button>
                                                                 <button
                                                                     class="text-red-400 hover:text-red-300"
-                                                                    on:click=move |_| {
+                                                                     on:click=move |_| {
                                                                         if let Some(id) = policy_for_delete.id {
                                                                             let token = token_del.clone();
                                                                             leptos::task::spawn_local(async move {
-                                                                                if let Err(e) = api::delete_zone_forward(&token, id).await {
-                                                                                    error_message.set(e);
-                                                                                } else {
-                                                                                    reload_trigger.update(|v| *v += 1);
+                                                                                match api::delete_zone_forward(&token, id).await {
+                                                                                    Ok(_) => reload_trigger.update(|v| *v += 1),
+                                                                                    Err(e) => {
+                                                                                        if e.contains("Unauthorized") {
+                                                                                            on_unauthorized.run(());
+                                                                                        } else {
+                                                                                            error_message.set(e);
+                                                                                        }
+                                                                                    }
                                                                                 }
                                                                             });
                                                                         }
@@ -770,7 +822,12 @@ fn ZoneForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                                 </div>
                             }.into_any()
                         },
-                        Err(e) => view! { <p class="text-red-400">"Error: "{e}</p> }.into_any(),
+                        Err(e) => {
+                            if e.contains("Unauthorized") {
+                                on_unauthorized.run(());
+                            }
+                            view! { <p class="text-red-400">"Error: "{e}</p> }.into_any()
+                        }
                     })
                 }}
             </Suspense>
@@ -785,6 +842,7 @@ fn ZoneForwardEditor(
     on_save: impl Fn(()) + 'static,
     on_cancel: impl Fn() + 'static,
     error_message: RwSignal<String>,
+    on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let source_zone = RwSignal::new(policy.source_zone.clone());
     let dest_zone = RwSignal::new(policy.dest_zone.clone());
@@ -799,10 +857,10 @@ fn ZoneForwardEditor(
     let save = move |_| {
         saving.set(true);
         error_message.set(String::new());
-        
+
         let token = token.clone();
         let on_save = on_save_clone.clone();
-        
+
         let new_policy = ZoneForwardPolicy {
             id: policy_id,
             source_zone: source_zone.get(),
@@ -814,7 +872,13 @@ fn ZoneForwardEditor(
         leptos::task::spawn_local(async move {
             match api::save_zone_forward(&token, new_policy).await {
                 Ok(_) => on_save(()),
-                Err(e) => error_message.set(e),
+                Err(e) => {
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        error_message.set(e);
+                    }
+                }
             }
             saving.set(false);
         });
@@ -902,7 +966,11 @@ fn ZoneForwardEditor(
 // ============================================================================
 
 #[component]
-fn PortForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoView {
+fn PortForwardsTab(
+    token: Signal<String>,
+    reload_trigger: RwSignal<i32>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
     let port_forwards = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -964,6 +1032,7 @@ fn PortForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                             }
                             on_cancel=move || editing.set(None)
                             error_message=error_message
+                            on_unauthorized=on_unauthorized
                         />
                     }.into_any()
                 } else {
@@ -1027,14 +1096,19 @@ fn PortForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                                                                 </button>
                                                                 <button
                                                                     class="text-red-400 hover:text-red-300"
-                                                                    on:click=move |_| {
+                                                                     on:click=move |_| {
                                                                         if let Some(id) = pf_delete.id {
                                                                             let token = token_del.clone();
                                                                             leptos::task::spawn_local(async move {
-                                                                                if let Err(e) = api::delete_port_forward(&token, id).await {
-                                                                                    error_message.set(e);
-                                                                                } else {
-                                                                                    reload_trigger.update(|v| *v += 1);
+                                                                                match api::delete_port_forward(&token, id).await {
+                                                                                    Ok(_) => reload_trigger.update(|v| *v += 1),
+                                                                                    Err(e) => {
+                                                                                        if e.contains("Unauthorized") {
+                                                                                            on_unauthorized.run(());
+                                                                                        } else {
+                                                                                            error_message.set(e);
+                                                                                        }
+                                                                                    }
                                                                                 }
                                                                             });
                                                                         }
@@ -1057,7 +1131,12 @@ fn PortForwardsTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                                 </div>
                             }.into_any()
                         },
-                        Err(e) => view! { <p class="text-red-400">"Error: "{e}</p> }.into_any(),
+                        Err(e) => {
+                            if e.contains("Unauthorized") {
+                                on_unauthorized.run(());
+                            }
+                            view! { <p class="text-red-400">"Error: "{e}</p> }.into_any()
+                        }
                     })
                 }}
             </Suspense>
@@ -1072,12 +1151,18 @@ fn PortForwardEditor(
     on_save: impl Fn(()) + 'static,
     on_cancel: impl Fn() + 'static,
     error_message: RwSignal<String>,
+    on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let name = RwSignal::new(port_forward.name.clone());
     let protocol = RwSignal::new(port_forward.protocol);
     let external_port = RwSignal::new(port_forward.external_port_start.to_string());
     let dest_ip = RwSignal::new(port_forward.dest_ip.clone());
-    let dest_port = RwSignal::new(port_forward.dest_port.map(|p| p.to_string()).unwrap_or_default());
+    let dest_port = RwSignal::new(
+        port_forward
+            .dest_port
+            .map(|p| p.to_string())
+            .unwrap_or_default(),
+    );
     let enabled = RwSignal::new(port_forward.enabled);
     let saving = RwSignal::new(false);
     let pf_id = port_forward.id;
@@ -1088,13 +1173,13 @@ fn PortForwardEditor(
     let save = move |_| {
         saving.set(true);
         error_message.set(String::new());
-        
+
         let token = token.clone();
         let on_save = on_save_clone.clone();
-        
+
         let ext_port: u16 = external_port.get().parse().unwrap_or(0);
         let dst_port: Option<u16> = dest_port.get().parse().ok();
-        
+
         let pf = PortForward {
             id: pf_id,
             name: name.get(),
@@ -1112,7 +1197,13 @@ fn PortForwardEditor(
         leptos::task::spawn_local(async move {
             match api::save_port_forward(&token, pf).await {
                 Ok(_) => on_save(()),
-                Err(e) => error_message.set(e),
+                Err(e) => {
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        error_message.set(e);
+                    }
+                }
             }
             saving.set(false);
         });
@@ -1221,7 +1312,11 @@ fn PortForwardEditor(
 // ============================================================================
 
 #[component]
-fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoView {
+fn InputRulesTab(
+    token: Signal<String>,
+    reload_trigger: RwSignal<i32>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
     let rules = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -1299,6 +1394,7 @@ fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl I
                             }
                             on_cancel=move || editing.set(None)
                             error_message=error_message
+                            on_unauthorized=on_unauthorized
                         />
                     }.into_any()
                 } else {
@@ -1387,14 +1483,19 @@ fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl I
                                                                 <button
                                                                     class="text-red-400 hover:text-red-300"
                                                                     title="Delete"
-                                                                    on:click=move |_| {
+                                                                     on:click=move |_| {
                                                                         if let Some(id) = rule_for_delete.id {
                                                                             let token = token_del.clone();
                                                                             leptos::task::spawn_local(async move {
-                                                                                if let Err(e) = api::delete_input_rule(&token, id).await {
-                                                                                    error_message.set(e);
-                                                                                } else {
-                                                                                    reload_trigger.update(|v| *v += 1);
+                                                                                match api::delete_input_rule(&token, id).await {
+                                                                                    Ok(_) => reload_trigger.update(|v| *v += 1),
+                                                                                    Err(e) => {
+                                                                                        if e.contains("Unauthorized") {
+                                                                                            on_unauthorized.run(());
+                                                                                        } else {
+                                                                                            error_message.set(e);
+                                                                                        }
+                                                                                    }
                                                                                 }
                                                                             });
                                                                         }
@@ -1417,7 +1518,12 @@ fn InputRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl I
                                 </div>
                             }.into_any()
                         },
-                        Err(e) => view! { <p class="text-red-400">"Error: "{e}</p> }.into_any(),
+                        Err(e) => {
+                            if e.contains("Unauthorized") {
+                                on_unauthorized.run(());
+                            }
+                            view! { <p class="text-red-400">"Error: "{e}</p> }.into_any()
+                        }
                     })
                 }}
             </Suspense>
@@ -1432,13 +1538,14 @@ fn InputRuleEditor(
     on_save: impl Fn(()) + 'static,
     on_cancel: impl Fn() + 'static,
     error_message: RwSignal<String>,
+    on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let name = RwSignal::new(rule.name.clone());
     let description = RwSignal::new(rule.description.clone().unwrap_or_default());
     let enabled = RwSignal::new(rule.enabled);
     let position = RwSignal::new(rule.position.to_string());
     let zone = RwSignal::new(rule.zone.clone().unwrap_or_default());
-    let protocol = RwSignal::new(rule.protocol.clone());
+    let protocol = RwSignal::new(rule.protocol);
     let port_start = RwSignal::new(rule.port_start.map(|p| p.to_string()).unwrap_or_default());
     let port_end = RwSignal::new(rule.port_end.map(|p| p.to_string()).unwrap_or_default());
     let source_ip = RwSignal::new(rule.source_ip.clone().unwrap_or_default());
@@ -1455,31 +1562,57 @@ fn InputRuleEditor(
     let save = move |_| {
         saving.set(true);
         error_message.set(String::new());
-        
+
         let token = token.clone();
         let on_save = on_save_clone.clone();
-        
+
         let new_rule = InputRule {
             id: rule_id,
             name: name.get(),
-            description: if description.get().is_empty() { None } else { Some(description.get()) },
+            description: if description.get().is_empty() {
+                None
+            } else {
+                Some(description.get())
+            },
             enabled: enabled.get(),
             position: position.get().parse().unwrap_or(100),
-            zone: if zone.get().is_empty() { None } else { Some(zone.get()) },
+            zone: if zone.get().is_empty() {
+                None
+            } else {
+                Some(zone.get())
+            },
             protocol: protocol.get(),
             port_start: port_start.get().parse().ok(),
             port_end: port_end.get().parse().ok(),
-            source_ip: if source_ip.get().is_empty() { None } else { Some(source_ip.get()) },
+            source_ip: if source_ip.get().is_empty() {
+                None
+            } else {
+                Some(source_ip.get())
+            },
             action: action.get(),
             log_enabled: log_enabled.get(),
-            log_prefix: if log_prefix.get().is_empty() { None } else { Some(log_prefix.get()) },
-            rate_limit: if rate_limit.get().is_empty() { None } else { Some(rate_limit.get()) },
+            log_prefix: if log_prefix.get().is_empty() {
+                None
+            } else {
+                Some(log_prefix.get())
+            },
+            rate_limit: if rate_limit.get().is_empty() {
+                None
+            } else {
+                Some(rate_limit.get())
+            },
         };
 
         leptos::task::spawn_local(async move {
             match api::save_input_rule(&token, new_rule).await {
                 Ok(_) => on_save(()),
-                Err(e) => error_message.set(e),
+                Err(e) => {
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        error_message.set(e);
+                    }
+                }
             }
             saving.set(false);
         });
@@ -1681,7 +1814,11 @@ fn InputRuleEditor(
 // ============================================================================
 
 #[component]
-fn ForwardRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoView {
+fn ForwardRulesTab(
+    token: Signal<String>,
+    reload_trigger: RwSignal<i32>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
     let rules = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -1761,6 +1898,7 @@ fn ForwardRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                             }
                             on_cancel=move || editing.set(None)
                             error_message=error_message
+                            on_unauthorized=on_unauthorized
                         />
                     }.into_any()
                 } else {
@@ -1841,14 +1979,19 @@ fn ForwardRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                                                                 <button
                                                                     class="text-red-400 hover:text-red-300"
                                                                     title="Delete"
-                                                                    on:click=move |_| {
+                                                                     on:click=move |_| {
                                                                         if let Some(id) = rule_for_delete.id {
                                                                             let token = token_del.clone();
                                                                             leptos::task::spawn_local(async move {
-                                                                                if let Err(e) = api::delete_forward_rule(&token, id).await {
-                                                                                    error_message.set(e);
-                                                                                } else {
-                                                                                    reload_trigger.update(|v| *v += 1);
+                                                                                match api::delete_forward_rule(&token, id).await {
+                                                                                    Ok(_) => reload_trigger.update(|v| *v += 1),
+                                                                                    Err(e) => {
+                                                                                        if e.contains("Unauthorized") {
+                                                                                            on_unauthorized.run(());
+                                                                                        } else {
+                                                                                            error_message.set(e);
+                                                                                        }
+                                                                                    }
                                                                                 }
                                                                             });
                                                                         }
@@ -1871,7 +2014,12 @@ fn ForwardRulesTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl
                                 </div>
                             }.into_any()
                         },
-                        Err(e) => view! { <p class="text-red-400">"Error: "{e}</p> }.into_any(),
+                        Err(e) => {
+                            if e.contains("Unauthorized") {
+                                on_unauthorized.run(());
+                            }
+                            view! { <p class="text-red-400">"Error: "{e}</p> }.into_any()
+                        }
                     })
                 }}
             </Suspense>
@@ -1886,6 +2034,7 @@ fn ForwardRuleEditor(
     on_save: impl Fn(()) + 'static,
     on_cancel: impl Fn() + 'static,
     error_message: RwSignal<String>,
+    on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let name = RwSignal::new(rule.name.clone());
     let description = RwSignal::new(rule.description.clone().unwrap_or_default());
@@ -1893,9 +2042,17 @@ fn ForwardRuleEditor(
     let position = RwSignal::new(rule.position.to_string());
     let source_zone = RwSignal::new(rule.source_zone.clone().unwrap_or_default());
     let dest_zone = RwSignal::new(rule.dest_zone.clone().unwrap_or_default());
-    let protocol = RwSignal::new(rule.protocol.clone());
-    let dest_port_start = RwSignal::new(rule.dest_port_start.map(|p| p.to_string()).unwrap_or_default());
-    let dest_port_end = RwSignal::new(rule.dest_port_end.map(|p| p.to_string()).unwrap_or_default());
+    let protocol = RwSignal::new(rule.protocol);
+    let dest_port_start = RwSignal::new(
+        rule.dest_port_start
+            .map(|p| p.to_string())
+            .unwrap_or_default(),
+    );
+    let dest_port_end = RwSignal::new(
+        rule.dest_port_end
+            .map(|p| p.to_string())
+            .unwrap_or_default(),
+    );
     let source_ip = RwSignal::new(rule.source_ip.clone().unwrap_or_default());
     let dest_ip = RwSignal::new(rule.dest_ip.clone().unwrap_or_default());
     let action = RwSignal::new(rule.action);
@@ -1911,33 +2068,67 @@ fn ForwardRuleEditor(
     let save = move |_| {
         saving.set(true);
         error_message.set(String::new());
-        
+
         let token = token.clone();
         let on_save = on_save_clone.clone();
-        
+
         let new_rule = ForwardRule {
             id: rule_id,
             name: name.get(),
-            description: if description.get().is_empty() { None } else { Some(description.get()) },
+            description: if description.get().is_empty() {
+                None
+            } else {
+                Some(description.get())
+            },
             enabled: enabled.get(),
             position: position.get().parse().unwrap_or(100),
-            source_zone: if source_zone.get().is_empty() { None } else { Some(source_zone.get()) },
-            dest_zone: if dest_zone.get().is_empty() { None } else { Some(dest_zone.get()) },
+            source_zone: if source_zone.get().is_empty() {
+                None
+            } else {
+                Some(source_zone.get())
+            },
+            dest_zone: if dest_zone.get().is_empty() {
+                None
+            } else {
+                Some(dest_zone.get())
+            },
             protocol: protocol.get(),
             dest_port_start: dest_port_start.get().parse().ok(),
             dest_port_end: dest_port_end.get().parse().ok(),
-            source_ip: if source_ip.get().is_empty() { None } else { Some(source_ip.get()) },
-            dest_ip: if dest_ip.get().is_empty() { None } else { Some(dest_ip.get()) },
+            source_ip: if source_ip.get().is_empty() {
+                None
+            } else {
+                Some(source_ip.get())
+            },
+            dest_ip: if dest_ip.get().is_empty() {
+                None
+            } else {
+                Some(dest_ip.get())
+            },
             action: action.get(),
             log_enabled: log_enabled.get(),
-            log_prefix: if log_prefix.get().is_empty() { None } else { Some(log_prefix.get()) },
-            rate_limit: if rate_limit.get().is_empty() { None } else { Some(rate_limit.get()) },
+            log_prefix: if log_prefix.get().is_empty() {
+                None
+            } else {
+                Some(log_prefix.get())
+            },
+            rate_limit: if rate_limit.get().is_empty() {
+                None
+            } else {
+                Some(rate_limit.get())
+            },
         };
 
         leptos::task::spawn_local(async move {
             match api::save_forward_rule(&token, new_rule).await {
                 Ok(_) => on_save(()),
-                Err(e) => error_message.set(e),
+                Err(e) => {
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        error_message.set(e);
+                    }
+                }
             }
             saving.set(false);
         });
@@ -2159,7 +2350,7 @@ fn ForwardRuleEditor(
 // ============================================================================
 
 #[component]
-fn SettingsTab(token: Signal<String>) -> impl IntoView {
+fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl IntoView {
     let settings = LocalResource::new(move || {
         let token = token.get();
         async move { api::fetch_firewall_global_settings(&token).await }
@@ -2176,13 +2367,13 @@ fn SettingsTab(token: Signal<String>) -> impl IntoView {
 
     // Initialize form values when settings load
     Effect::new(move |_| {
-        if let Some(Ok(s)) = settings.get() {
-            if !initialized.get() {
-                ping_wan_enabled.set(s.ping_wan_enabled);
-                ping_lan_enabled.set(s.ping_lan_enabled);
-                hairpin_nat_enabled.set(s.hairpin_nat_enabled);
-                initialized.set(true);
-            }
+        if let Some(Ok(s)) = settings.get()
+            && !initialized.get()
+        {
+            ping_wan_enabled.set(s.ping_wan_enabled);
+            ping_lan_enabled.set(s.ping_lan_enabled);
+            hairpin_nat_enabled.set(s.hairpin_nat_enabled);
+            initialized.set(true);
         }
     });
 
@@ -2207,7 +2398,11 @@ fn SettingsTab(token: Signal<String>) -> impl IntoView {
                     }
                 }
                 Err(e) => {
-                    status_message.set(format!("Error: {}", e));
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        status_message.set(format!("Error: {}", e));
+                    }
                 }
             }
             is_saving.set(false);
@@ -2309,7 +2504,12 @@ fn SettingsTab(token: Signal<String>) -> impl IntoView {
                                 </div>
                             </div>
                         }.into_any(),
-                        Err(e) => view! { <p class="text-red-400">"Error loading settings: "{e}</p> }.into_any(),
+                        Err(e) => {
+                            if e.contains("Unauthorized") {
+                                on_unauthorized.run(());
+                            }
+                            view! { <p class="text-red-400">"Error loading settings: "{e}</p> }.into_any()
+                        }
                     })
                 }}
             </Suspense>
@@ -2322,7 +2522,11 @@ fn SettingsTab(token: Signal<String>) -> impl IntoView {
 // ============================================================================
 
 #[component]
-fn PreviewTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl IntoView {
+fn PreviewTab(
+    token: Signal<String>,
+    reload_trigger: RwSignal<i32>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
     let preview = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -2349,7 +2553,12 @@ fn PreviewTab(token: Signal<String>, reload_trigger: RwSignal<i32>) -> impl Into
                                 {ruleset}
                             </pre>
                         }.into_any(),
-                        Err(e) => view! { <p class="text-red-400">"Error: "{e}</p> }.into_any(),
+                        Err(e) => {
+                            if e.contains("Unauthorized") {
+                                on_unauthorized.run(());
+                            }
+                            view! { <p class="text-red-400">"Error: "{e}</p> }.into_any()
+                        }
                     })
                 }}
             </Suspense>

@@ -3,7 +3,10 @@
 //! Handles JWT-based authentication with Argon2 password hashing.
 
 use anyhow::{Context, Result};
-use argon2::{Argon2, PasswordHash, PasswordVerifier, password_hash::{PasswordHasher, SaltString}};
+use argon2::{
+    Argon2, PasswordHash, PasswordVerifier,
+    password_hash::{PasswordHasher, SaltString},
+};
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use keystone_core::Claims;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,7 +44,12 @@ impl AuthManager {
     }
 
     /// Verify password against hash and generate JWT token on success
-    pub fn verify_and_login(&self, username: &str, input_pass: &str, stored_hash: &str) -> Result<String> {
+    pub fn verify_and_login(
+        &self,
+        username: &str,
+        input_pass: &str,
+        stored_hash: &str,
+    ) -> Result<String> {
         debug!("Attempting login for user: {}", username);
 
         let parsed_hash = PasswordHash::new(stored_hash)
@@ -99,11 +107,11 @@ mod tests {
     fn test_hash_and_verify() {
         let password = "test_password";
         let hash = AuthManager::hash_password(password).unwrap();
-        
+
         // Create a dummy key for testing
         let key_bytes = vec![0u8; 32];
         let auth = AuthManager::new(key_bytes);
-        
+
         let token = auth.verify_and_login("testuser", password, &hash);
         assert!(token.is_ok());
     }
@@ -112,10 +120,10 @@ mod tests {
     fn test_verify_invalid_password() {
         let password = "test_password";
         let hash = AuthManager::hash_password(password).unwrap();
-        
+
         let key_bytes = vec![0u8; 32];
         let auth = AuthManager::new(key_bytes);
-        
+
         let token = auth.verify_and_login("testuser", "wrong_password", &hash);
         assert!(token.is_err());
     }
@@ -124,10 +132,10 @@ mod tests {
     fn test_verify_valid_token() {
         let password = "test_password";
         let hash = AuthManager::hash_password(password).unwrap();
-        
+
         let key_bytes = vec![0u8; 32];
         let auth = AuthManager::new(key_bytes);
-        
+
         let token = auth.verify_and_login("testuser", password, &hash).unwrap();
         assert!(auth.verify(&token));
     }
@@ -136,7 +144,7 @@ mod tests {
     fn test_verify_invalid_token() {
         let key_bytes = vec![0u8; 32];
         let auth = AuthManager::new(key_bytes);
-        
+
         assert!(!auth.verify("invalid.token.here"));
     }
 }

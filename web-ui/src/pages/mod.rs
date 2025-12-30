@@ -1,6 +1,7 @@
 //! Application pages
 
 mod bridges;
+mod caddy;
 mod dashboard;
 mod dnsmasq;
 mod firewall;
@@ -11,6 +12,7 @@ mod settings;
 mod vlans;
 
 pub use bridges::*;
+pub use caddy::*;
 pub use dashboard::*;
 pub use dnsmasq::*;
 pub use firewall::*;

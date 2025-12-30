@@ -31,7 +31,7 @@ pub fn parse_lease_file() -> Result<Vec<DhcpLease>> {
 /// Parse a lease file from a specific path
 pub fn parse_lease_file_path<P: AsRef<Path>>(path: P) -> Result<Vec<DhcpLease>> {
     let path = path.as_ref();
-    
+
     if !path.exists() {
         debug!("Lease file does not exist: {:?}", path);
         return Ok(Vec::new());
@@ -54,11 +54,13 @@ pub fn parse_lease_file_path<P: AsRef<Path>>(path: P) -> Result<Vec<DhcpLease>> 
     // Sort by IP address for consistent ordering
     leases.sort_by(|a, b| {
         // Parse IP addresses for proper numeric sorting
-        let a_parts: Vec<u8> = a.ip_address
+        let a_parts: Vec<u8> = a
+            .ip_address
             .split('.')
             .filter_map(|s| s.parse().ok())
             .collect();
-        let b_parts: Vec<u8> = b.ip_address
+        let b_parts: Vec<u8> = b
+            .ip_address
             .split('.')
             .filter_map(|s| s.parse().ok())
             .collect();
@@ -72,7 +74,7 @@ pub fn parse_lease_file_path<P: AsRef<Path>>(path: P) -> Result<Vec<DhcpLease>> 
 /// Parse a single lease line
 fn parse_lease_line(line: &str) -> Option<DhcpLease> {
     let parts: Vec<&str> = line.split_whitespace().collect();
-    
+
     if parts.len() < 4 {
         return None;
     }
@@ -80,7 +82,7 @@ fn parse_lease_line(line: &str) -> Option<DhcpLease> {
     let expires_at: u64 = parts[0].parse().ok()?;
     let mac_address = parts[1].to_string();
     let ip_address = parts[2].to_string();
-    
+
     // Hostname - * means not provided
     let hostname = if parts[3] == "*" {
         None
@@ -89,13 +91,9 @@ fn parse_lease_line(line: &str) -> Option<DhcpLease> {
     };
 
     // Client ID - optional field, * means not provided
-    let client_id = parts.get(4).and_then(|s| {
-        if *s == "*" {
-            None
-        } else {
-            Some(s.to_string())
-        }
-    });
+    let client_id = parts
+        .get(4)
+        .and_then(|s| if *s == "*" { None } else { Some(s.to_string()) });
 
     Some(DhcpLease {
         mac_address,
@@ -114,33 +112,11 @@ pub fn get_active_leases() -> Result<Vec<DhcpLease>> {
         .unwrap_or(0);
 
     let leases = parse_lease_file()?;
-    
+
     Ok(leases
         .into_iter()
         .filter(|l| l.expires_at == 0 || l.expires_at > now) // 0 = infinite
         .collect())
-}
-
-/// Check if a MAC address has an active lease
-pub fn has_active_lease(mac_address: &str) -> Result<bool> {
-    let leases = get_active_leases()?;
-    let mac_lower = mac_address.to_lowercase();
-    Ok(leases.iter().any(|l| l.mac_address.to_lowercase() == mac_lower))
-}
-
-/// Find a lease by MAC address
-pub fn find_lease_by_mac(mac_address: &str) -> Result<Option<DhcpLease>> {
-    let leases = parse_lease_file()?;
-    let mac_lower = mac_address.to_lowercase();
-    Ok(leases
-        .into_iter()
-        .find(|l| l.mac_address.to_lowercase() == mac_lower))
-}
-
-/// Find a lease by IP address
-pub fn find_lease_by_ip(ip_address: &str) -> Result<Option<DhcpLease>> {
-    let leases = parse_lease_file()?;
-    Ok(leases.into_iter().find(|l| l.ip_address == ip_address))
 }
 
 #[cfg(test)]
@@ -151,7 +127,7 @@ mod tests {
     fn test_parse_lease_line_basic() {
         let line = "1735500000 00:11:22:33:44:55 192.168.1.100 myhost *";
         let lease = parse_lease_line(line).unwrap();
-        
+
         assert_eq!(lease.expires_at, 1735500000);
         assert_eq!(lease.mac_address, "00:11:22:33:44:55");
         assert_eq!(lease.ip_address, "192.168.1.100");
@@ -163,7 +139,7 @@ mod tests {
     fn test_parse_lease_line_with_client_id() {
         let line = "1735500000 00:11:22:33:44:55 192.168.1.100 myhost 01:00:11:22:33:44:55";
         let lease = parse_lease_line(line).unwrap();
-        
+
         assert_eq!(lease.expires_at, 1735500000);
         assert_eq!(lease.mac_address, "00:11:22:33:44:55");
         assert_eq!(lease.ip_address, "192.168.1.100");
@@ -175,7 +151,7 @@ mod tests {
     fn test_parse_lease_line_no_hostname() {
         let line = "1735500000 00:11:22:33:44:55 192.168.1.100 * *";
         let lease = parse_lease_line(line).unwrap();
-        
+
         assert_eq!(lease.hostname, None);
         assert_eq!(lease.client_id, None);
     }
@@ -184,7 +160,7 @@ mod tests {
     fn test_parse_lease_line_infinite() {
         let line = "0 00:11:22:33:44:55 192.168.1.100 server infinite";
         let lease = parse_lease_line(line).unwrap();
-        
+
         assert_eq!(lease.expires_at, 0);
         assert_eq!(lease.hostname, Some("server".to_string()));
     }
@@ -206,20 +182,20 @@ mod tests {
 1735600000 00:11:22:33:44:56 192.168.1.101 * 01:00:11:22:33:44:56
 0 00:11:22:33:44:57 192.168.1.10 static-server *
 "#;
-        
+
         let temp_dir = std::env::temp_dir();
         let temp_file = temp_dir.join("test_leases");
         std::fs::write(&temp_file, content).unwrap();
-        
+
         let leases = parse_lease_file_path(&temp_file).unwrap();
-        
+
         assert_eq!(leases.len(), 3);
-        
+
         // Should be sorted by IP
         assert_eq!(leases[0].ip_address, "192.168.1.10");
         assert_eq!(leases[1].ip_address, "192.168.1.100");
         assert_eq!(leases[2].ip_address, "192.168.1.101");
-        
+
         // Clean up
         let _ = std::fs::remove_file(temp_file);
     }

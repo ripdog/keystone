@@ -1,18 +1,17 @@
 //! Interface edit page for configuring individual interface settings
 
 use keystone_core::{
-    ActivationPolicy, AddressScope, DhcpMode,
-    Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
-    IpMasqueradeMode, Ipv6AcceptRaConfig, LinkLocalMode, RouteType,
-    StaticAddress, StaticRoute,
+    ActivationPolicy, AddressScope, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
+    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, Ipv6AcceptRaConfig,
+    LinkLocalMode, RouteType, StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::hooks::use_params_map;
 
 use crate::api;
-use crate::components::form_utils::{event_target_checked, event_target_value};
 use crate::components::StaticIpSettings;
+use crate::components::form_utils::{event_target_checked, event_target_value};
 
 #[component]
 pub fn InterfaceEditPage(
@@ -53,7 +52,7 @@ pub fn InterfaceEditPage(
     let (ip_forward, set_ip_forward) = signal(IpForwardMode::No);
     let (ip_masquerade, set_ip_masquerade) = signal(IpMasqueradeMode::No);
     let (link_mtu, set_link_mtu) = signal(String::new());
-    
+
     // DHCPv4 client settings
     let (dhcp_use_dns, set_dhcp_use_dns) = signal(true);
     let (dhcp_use_ntp, set_dhcp_use_ntp) = signal(true);
@@ -62,18 +61,18 @@ pub fn InterfaceEditPage(
     let (dhcp_use_mtu, set_dhcp_use_mtu) = signal(true);
     let (dhcp_send_hostname, set_dhcp_send_hostname) = signal(true);
     let (dhcp_route_metric, set_dhcp_route_metric) = signal(String::new());
-    
+
     // DHCPv6 client settings
     let (dhcp6_use_dns, set_dhcp6_use_dns) = signal(true);
     let (dhcp6_use_ntp, set_dhcp6_use_ntp) = signal(true);
     let (dhcp6_rapid_commit, set_dhcp6_rapid_commit) = signal(true);
     let (dhcp6_prefix_hint, set_dhcp6_prefix_hint) = signal(String::new());
-    
+
     // Interface state settings (P2)
     let (link_local, set_link_local) = signal(LinkLocalMode::default());
     let (required_for_online, set_required_for_online) = signal(true);
     let (activation_policy, set_activation_policy) = signal(ActivationPolicy::default());
-    
+
     // UI state
     let (show_advanced, set_show_advanced) = signal(false);
     let (show_interface_state, set_show_interface_state) = signal(false);
@@ -107,7 +106,7 @@ pub fn InterfaceEditPage(
                         set_ip_forward.set(cfg.ip_forward);
                         set_ip_masquerade.set(cfg.ip_masquerade);
                         set_link_mtu.set(cfg.mtu.map(|v| v.to_string()).unwrap_or_default());
-                        
+
                         // DHCPv4 client settings
                         if let Some(dhcp_cfg) = &cfg.dhcpv4_client {
                             set_dhcp_use_dns.set(dhcp_cfg.use_dns);
@@ -116,22 +115,28 @@ pub fn InterfaceEditPage(
                             set_dhcp_use_gateway.set(dhcp_cfg.use_gateway);
                             set_dhcp_use_mtu.set(dhcp_cfg.use_mtu);
                             set_dhcp_send_hostname.set(dhcp_cfg.send_hostname);
-                            set_dhcp_route_metric.set(dhcp_cfg.route_metric.map(|m| m.to_string()).unwrap_or_default());
+                            set_dhcp_route_metric.set(
+                                dhcp_cfg
+                                    .route_metric
+                                    .map(|m| m.to_string())
+                                    .unwrap_or_default(),
+                            );
                         }
-                        
+
                         // DHCPv6 client settings
                         if let Some(dhcp6_cfg) = &cfg.dhcpv6_client {
                             set_dhcp6_use_dns.set(dhcp6_cfg.use_dns);
                             set_dhcp6_use_ntp.set(dhcp6_cfg.use_ntp);
                             set_dhcp6_rapid_commit.set(dhcp6_cfg.rapid_commit);
-                            set_dhcp6_prefix_hint.set(dhcp6_cfg.prefix_delegation_hint.clone().unwrap_or_default());
+                            set_dhcp6_prefix_hint
+                                .set(dhcp6_cfg.prefix_delegation_hint.clone().unwrap_or_default());
                         }
-                        
+
                         // Interface state settings (P2)
                         set_link_local.set(cfg.link_local);
                         set_required_for_online.set(cfg.required_for_online);
                         set_activation_policy.set(cfg.activation_policy);
-                        
+
                         set_config.set(Some(cfg));
                         set_is_new.set(false);
                     }
@@ -287,39 +292,41 @@ pub fn InterfaceEditPage(
                 let gw = gateway.get();
                 let desc = description.get();
                 let current_dhcp_mode = dhcp_mode.get();
-                
+
                 // Build DHCPv4 client config if DHCP includes IPv4
-                let dhcpv4_client = if current_dhcp_mode == DhcpMode::Yes || current_dhcp_mode == DhcpMode::Ipv4 {
-                    Some(Dhcpv4ClientConfig {
-                        send_hostname: dhcp_send_hostname.get(),
-                        hostname: None,
-                        use_dns: dhcp_use_dns.get(),
-                        use_ntp: dhcp_use_ntp.get(),
-                        use_routes: dhcp_use_routes.get(),
-                        use_gateway: dhcp_use_gateway.get(),
-                        use_mtu: dhcp_use_mtu.get(),
-                        use_domains: "yes".to_string(),
-                        route_metric: dhcp_route_metric.get().parse::<u32>().ok(),
-                    })
-                } else {
-                    None
-                };
-                
+                let dhcpv4_client =
+                    if current_dhcp_mode == DhcpMode::Yes || current_dhcp_mode == DhcpMode::Ipv4 {
+                        Some(Dhcpv4ClientConfig {
+                            send_hostname: dhcp_send_hostname.get(),
+                            hostname: None,
+                            use_dns: dhcp_use_dns.get(),
+                            use_ntp: dhcp_use_ntp.get(),
+                            use_routes: dhcp_use_routes.get(),
+                            use_gateway: dhcp_use_gateway.get(),
+                            use_mtu: dhcp_use_mtu.get(),
+                            use_domains: "yes".to_string(),
+                            route_metric: dhcp_route_metric.get().parse::<u32>().ok(),
+                        })
+                    } else {
+                        None
+                    };
+
                 // Build DHCPv6 client config if DHCP includes IPv6
-                let dhcpv6_client = if current_dhcp_mode == DhcpMode::Yes || current_dhcp_mode == DhcpMode::Ipv6 {
-                    let hint = dhcp6_prefix_hint.get();
-                    Some(Dhcpv6ClientConfig {
-                        use_dns: dhcp6_use_dns.get(),
-                        use_ntp: dhcp6_use_ntp.get(),
-                        use_domains: "yes".to_string(),
-                        prefix_delegation_hint: if hint.is_empty() { None } else { Some(hint) },
-                        rapid_commit: dhcp6_rapid_commit.get(),
-                        without_ra: "no".to_string(),
-                    })
-                } else {
-                    None
-                };
-                
+                let dhcpv6_client =
+                    if current_dhcp_mode == DhcpMode::Yes || current_dhcp_mode == DhcpMode::Ipv6 {
+                        let hint = dhcp6_prefix_hint.get();
+                        Some(Dhcpv6ClientConfig {
+                            use_dns: dhcp6_use_dns.get(),
+                            use_ntp: dhcp6_use_ntp.get(),
+                            use_domains: "yes".to_string(),
+                            prefix_delegation_hint: if hint.is_empty() { None } else { Some(hint) },
+                            rapid_commit: dhcp6_rapid_commit.get(),
+                            without_ra: "no".to_string(),
+                        })
+                    } else {
+                        None
+                    };
+
                 let updated = InterfaceConfig {
                     id: current.id,
                     name: current.name.clone(),
@@ -724,7 +731,7 @@ pub fn InterfaceEditPage(
                             />
                             <span class="text-gray-200">"Accept IPv6 Router Advertisements"</span>
                         </label>
-                        
+
                         // Show RA client options when enabled
                         <Show when=move || ipv6_accept_ra.get()>
                             <div class="mt-3 ml-8 space-y-2 text-sm">

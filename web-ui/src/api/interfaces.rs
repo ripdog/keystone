@@ -1,13 +1,12 @@
 //! Interface configuration API functions
 
 use keystone_core::{
-    ApplyConfigResponse, InterfaceConfig, InterfaceConfigResponse, InterfaceConfigsResponse,
-    ManagedInterface, ManagedInterfacesResponse, NetworkdPreviewResponse,
-    SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
-    SaveManagedInterfacesResponse,
+    ApplyConfigResponse, InterfaceConfig, InterfaceConfigResponse, ManagedInterface,
+    ManagedInterfacesResponse, NetworkdPreviewResponse, SaveInterfaceConfigRequest,
+    SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
 };
 
-use super::client::{delete, get, post, post_empty};
+use super::client::{get, post, post_empty};
 
 // ============================================================================
 // Managed Interfaces
@@ -32,13 +31,6 @@ pub async fn save_managed_interfaces(
 // Interface Configuration
 // ============================================================================
 
-/// Fetch all interface configurations
-#[allow(dead_code)]
-pub async fn fetch_interface_configs(token: &str) -> Result<Vec<InterfaceConfig>, String> {
-    let response: InterfaceConfigsResponse = get("/api/interface-config", token).await?;
-    Ok(response.configs)
-}
-
 /// Fetch a single interface configuration by name
 pub async fn fetch_interface_config(
     token: &str,
@@ -56,15 +48,6 @@ pub async fn save_interface_config(
 ) -> Result<SaveInterfaceConfigResponse, String> {
     let request = SaveInterfaceConfigRequest { config };
     post("/api/interface-config", token, &request).await
-}
-
-/// Delete an interface configuration
-#[allow(dead_code)]
-pub async fn delete_interface_config(
-    token: &str,
-    name: &str,
-) -> Result<SaveInterfaceConfigResponse, String> {
-    delete(&format!("/api/interface-config/{}", name), token).await
 }
 
 // ============================================================================

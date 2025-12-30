@@ -4,14 +4,14 @@
 //! nftables JSON format using the `nftables` crate.
 
 use keystone_core::{
-    FirewallAction, FirewallConfig, FirewallGlobalSettings, FirewallPolicy, FirewallZone,
-    ForwardRule, InputRule, PortForward, RuleProtocol, ZoneForwardPolicy,
+    FirewallAction, FirewallConfig, FirewallPolicy, FirewallZone, ForwardRule, InputRule,
+    PortForward, RuleProtocol, ZoneForwardPolicy,
 };
 use nftables::{
     batch::Batch,
     expr::{Expression, Meta, MetaKey, Payload, PayloadField, RTKey},
     schema::{Chain, NfListObject, Rule, Table},
-    stmt::{Counter, Log, Limit, Match, Operator, Statement},
+    stmt::{Counter, Limit, Log, Match, Operator, Statement},
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
 use std::borrow::Cow;
@@ -90,15 +90,6 @@ fn build_zone_interface_map(zones: &[FirewallZone]) -> HashMap<String, Vec<Strin
         .collect()
 }
 
-/// Get the zone for a given interface name
-#[allow(dead_code)]
-fn get_zone_for_interface<'a>(
-    interface: &str,
-    zones: &'a [FirewallZone],
-) -> Option<&'a FirewallZone> {
-    zones.iter().find(|z| z.interfaces.contains(&interface.to_string()))
-}
-
 /// Find zones that should be considered "WAN" (for masquerading)
 /// A zone is WAN if it has default drop policies for both input and forward
 fn find_wan_zones(zones: &[FirewallZone]) -> Vec<&FirewallZone> {
@@ -146,17 +137,16 @@ fn generate_input_chain(
     )));
 
     // Priority 3: Accept loopback
-    batch.add(NfListObject::Rule(create_loopback_rule(FILTER_TABLE, "input")));
+    batch.add(NfListObject::Rule(create_loopback_rule(
+        FILTER_TABLE,
+        "input",
+    )));
 
     // Priority 3.5: ICMP safety rules (hardcoded - always block dangerous types)
     generate_icmp_input_rules(batch, config, zone_interfaces);
 
     // Priority 4: User input rules (position-ordered)
-    let mut sorted_rules: Vec<_> = config
-        .input_rules
-        .iter()
-        .filter(|r| r.enabled)
-        .collect();
+    let mut sorted_rules: Vec<_> = config.input_rules.iter().filter(|r| r.enabled).collect();
     sorted_rules.sort_by_key(|r| r.position);
 
     for rule in sorted_rules {
@@ -181,12 +171,10 @@ fn create_conntrack_established_rule(table: &'static str, chain: &'static str) -
         chain: Cow::Borrowed(chain),
         expr: vec![
             Statement::Match(Match {
-                left: Expression::Named(nftables::expr::NamedExpression::CT(
-                    nftables::expr::CT {
-                        key: Cow::Borrowed("state"),
-                        ..Default::default()
-                    },
-                )),
+                left: Expression::Named(nftables::expr::NamedExpression::CT(nftables::expr::CT {
+                    key: Cow::Borrowed("state"),
+                    ..Default::default()
+                })),
                 right: Expression::List(vec![
                     Expression::String(Cow::Borrowed("established")),
                     Expression::String(Cow::Borrowed("related")),
@@ -194,7 +182,8 @@ fn create_conntrack_established_rule(table: &'static str, chain: &'static str) -
                 op: Operator::IN,
             }),
             Statement::Accept(None),
-        ].into(),
+        ]
+        .into(),
         comment: Some(Cow::Borrowed("Accept established/related")),
         ..Default::default()
     }
@@ -208,17 +197,16 @@ fn create_conntrack_invalid_rule(table: &'static str, chain: &'static str) -> Ru
         chain: Cow::Borrowed(chain),
         expr: vec![
             Statement::Match(Match {
-                left: Expression::Named(nftables::expr::NamedExpression::CT(
-                    nftables::expr::CT {
-                        key: Cow::Borrowed("state"),
-                        ..Default::default()
-                    },
-                )),
+                left: Expression::Named(nftables::expr::NamedExpression::CT(nftables::expr::CT {
+                    key: Cow::Borrowed("state"),
+                    ..Default::default()
+                })),
                 right: Expression::String(Cow::Borrowed("invalid")),
                 op: Operator::EQ,
             }),
             Statement::Drop(None),
-        ].into(),
+        ]
+        .into(),
         comment: Some(Cow::Borrowed("Drop invalid packets")),
         ..Default::default()
     }
@@ -239,7 +227,8 @@ fn create_loopback_rule(table: &'static str, chain: &'static str) -> Rule<'stati
                 op: Operator::EQ,
             }),
             Statement::Accept(None),
-        ].into(),
+        ]
+        .into(),
         comment: Some(Cow::Borrowed("Accept loopback")),
         ..Default::default()
     }
@@ -258,17 +247,32 @@ fn generate_icmp_input_rules(
     // - Timestamp Request (13) / Reply (14) - can leak system info
     // - Redirect (5) - can be used for MITM attacks
     // - Address Mask Request (17) / Reply (18) - can leak network info
-    
+
     // Block ICMP timestamp (type 13)
-    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(13, "Drop ICMP timestamp")));
-    // Block ICMP timestamp reply (type 14)  
-    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(14, "Drop ICMP timestamp-reply")));
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(
+        13,
+        "Drop ICMP timestamp",
+    )));
+    // Block ICMP timestamp reply (type 14)
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(
+        14,
+        "Drop ICMP timestamp-reply",
+    )));
     // Block ICMP redirect (type 5)
-    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(5, "Drop ICMP redirect")));
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(
+        5,
+        "Drop ICMP redirect",
+    )));
     // Block ICMP address mask request (type 17)
-    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(17, "Drop ICMP address-mask-request")));
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(
+        17,
+        "Drop ICMP address-mask-request",
+    )));
     // Block ICMP address mask reply (type 18)
-    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(18, "Drop ICMP address-mask-reply")));
+    batch.add(NfListObject::Rule(create_icmp_type_drop_rule(
+        18,
+        "Drop ICMP address-mask-reply",
+    )));
 
     // Identify WAN vs LAN zones
     let wan_zones = find_wan_zones(&config.zones);
@@ -282,13 +286,13 @@ fn generate_icmp_input_rules(
         for zone in &config.zones {
             if !wan_zone_names.contains(&zone.name.as_str()) {
                 // This is a LAN zone - allow ping
-                if let Some(interfaces) = zone_interfaces.get(&zone.name) {
-                    if !interfaces.is_empty() {
-                        batch.add(NfListObject::Rule(create_icmp_ping_accept_rule(
-                            interfaces,
-                            &format!("Allow ping from {} (LAN)", zone.name),
-                        )));
-                    }
+                if let Some(interfaces) = zone_interfaces.get(&zone.name)
+                    && !interfaces.is_empty()
+                {
+                    batch.add(NfListObject::Rule(create_icmp_ping_accept_rule(
+                        interfaces,
+                        &format!("Allow ping from {} (LAN)", zone.name),
+                    )));
                 }
             }
         }
@@ -297,13 +301,13 @@ fn generate_icmp_input_rules(
     // Allow ping from WAN zones if enabled
     if settings.ping_wan_enabled {
         for zone in &wan_zones {
-            if let Some(interfaces) = zone_interfaces.get(&zone.name) {
-                if !interfaces.is_empty() {
-                    batch.add(NfListObject::Rule(create_icmp_ping_accept_rule(
-                        interfaces,
-                        &format!("Allow ping from {} (WAN)", zone.name),
-                    )));
-                }
+            if let Some(interfaces) = zone_interfaces.get(&zone.name)
+                && !interfaces.is_empty()
+            {
+                batch.add(NfListObject::Rule(create_icmp_ping_accept_rule(
+                    interfaces,
+                    &format!("Allow ping from {} (WAN)", zone.name),
+                )));
             }
         }
     }
@@ -343,7 +347,8 @@ fn create_icmp_type_drop_rule(icmp_type: u8, comment: &str) -> Rule<'static> {
             }),
             Statement::Counter(Counter::Anonymous(None)),
             Statement::Drop(None),
-        ].into(),
+        ]
+        .into(),
         comment: Some(Cow::Owned(comment.to_string())),
         ..Default::default()
     }
@@ -351,10 +356,7 @@ fn create_icmp_type_drop_rule(icmp_type: u8, comment: &str) -> Rule<'static> {
 
 /// Create a rule to accept ICMP ping (echo-request) from specific interfaces
 fn create_icmp_ping_accept_rule(interfaces: &[String], comment: &str) -> Rule<'static> {
-    let ifaces: Vec<Cow<'static, str>> = interfaces
-        .iter()
-        .map(|s| Cow::Owned(s.clone()))
-        .collect();
+    let ifaces: Vec<Cow<'static, str>> = interfaces.iter().map(|s| Cow::Owned(s.clone())).collect();
 
     let exprs = vec![
         // Match input interface
@@ -438,8 +440,11 @@ fn create_icmp_essential_accept_rule() -> Rule<'static> {
             }),
             Statement::Counter(Counter::Anonymous(None)),
             Statement::Accept(None),
-        ].into(),
-        comment: Some(Cow::Borrowed("Accept essential ICMP (dest-unreach, time-exceeded, param-problem)")),
+        ]
+        .into(),
+        comment: Some(Cow::Borrowed(
+            "Accept essential ICMP (dest-unreach, time-exceeded, param-problem)",
+        )),
         ..Default::default()
     }
 }
@@ -452,12 +457,11 @@ fn create_input_rule(
     let mut exprs: Vec<Statement> = Vec::new();
 
     // Match source zone (interface)
-    if let Some(ref zone_name) = rule.zone {
-        if let Some(interfaces) = zone_interfaces.get(zone_name) {
-            if !interfaces.is_empty() {
-                exprs.push(create_iif_match(interfaces));
-            }
-        }
+    if let Some(ref zone_name) = rule.zone
+        && let Some(interfaces) = zone_interfaces.get(zone_name)
+        && !interfaces.is_empty()
+    {
+        exprs.push(create_iif_match(interfaces));
     }
 
     // Match source IP
@@ -507,10 +511,10 @@ fn create_input_rule(
     }
 
     // Rate limiting
-    if let Some(ref rate_limit) = rule.rate_limit {
-        if let Some(limit_stmt) = parse_rate_limit(rate_limit) {
-            exprs.push(limit_stmt);
-        }
+    if let Some(ref rate_limit) = rule.rate_limit
+        && let Some(limit_stmt) = parse_rate_limit(rate_limit)
+    {
+        exprs.push(limit_stmt);
     }
 
     // Logging
@@ -580,8 +584,12 @@ fn create_zone_input_default_rule(zone: &FirewallZone) -> Rule<'static> {
             }),
             Statement::Counter(Counter::Anonymous(None)),
             Statement::Accept(None),
-        ].into(),
-        comment: Some(Cow::Owned(format!("{} zone default: accept input", zone.name))),
+        ]
+        .into(),
+        comment: Some(Cow::Owned(format!(
+            "{} zone default: accept input",
+            zone.name
+        ))),
         ..Default::default()
     }
 }
@@ -621,11 +629,7 @@ fn generate_forward_chain(
     )));
 
     // Priority 3: User forward rules (position-ordered)
-    let mut sorted_rules: Vec<_> = config
-        .forward_rules
-        .iter()
-        .filter(|r| r.enabled)
-        .collect();
+    let mut sorted_rules: Vec<_> = config.forward_rules.iter().filter(|r| r.enabled).collect();
     sorted_rules.sort_by_key(|r| r.position);
 
     for rule in sorted_rules {
@@ -636,10 +640,10 @@ fn generate_forward_chain(
 
     // Priority 4: Zone-to-zone forwarding policies
     for policy in &config.zone_forwards {
-        if policy.enabled {
-            if let Some(nf_rule) = create_zone_forward_rule(policy, zone_interfaces) {
-                batch.add(NfListObject::Rule(nf_rule));
-            }
+        if policy.enabled
+            && let Some(nf_rule) = create_zone_forward_rule(policy, zone_interfaces)
+        {
+            batch.add(NfListObject::Rule(nf_rule));
         }
     }
 }
@@ -652,21 +656,19 @@ fn create_forward_rule(
     let mut exprs: Vec<Statement> = Vec::new();
 
     // Match source zone
-    if let Some(ref zone_name) = rule.source_zone {
-        if let Some(interfaces) = zone_interfaces.get(zone_name) {
-            if !interfaces.is_empty() {
-                exprs.push(create_iif_match(interfaces));
-            }
-        }
+    if let Some(ref zone_name) = rule.source_zone
+        && let Some(interfaces) = zone_interfaces.get(zone_name)
+        && !interfaces.is_empty()
+    {
+        exprs.push(create_iif_match(interfaces));
     }
 
     // Match destination zone
-    if let Some(ref zone_name) = rule.dest_zone {
-        if let Some(interfaces) = zone_interfaces.get(zone_name) {
-            if !interfaces.is_empty() {
-                exprs.push(create_oif_match(interfaces));
-            }
-        }
+    if let Some(ref zone_name) = rule.dest_zone
+        && let Some(interfaces) = zone_interfaces.get(zone_name)
+        && !interfaces.is_empty()
+    {
+        exprs.push(create_oif_match(interfaces));
     }
 
     // Match source IP
@@ -720,10 +722,10 @@ fn create_forward_rule(
     }
 
     // Rate limiting
-    if let Some(ref rate_limit) = rule.rate_limit {
-        if let Some(limit_stmt) = parse_rate_limit(rate_limit) {
-            exprs.push(limit_stmt);
-        }
+    if let Some(ref rate_limit) = rule.rate_limit
+        && let Some(limit_stmt) = parse_rate_limit(rate_limit)
+    {
+        exprs.push(limit_stmt);
     }
 
     // Logging
@@ -881,20 +883,22 @@ fn generate_prerouting_chain(
                     if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "tcp") {
                         batch.add(NfListObject::Rule(rule));
                     }
-                    if config.global_settings.hairpin_nat_enabled && !lan_interfaces.is_empty() {
-                        if let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "tcp") {
-                            batch.add(NfListObject::Rule(rule));
-                        }
+                    if config.global_settings.hairpin_nat_enabled
+                        && !lan_interfaces.is_empty()
+                        && let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "tcp")
+                    {
+                        batch.add(NfListObject::Rule(rule));
                     }
                 }
                 RuleProtocol::Udp => {
                     if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "udp") {
                         batch.add(NfListObject::Rule(rule));
                     }
-                    if config.global_settings.hairpin_nat_enabled && !lan_interfaces.is_empty() {
-                        if let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "udp") {
-                            batch.add(NfListObject::Rule(rule));
-                        }
+                    if config.global_settings.hairpin_nat_enabled
+                        && !lan_interfaces.is_empty()
+                        && let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "udp")
+                    {
+                        batch.add(NfListObject::Rule(rule));
                     }
                 }
                 _ => {}
@@ -912,12 +916,11 @@ fn create_port_forward_rule(
     let mut exprs: Vec<Statement> = Vec::new();
 
     // Match source zone (input interface)
-    if let Some(ref zone_name) = pf.source_zone {
-        if let Some(interfaces) = zone_interfaces.get(zone_name) {
-            if !interfaces.is_empty() {
-                exprs.push(create_iif_match(interfaces));
-            }
-        }
+    if let Some(ref zone_name) = pf.source_zone
+        && let Some(interfaces) = zone_interfaces.get(zone_name)
+        && !interfaces.is_empty()
+    {
+        exprs.push(create_iif_match(interfaces));
     }
 
     // Match source IP if specified
@@ -929,7 +932,10 @@ fn create_port_forward_rule(
     exprs.push(create_protocol_match(protocol));
 
     // Match destination port(s)
-    exprs.push(create_dport_match(pf.external_port_start, pf.external_port_end));
+    exprs.push(create_dport_match(
+        pf.external_port_start,
+        pf.external_port_end,
+    ));
 
     // Counter
     exprs.push(Statement::Counter(Counter::Anonymous(None)));
@@ -969,30 +975,26 @@ fn create_hairpin_dnat_rule(
         return None;
     }
 
-    let mut exprs: Vec<Statement> = Vec::new();
-
-    // Match input from LAN interfaces
-    exprs.push(create_iif_match(lan_interfaces));
-
-    // Match protocol
-    exprs.push(create_protocol_match(protocol));
-
-    // Match destination port(s)
-    exprs.push(create_dport_match(pf.external_port_start, pf.external_port_end));
-
-    // Match packets destined to a local address (router's own IPs)
-    // This catches traffic to any of the router's IPs, including WAN IP
-    exprs.push(Statement::Match(Match {
-        left: Expression::Named(nftables::expr::NamedExpression::Fib(nftables::expr::Fib {
-            result: nftables::expr::FibResult::Type,
-            flags: [nftables::expr::FibFlag::Daddr].into_iter().collect(),
-        })),
-        right: Expression::String(Cow::Borrowed("local")),
-        op: Operator::EQ,
-    }));
-
-    // Counter
-    exprs.push(Statement::Counter(Counter::Anonymous(None)));
+    let mut exprs: Vec<Statement> = vec![
+        // Match input from LAN interfaces
+        create_iif_match(lan_interfaces),
+        // Match protocol
+        create_protocol_match(protocol),
+        // Match destination port(s)
+        create_dport_match(pf.external_port_start, pf.external_port_end),
+        // Match packets destined to a local address (router's own IPs)
+        // This catches traffic to any of the router's IPs, including WAN IP
+        Statement::Match(Match {
+            left: Expression::Named(nftables::expr::NamedExpression::Fib(nftables::expr::Fib {
+                result: nftables::expr::FibResult::Type,
+                flags: [nftables::expr::FibFlag::Daddr].into_iter().collect(),
+            })),
+            right: Expression::String(Cow::Borrowed("local")),
+            op: Operator::EQ,
+        }),
+        // Counter
+        Statement::Counter(Counter::Anonymous(None)),
+    ];
 
     // DNAT action
     let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
@@ -1126,7 +1128,10 @@ fn create_hairpin_snat_rule(
         table: Cow::Borrowed(NAT_TABLE),
         chain: Cow::Borrowed("postrouting"),
         expr: exprs.into(),
-        comment: Some(Cow::Owned(format!("{} hairpin SNAT ({})", pf.name, protocol))),
+        comment: Some(Cow::Owned(format!(
+            "{} hairpin SNAT ({})",
+            pf.name, protocol
+        ))),
         ..Default::default()
     })
 }
@@ -1176,7 +1181,8 @@ fn create_mss_clamp_rule(interface: &str) -> Rule<'static> {
                     family: None,
                 })),
             }),
-        ].into(),
+        ]
+        .into(),
         comment: Some(Cow::Owned(format!("MSS clamp for {}", interface))),
         ..Default::default()
     }
@@ -1198,7 +1204,8 @@ fn create_masquerade_rule(interface: &str) -> Rule<'static> {
             }),
             Statement::Counter(Counter::Anonymous(None)),
             Statement::Masquerade(None),
-        ].into(),
+        ]
+        .into(),
         comment: Some(Cow::Owned(format!("Masquerade for {}", interface))),
         ..Default::default()
     }
@@ -1210,10 +1217,7 @@ fn create_masquerade_rule(interface: &str) -> Rule<'static> {
 
 /// Create a match statement for input interface(s)
 fn create_iif_match(interfaces: &[String]) -> Statement<'static> {
-    let ifaces: Vec<Cow<'static, str>> = interfaces
-        .iter()
-        .map(|s| Cow::Owned(s.clone()))
-        .collect();
+    let ifaces: Vec<Cow<'static, str>> = interfaces.iter().map(|s| Cow::Owned(s.clone())).collect();
 
     Statement::Match(Match {
         left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
@@ -1234,10 +1238,7 @@ fn create_iif_match(interfaces: &[String]) -> Statement<'static> {
 
 /// Create a match statement for output interface(s)
 fn create_oif_match(interfaces: &[String]) -> Statement<'static> {
-    let ifaces: Vec<Cow<'static, str>> = interfaces
-        .iter()
-        .map(|s| Cow::Owned(s.clone()))
-        .collect();
+    let ifaces: Vec<Cow<'static, str>> = interfaces.iter().map(|s| Cow::Owned(s.clone())).collect();
 
     Statement::Match(Match {
         left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
@@ -1404,12 +1405,14 @@ fn generate_preview(
 
     // Ping settings based on global settings
     let wan_zones_preview = find_wan_zones(&config.zones);
-    let wan_zone_names_preview: Vec<&str> = wan_zones_preview.iter().map(|z| z.name.as_str()).collect();
+    let wan_zone_names_preview: Vec<&str> =
+        wan_zones_preview.iter().map(|z| z.name.as_str()).collect();
 
     if config.global_settings.ping_lan_enabled {
         output.push_str("        # Allow ping from LAN zones\n");
         for zone in &config.zones {
-            if !wan_zone_names_preview.contains(&zone.name.as_str()) && !zone.interfaces.is_empty() {
+            if !wan_zone_names_preview.contains(&zone.name.as_str()) && !zone.interfaces.is_empty()
+            {
                 let ifaces = format_interface_set(&zone.interfaces);
                 output.push_str(&format!(
                     "        iifname {} icmp type echo-request counter accept  # ping from {}\n",
@@ -1432,7 +1435,8 @@ fn generate_preview(
         }
     }
 
-    output.push_str("        # Allow essential ICMP types (required for proper network operation)\n");
+    output
+        .push_str("        # Allow essential ICMP types (required for proper network operation)\n");
     output.push_str("        icmp type { destination-unreachable, time-exceeded, parameter-problem } counter accept\n");
     output.push_str("        \n");
     output.push_str("        # Priority 4: User Input Rules\n");
@@ -1441,7 +1445,10 @@ fn generate_preview(
     sorted_input_rules.sort_by_key(|r| r.position);
 
     for rule in &sorted_input_rules {
-        output.push_str(&format!("        {}\n", format_input_rule(rule, zone_interfaces)));
+        output.push_str(&format!(
+            "        {}\n",
+            format_input_rule(rule, zone_interfaces)
+        ));
     }
 
     output.push_str("        \n");
@@ -1473,30 +1480,34 @@ fn generate_preview(
     output.push_str("        \n");
     output.push_str("        # Priority 3: User Forward Rules\n");
 
-    let mut sorted_forward_rules: Vec<_> = config.forward_rules.iter().filter(|r| r.enabled).collect();
+    let mut sorted_forward_rules: Vec<_> =
+        config.forward_rules.iter().filter(|r| r.enabled).collect();
     sorted_forward_rules.sort_by_key(|r| r.position);
 
     for rule in &sorted_forward_rules {
-        output.push_str(&format!("        {}\n", format_forward_rule(rule, zone_interfaces)));
+        output.push_str(&format!(
+            "        {}\n",
+            format_forward_rule(rule, zone_interfaces)
+        ));
     }
 
     output.push_str("        \n");
     output.push_str("        # Priority 4: Zone-to-Zone Policies\n");
     for policy in &config.zone_forwards {
-        if policy.enabled {
-            if let (Some(src_ifaces), Some(dst_ifaces)) = (
+        if policy.enabled
+            && let (Some(src_ifaces), Some(dst_ifaces)) = (
                 zone_interfaces.get(&policy.source_zone),
                 zone_interfaces.get(&policy.dest_zone),
-            ) {
-                if !src_ifaces.is_empty() && !dst_ifaces.is_empty() {
-                    let src = format_interface_set(src_ifaces);
-                    let dst = format_interface_set(dst_ifaces);
-                    output.push_str(&format!(
-                        "        iifname {} oifname {} {}  # {} -> {}\n",
-                        src, dst, policy.policy, policy.source_zone, policy.dest_zone
-                    ));
-                }
-            }
+            )
+            && !src_ifaces.is_empty()
+            && !dst_ifaces.is_empty()
+        {
+            let src = format_interface_set(src_ifaces);
+            let dst = format_interface_set(dst_ifaces);
+            output.push_str(&format!(
+                "        iifname {} oifname {} {}  # {} -> {}\n",
+                src, dst, policy.policy, policy.source_zone, policy.dest_zone
+            ));
         }
     }
 
@@ -1525,7 +1536,10 @@ fn generate_preview(
 
     for pf in &config.port_forwards {
         if pf.enabled {
-            output.push_str(&format!("        {}\n", format_port_forward(pf, zone_interfaces)));
+            output.push_str(&format!(
+                "        {}\n",
+                format_port_forward(pf, zone_interfaces)
+            ));
         }
     }
 
@@ -1548,7 +1562,7 @@ fn generate_preview(
                     let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
                     output.push_str(&format!(
                         "        iifname {} {} dport {} fib daddr type local counter dnat to {}:{}  # {} hairpin\n",
-                        ifaces, pf.protocol, 
+                        ifaces, pf.protocol,
                         format_port_range(pf.external_port_start, pf.external_port_end),
                         pf.dest_ip, dest_port, pf.name
                     ));
@@ -1621,12 +1635,11 @@ fn generate_preview(
 fn format_input_rule(rule: &InputRule, zone_interfaces: &HashMap<String, Vec<String>>) -> String {
     let mut parts = Vec::new();
 
-    if let Some(ref zone_name) = rule.zone {
-        if let Some(interfaces) = zone_interfaces.get(zone_name) {
-            if !interfaces.is_empty() {
-                parts.push(format!("iifname {}", format_interface_set(interfaces)));
-            }
-        }
+    if let Some(ref zone_name) = rule.zone
+        && let Some(interfaces) = zone_interfaces.get(zone_name)
+        && !interfaces.is_empty()
+    {
+        parts.push(format!("iifname {}", format_interface_set(interfaces)));
     }
 
     if let Some(ref src_ip) = rule.source_ip {
@@ -1669,23 +1682,24 @@ fn format_input_rule(rule: &InputRule, zone_interfaces: &HashMap<String, Vec<Str
 }
 
 /// Format a forward rule for preview
-fn format_forward_rule(rule: &ForwardRule, zone_interfaces: &HashMap<String, Vec<String>>) -> String {
+fn format_forward_rule(
+    rule: &ForwardRule,
+    zone_interfaces: &HashMap<String, Vec<String>>,
+) -> String {
     let mut parts = Vec::new();
 
-    if let Some(ref zone_name) = rule.source_zone {
-        if let Some(interfaces) = zone_interfaces.get(zone_name) {
-            if !interfaces.is_empty() {
-                parts.push(format!("iifname {}", format_interface_set(interfaces)));
-            }
-        }
+    if let Some(ref zone_name) = rule.source_zone
+        && let Some(interfaces) = zone_interfaces.get(zone_name)
+        && !interfaces.is_empty()
+    {
+        parts.push(format!("iifname {}", format_interface_set(interfaces)));
     }
 
-    if let Some(ref zone_name) = rule.dest_zone {
-        if let Some(interfaces) = zone_interfaces.get(zone_name) {
-            if !interfaces.is_empty() {
-                parts.push(format!("oifname {}", format_interface_set(interfaces)));
-            }
-        }
+    if let Some(ref zone_name) = rule.dest_zone
+        && let Some(interfaces) = zone_interfaces.get(zone_name)
+        && !interfaces.is_empty()
+    {
+        parts.push(format!("oifname {}", format_interface_set(interfaces)));
     }
 
     if let Some(ref src_ip) = rule.source_ip {
@@ -1702,13 +1716,19 @@ fn format_forward_rule(rule: &ForwardRule, zone_interfaces: &HashMap<String, Vec
             RuleProtocol::Tcp | RuleProtocol::Udp => {
                 parts.push(format!("{}", protocol));
                 if let Some(port) = rule.dest_port_start {
-                    parts.push(format!("dport {}", format_port_range(port, rule.dest_port_end)));
+                    parts.push(format!(
+                        "dport {}",
+                        format_port_range(port, rule.dest_port_end)
+                    ));
                 }
             }
             RuleProtocol::TcpUdp => {
                 parts.push("meta l4proto { tcp, udp }".to_string());
                 if let Some(port) = rule.dest_port_start {
-                    parts.push(format!("dport {}", format_port_range(port, rule.dest_port_end)));
+                    parts.push(format!(
+                        "dport {}",
+                        format_port_range(port, rule.dest_port_end)
+                    ));
                 }
             }
             RuleProtocol::Icmp => parts.push("icmp".to_string()),
@@ -1735,12 +1755,11 @@ fn format_forward_rule(rule: &ForwardRule, zone_interfaces: &HashMap<String, Vec
 fn format_port_forward(pf: &PortForward, zone_interfaces: &HashMap<String, Vec<String>>) -> String {
     let mut parts = Vec::new();
 
-    if let Some(ref zone_name) = pf.source_zone {
-        if let Some(interfaces) = zone_interfaces.get(zone_name) {
-            if !interfaces.is_empty() {
-                parts.push(format!("iifname {}", format_interface_set(interfaces)));
-            }
-        }
+    if let Some(ref zone_name) = pf.source_zone
+        && let Some(interfaces) = zone_interfaces.get(zone_name)
+        && !interfaces.is_empty()
+    {
+        parts.push(format!("iifname {}", format_interface_set(interfaces)));
     }
 
     if let Some(ref src_ip) = pf.source_ip {
@@ -1778,10 +1797,10 @@ fn format_interface_set(interfaces: &[String]) -> String {
 
 /// Format a port range for preview
 fn format_port_range(start: u16, end: Option<u16>) -> String {
-    if let Some(e) = end {
-        if e > start {
-            return format!("{}-{}", start, e);
-        }
+    if let Some(e) = end
+        && e > start
+    {
+        return format!("{}-{}", start, e);
     }
     start.to_string()
 }
@@ -1802,6 +1821,7 @@ fn chrono_lite_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use keystone_core::FirewallGlobalSettings;
 
     fn create_test_config() -> FirewallConfig {
         FirewallConfig {
@@ -1907,10 +1927,7 @@ mod tests {
 
     #[test]
     fn test_format_interface_set() {
-        assert_eq!(
-            format_interface_set(&["eth0".to_string()]),
-            "\"eth0\""
-        );
+        assert_eq!(format_interface_set(&["eth0".to_string()]), "\"eth0\"");
         assert_eq!(
             format_interface_set(&["eth0".to_string(), "eth1".to_string()]),
             "{ \"eth0\", \"eth1\" }"

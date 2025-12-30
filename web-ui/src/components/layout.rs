@@ -40,6 +40,7 @@ pub fn AppLayout(on_logout: Callback<()>, children: Children) -> impl IntoView {
                             <A href="/vlans" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"VLANs"</A>
                             <A href="/bridges" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Bridges"</A>
                             <A href="/dnsmasq" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"DNS & DHCP"</A>
+                            <A href="/caddy" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Web Server"</A>
                             <A href="/networkd-preview" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Networkd Preview"</A>
                             <A href="/firewall" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Firewall"</A>
                             <A href="/settings" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Settings"</A>
@@ -75,6 +76,7 @@ pub fn AppLayout(on_logout: Callback<()>, children: Children) -> impl IntoView {
                                 <A href="/vlans" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"VLANs"</A>
                                 <A href="/bridges" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Bridges"</A>
                                 <A href="/dnsmasq" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"DNS & DHCP"</A>
+                                <A href="/caddy" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Web Server"</A>
                                 <A href="/networkd-preview" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Networkd Preview"</A>
                                 <A href="/firewall" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Firewall"</A>
                                 <A href="/settings" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Settings"</A>

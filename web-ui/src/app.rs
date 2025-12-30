@@ -3,8 +3,11 @@
 //! This module contains the Leptos components that compile to WASM
 //! and run in the browser as a Single Page Application.
 
-use crate::components::{clear_stored_token, get_stored_token, AppLayout, LoginPage};
-use crate::pages::{BridgesPage, DashboardPage, DnsmasqPage, FirewallPage, InterfaceEditPage, InterfacesPage, NetworkdPreviewPage, SettingsPage, VlansPage};
+use crate::components::{AppLayout, LoginPage, clear_stored_token, get_stored_token};
+use crate::pages::{
+    BridgesPage, CaddyPage, DashboardPage, DnsmasqPage, FirewallPage, InterfaceEditPage,
+    InterfacesPage, NetworkdPreviewPage, SettingsPage, VlansPage,
+};
 use keystone_core::SystemState;
 use leptos::prelude::*;
 use leptos_router::{
@@ -96,6 +99,15 @@ pub fn App() -> impl IntoView {
                             path=path!("/dnsmasq")
                             view=move || view! {
                                 <DnsmasqPage
+                                    auth_token=auth_token
+                                    on_unauthorized=on_unauthorized
+                                />
+                            }
+                        />
+                        <Route
+                            path=path!("/caddy")
+                            view=move || view! {
+                                <CaddyPage
                                     auth_token=auth_token
                                     on_unauthorized=on_unauthorized
                                 />

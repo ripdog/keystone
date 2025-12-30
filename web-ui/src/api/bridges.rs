@@ -14,7 +14,10 @@ pub async fn fetch_bridges(token: &str) -> Result<Vec<BridgeConfig>, String> {
 }
 
 /// Save a bridge configuration (create or update)
-pub async fn save_bridge(token: &str, config: BridgeConfig) -> Result<SaveBridgeConfigResponse, String> {
+pub async fn save_bridge(
+    token: &str,
+    config: BridgeConfig,
+) -> Result<SaveBridgeConfigResponse, String> {
     let request = SaveBridgeConfigRequest { config };
     post("/api/bridges", token, &request).await
 }

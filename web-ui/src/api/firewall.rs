@@ -8,7 +8,7 @@ use keystone_core::{
     ZoneForwardPolicy,
 };
 
-use super::client::{delete, extract_id, get, post, post_empty, SaveIdResponse};
+use super::client::{SaveIdResponse, delete, extract_id, get, post, post_empty};
 
 // ============================================================================
 // Zones
@@ -146,7 +146,10 @@ pub async fn apply_firewall(token: &str) -> Result<FirewallApplyResponse, String
 }
 
 /// Confirm firewall changes
-pub async fn confirm_firewall(token: &str, session_id: &str) -> Result<FirewallConfirmResponse, String> {
+pub async fn confirm_firewall(
+    token: &str,
+    session_id: &str,
+) -> Result<FirewallConfirmResponse, String> {
     let request = FirewallConfirmRequest {
         session_id: session_id.to_string(),
     };

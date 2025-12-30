@@ -13,9 +13,9 @@
 
 use crate::api;
 use keystone_core::{
-    DhcpLease, DnsmasqAddressAction, DnsmasqAddressOverride, DnsmasqConfig,
-    DnsmasqCnameRecord, DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord,
-    DnsmasqStaticLease, DnsmasqUpstreamMode, ManagedInterface,
+    DhcpLease, DnsmasqAddressAction, DnsmasqAddressOverride, DnsmasqCnameRecord, DnsmasqConfig,
+    DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord, DnsmasqStaticLease,
+    DnsmasqUpstreamMode, ManagedInterface,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -42,7 +42,7 @@ pub fn DnsmasqPage(
 ) -> impl IntoView {
     let token = Signal::derive(move || auth_token.get().unwrap_or_default());
     let active_tab = RwSignal::new(DnsmasqTab::Overview);
-    
+
     // Global state
     let config = RwSignal::new(DnsmasqConfig::default());
     let dhcp_ranges = RwSignal::new(Vec::<DnsmasqDhcpRange>::new());
@@ -53,7 +53,7 @@ pub fn DnsmasqPage(
     let cname_records = RwSignal::new(Vec::<DnsmasqCnameRecord>::new());
     let address_overrides = RwSignal::new(Vec::<DnsmasqAddressOverride>::new());
     let managed_interfaces = RwSignal::new(Vec::<ManagedInterface>::new());
-    
+
     let loading = RwSignal::new(true);
     let error_msg = RwSignal::new(Option::<String>::None);
     let success_msg = RwSignal::new(Option::<String>::None);
@@ -66,10 +66,10 @@ pub fn DnsmasqPage(
         if token_val.is_empty() {
             return;
         }
-        
+
         loading.set(true);
         let token_clone = token_val.clone();
-        
+
         spawn_local(async move {
             match api::fetch_dnsmasq_state(&token_clone).await {
                 Ok(state) => {
@@ -92,14 +92,14 @@ pub fn DnsmasqPage(
                 }
             }
         });
-        
+
         let token_clone2 = token_val.clone();
         spawn_local(async move {
             if let Ok(interfaces) = api::fetch_managed_interfaces(&token_clone2).await {
                 managed_interfaces.set(interfaces);
             }
         });
-        
+
         let token_clone3 = token_val.clone();
         spawn_local(async move {
             if let Ok(leases) = api::fetch_active_leases(&token_clone3).await {
@@ -240,7 +240,6 @@ pub fn DnsmasqPage(
                             <StaticLeasesTab
                                 token=token
                                 static_leases=static_leases
-                                active_leases=active_leases
                                 success_msg=success_msg
                                 error_msg=error_msg
                                 reload_trigger=reload_trigger
@@ -311,7 +310,7 @@ fn ApplyButton(
         error_msg.set(None);
         success_msg.set(None);
         let token_val = token.get();
-        
+
         spawn_local(async move {
             match api::apply_dnsmasq(&token_val).await {
                 Ok(response) => {
@@ -358,9 +357,9 @@ fn OverviewTab(
                 <div class="bg-gray-700 rounded-lg p-4">
                     <div class="text-gray-400 text-sm">"Service Status"</div>
                     <div class="text-xl font-semibold mt-1">
-                        {move || if config.get().enabled { 
+                        {move || if config.get().enabled {
                             view! { <span class="text-green-400">"Enabled"</span> }.into_any()
-                        } else { 
+                        } else {
                             view! { <span class="text-red-400">"Disabled"</span> }.into_any()
                         }}
                     </div>
@@ -450,7 +449,7 @@ fn DnsSettingsTab(
     error_msg: RwSignal<Option<String>>,
 ) -> impl IntoView {
     let saving = RwSignal::new(false);
-    
+
     // Local form state
     let enabled = RwSignal::new(config.get().enabled);
     let dns_port = RwSignal::new(config.get().dns_port.to_string());
@@ -477,7 +476,11 @@ fn DnsSettingsTab(
             dnssec_enabled: dnssec_enabled.get(),
             domain_needed: domain_needed.get(),
             bogus_priv: bogus_priv.get(),
-            local_domain: if local_domain.get().is_empty() { None } else { Some(local_domain.get()) },
+            local_domain: if local_domain.get().is_empty() {
+                None
+            } else {
+                Some(local_domain.get())
+            },
             expand_hosts: expand_hosts.get(),
             upstream_mode: upstream_mode.get(),
             upstream_servers: config.get().upstream_servers.clone(),
@@ -725,7 +728,11 @@ fn DhcpRangesTab(
             interface,
             start_address: start,
             end_address: end,
-            netmask: if modal_netmask.get().is_empty() { None } else { Some(modal_netmask.get()) },
+            netmask: if modal_netmask.get().is_empty() {
+                None
+            } else {
+                Some(modal_netmask.get())
+            },
             lease_time: modal_lease_time.get(),
             enabled: modal_enabled.get(),
             ipv6_mode: None,
@@ -983,8 +990,6 @@ fn DhcpRangesTab(
 fn StaticLeasesTab(
     token: Signal<String>,
     static_leases: RwSignal<Vec<DnsmasqStaticLease>>,
-    #[allow(unused_variables)]
-    active_leases: RwSignal<Vec<DhcpLease>>,
     success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
@@ -1037,7 +1042,11 @@ fn StaticLeasesTab(
             id: editing_lease.get().and_then(|l| l.id),
             mac_address: mac,
             ip_address: ip,
-            hostname: if modal_hostname.get().is_empty() { None } else { Some(modal_hostname.get()) },
+            hostname: if modal_hostname.get().is_empty() {
+                None
+            } else {
+                Some(modal_hostname.get())
+            },
             lease_time: None,
             client_id: None,
             set_tags: Vec::new(),
@@ -1296,7 +1305,10 @@ fn ActiveLeasesTab(
 
     // Check if a lease is already static
     let is_already_static = move |mac: &str| -> bool {
-        static_leases.get().iter().any(|s| s.mac_address.to_lowercase() == mac.to_lowercase())
+        static_leases
+            .get()
+            .iter()
+            .any(|s| s.mac_address.to_lowercase() == mac.to_lowercase())
     };
 
     view! {
@@ -1377,13 +1389,13 @@ fn ActiveLeasesTab(
 fn format_timestamp(ts: u64) -> String {
     // Simple relative time formatting using wasm_bindgen
     use wasm_bindgen::prelude::*;
-    
+
     #[wasm_bindgen]
     extern "C" {
         #[wasm_bindgen(js_namespace = Date)]
         fn now() -> f64;
     }
-    
+
     let now_ts = (now() / 1000.0) as u64;
     if ts <= now_ts {
         "Expired".to_string()
@@ -1417,7 +1429,7 @@ fn PreviewTab(token: Signal<String>) -> impl IntoView {
             return;
         }
         loading.set(true);
-        
+
         spawn_local(async move {
             match api::fetch_dnsmasq_preview(&token_val).await {
                 Ok(content) => {
@@ -1522,7 +1534,11 @@ fn DhcpOptionsTab(
 
         let opt = DnsmasqDhcpOption {
             id: editing_option.get().and_then(|o| o.id),
-            description: if modal_description.get().is_empty() { None } else { Some(modal_description.get()) },
+            description: if modal_description.get().is_empty() {
+                None
+            } else {
+                Some(modal_description.get())
+            },
             option,
             value,
             match_tags: Vec::new(),
@@ -1778,20 +1794,20 @@ fn DnsRecordsTab(
             // Sub-tab buttons
             <div class="flex gap-2 border-b border-gray-700 pb-2">
                 <button
-                    class=move || if show_hosts.get() { 
-                        "px-4 py-2 bg-blue-600 text-white rounded-t" 
-                    } else { 
-                        "px-4 py-2 bg-gray-700 text-gray-300 rounded-t hover:bg-gray-600" 
+                    class=move || if show_hosts.get() {
+                        "px-4 py-2 bg-blue-600 text-white rounded-t"
+                    } else {
+                        "px-4 py-2 bg-gray-700 text-gray-300 rounded-t hover:bg-gray-600"
                     }
                     on:click=move |_| show_hosts.set(true)
                 >
                     "Host Records"
                 </button>
                 <button
-                    class=move || if !show_hosts.get() { 
-                        "px-4 py-2 bg-blue-600 text-white rounded-t" 
-                    } else { 
-                        "px-4 py-2 bg-gray-700 text-gray-300 rounded-t hover:bg-gray-600" 
+                    class=move || if !show_hosts.get() {
+                        "px-4 py-2 bg-blue-600 text-white rounded-t"
+                    } else {
+                        "px-4 py-2 bg-gray-700 text-gray-300 rounded-t hover:bg-gray-600"
                     }
                     on:click=move |_| show_hosts.set(false)
                 >
@@ -1883,7 +1899,9 @@ fn HostRecordsSection(
             return;
         }
         if ipv4.is_empty() && ipv6.is_empty() {
-            modal_error.set(Some("At least one IP address (v4 or v6) is required".to_string()));
+            modal_error.set(Some(
+                "At least one IP address (v4 or v6) is required".to_string(),
+            ));
             return;
         }
 
@@ -2370,7 +2388,7 @@ fn AddressOverridesTab(
     let open_edit_modal = move |ovr: DnsmasqAddressOverride| {
         editing_override.set(Some(ovr.clone()));
         modal_domain.set(ovr.domain.clone());
-        modal_action.set(ovr.action.clone());
+        modal_action.set(ovr.action);
         modal_redirect_address.set(ovr.redirect_address.clone().unwrap_or_default());
         modal_enabled.set(ovr.enabled);
         modal_error.set(None);
@@ -2394,7 +2412,9 @@ fn AddressOverridesTab(
         }
 
         if matches!(action, DnsmasqAddressAction::Redirect) && redirect_address.is_empty() {
-            modal_error.set(Some("Redirect address is required for Redirect action".to_string()));
+            modal_error.set(Some(
+                "Redirect address is required for Redirect action".to_string(),
+            ));
             return;
         }
 
@@ -2402,7 +2422,11 @@ fn AddressOverridesTab(
             id: editing_override.get().and_then(|o| o.id),
             domain,
             action,
-            redirect_address: if redirect_address.is_empty() { None } else { Some(redirect_address) },
+            redirect_address: if redirect_address.is_empty() {
+                None
+            } else {
+                Some(redirect_address)
+            },
             enabled: modal_enabled.get(),
         };
 

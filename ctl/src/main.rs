@@ -11,40 +11,105 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
 use keystone_core::{
-    ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
-    DeleteUserResponse, FirewallAction, FirewallApplyRequest, FirewallApplyResponse,
-    FirewallConfirmRequest, FirewallConfirmResponse, FirewallGlobalSettings,
-    FirewallGlobalSettingsResponse, FirewallPolicy, FirewallPreviewResponse,
-    FirewallRollbackResponse, FirewallStatusResponse, FirewallZone, FirewallZonesResponse,
-    ForwardRule, ForwardRulesResponse, InputRule, InputRulesResponse, LoginRequest, LoginResponse,
-    ManagedInterfacesResponse, PortForward, PortForwardsResponse, RuleProtocol,
-    SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
-    SaveFirewallZoneRequest, SaveFirewallZoneResponse, SaveForwardRuleRequest,
-    SaveForwardRuleResponse, SaveInputRuleRequest, SaveInputRuleResponse,
-    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SavePortForwardRequest,
-    SavePortForwardResponse, SaveUserRequest, SaveUserResponse, SaveZoneForwardRequest,
-    SaveZoneForwardResponse, SystemState, UsersResponse, ZoneForwardPolicy, ZoneForwardsResponse,
-    DeleteFirewallZoneRequest, DeleteFirewallZoneResponse, DeleteZoneForwardRequest,
-    DeleteZoneForwardResponse, DeletePortForwardRequest, DeletePortForwardResponse,
-    DeleteInputRuleRequest, DeleteInputRuleResponse, DeleteForwardRuleRequest, 
+    ApplyConfigRequest,
+    ApplyConfigResponse,
+    DashboardResponse,
+    DeleteAddressOverrideRequest,
+    DeleteCnameRecordRequest,
+    DeleteDhcpOptionRequest,
+    DeleteDhcpRangeRequest,
+    DeleteFirewallZoneRequest,
+    DeleteFirewallZoneResponse,
+    DeleteForwardRuleRequest,
     DeleteForwardRuleResponse,
+    DeleteHostRecordRequest,
+    DeleteInputRuleRequest,
+    DeleteInputRuleResponse,
+    DeletePortForwardRequest,
+    DeletePortForwardResponse,
+    DeleteStaticLeaseRequest,
+    DeleteUserRequest,
+    DeleteUserResponse,
+    DeleteZoneForwardRequest,
+    DeleteZoneForwardResponse,
+    DhcpLeasesResponse,
+    DnsmasqAddressAction,
+    DnsmasqAddressOverride,
+    DnsmasqApplyRequest,
+    DnsmasqApplyResponse,
+    DnsmasqCnameRecord,
+    DnsmasqConfig,
+    DnsmasqDhcpOption,
+    DnsmasqDhcpRange,
+    DnsmasqHostRecord,
+    DnsmasqPreviewResponse,
     // Dnsmasq types
-    DnsmasqStateResponse, DnsmasqConfig, DnsmasqUpstreamMode, DnsmasqDhcpRange, DnsmasqStaticLease,
-    DnsmasqDhcpOption, DnsmasqHostRecord, DnsmasqCnameRecord, DnsmasqAddressOverride,
-    DnsmasqAddressAction, DhcpLeasesResponse, DnsmasqPreviewResponse,
-    DnsmasqApplyRequest, DnsmasqApplyResponse, SaveDnsmasqConfigRequest, SaveDnsmasqConfigResponse,
-    SaveDhcpRangeRequest, SaveDhcpRangeResponse, DeleteDhcpRangeRequest,
-    SaveStaticLeaseRequest, SaveStaticLeaseResponse, DeleteStaticLeaseRequest,
-    SaveDhcpOptionRequest, SaveDhcpOptionResponse, DeleteDhcpOptionRequest,
-    SaveHostRecordRequest, SaveHostRecordResponse, DeleteHostRecordRequest,
-    SaveCnameRecordRequest, SaveCnameRecordResponse, DeleteCnameRecordRequest,
-    SaveAddressOverrideRequest, SaveAddressOverrideResponse, DeleteAddressOverrideRequest,
+    DnsmasqStateResponse,
+    DnsmasqStaticLease,
+    DnsmasqUpstreamMode,
+    FirewallAction,
+    FirewallApplyRequest,
+    FirewallApplyResponse,
+    FirewallConfirmRequest,
+    FirewallConfirmResponse,
+    FirewallGlobalSettings,
+    FirewallGlobalSettingsResponse,
+    FirewallPolicy,
+    FirewallPreviewResponse,
+    FirewallRollbackResponse,
+    FirewallStatusResponse,
+    FirewallZone,
+    FirewallZonesResponse,
+    ForwardRule,
+    ForwardRulesResponse,
+    InputRule,
+    InputRulesResponse,
+    LoginRequest,
+    LoginResponse,
+    ManagedInterfacesResponse,
+    PortForward,
+    PortForwardsResponse,
+    RuleProtocol,
+    SaveAddressOverrideRequest,
+    SaveAddressOverrideResponse,
+    SaveCnameRecordRequest,
+    SaveCnameRecordResponse,
+    SaveDhcpOptionRequest,
+    SaveDhcpOptionResponse,
+    SaveDhcpRangeRequest,
+    SaveDhcpRangeResponse,
+    SaveDnsmasqConfigRequest,
+    SaveDnsmasqConfigResponse,
+    SaveFirewallGlobalSettingsRequest,
+    SaveFirewallGlobalSettingsResponse,
+    SaveFirewallZoneRequest,
+    SaveFirewallZoneResponse,
+    SaveForwardRuleRequest,
+    SaveForwardRuleResponse,
+    SaveHostRecordRequest,
+    SaveHostRecordResponse,
+    SaveInputRuleRequest,
+    SaveInputRuleResponse,
+    SaveManagedInterfacesRequest,
+    SaveManagedInterfacesResponse,
+    SavePortForwardRequest,
+    SavePortForwardResponse,
+    SaveStaticLeaseRequest,
+    SaveStaticLeaseResponse,
+    SaveUserRequest,
+    SaveUserResponse,
+    SaveZoneForwardRequest,
+    SaveZoneForwardResponse,
+    SystemState,
+    UsersResponse,
+    ZoneForwardPolicy,
+    ZoneForwardsResponse,
 };
-use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use serde::de::DeserializeOwned;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use tokio::net::UnixStream;
 
 const SOCKET_PATH: &str = "/run/keystone.sock";
@@ -57,24 +122,22 @@ fn get_token_path() -> Result<PathBuf> {
         let home = std::env::var("HOME").context("HOME environment variable not set")?;
         PathBuf::from(home).join(".local/state")
     };
-    
+
     let keystone_dir = state_dir.join("keystone");
-    fs::create_dir_all(&keystone_dir)
-        .context("Failed to create keystone state directory")?;
-    
+    fs::create_dir_all(&keystone_dir).context("Failed to create keystone state directory")?;
+
     Ok(keystone_dir.join("token"))
 }
 
 /// Save token to file with 0600 permissions
 fn save_token(token: &str) -> Result<()> {
     let token_path = get_token_path()?;
-    fs::write(&token_path, token)
-        .context("Failed to write token file")?;
-    
+    fs::write(&token_path, token).context("Failed to write token file")?;
+
     // Set permissions to 0600 (owner read/write only)
     fs::set_permissions(&token_path, fs::Permissions::from_mode(0o600))
         .context("Failed to set token file permissions")?;
-    
+
     Ok(())
 }
 
@@ -90,14 +153,13 @@ fn get_token(token_arg: Option<String>) -> Result<String> {
     if let Some(token) = token_arg {
         return Ok(token);
     }
-    
+
     if let Ok(token) = std::env::var("KEYSTONE_TOKEN") {
         return Ok(token);
     }
-    
+
     load_token()
 }
-
 
 /// Keystone CLI - manage your router/firewall from the command line
 #[derive(Parser)]
@@ -1171,8 +1233,8 @@ impl DaemonClient {
 
 /// Pretty print functions for human-readable output
 mod pretty {
+    use super::{get_token_path, save_token};
     use keystone_core::*;
-    use super::{save_token, get_token_path};
     use std::path::PathBuf;
 
     pub fn health(json: &serde_json::Value) {
@@ -1192,7 +1254,8 @@ mod pretty {
                     println!("\nManually export token:");
                     println!("  export KEYSTONE_TOKEN=\"{}\"", token);
                 } else {
-                    let token_path = get_token_path().unwrap_or_else(|_| PathBuf::from("~/.local/state/keystone/token"));
+                    let token_path = get_token_path()
+                        .unwrap_or_else(|_| PathBuf::from("~/.local/state/keystone/token"));
                     println!("\n✓ Token saved to {}", token_path.display());
                     println!("  You can now run commands without specifying a token");
                 }
@@ -1228,7 +1291,10 @@ mod pretty {
             let status = if iface.enabled { "UP" } else { "DOWN" };
             let addr = iface.address.as_deref().unwrap_or("no address");
             let dhcp = if iface.dhcp_enabled { "DHCP" } else { "static" };
-            println!("  {} [{}] {} ({}, {})", iface.name, iface.role, addr, dhcp, status);
+            println!(
+                "  {} [{}] {} ({}, {})",
+                iface.name, iface.role, addr, dhcp, status
+            );
         }
 
         // TODO: Add firewall zone display once FirewallConfig is integrated
@@ -1352,11 +1418,7 @@ mod pretty {
             };
             println!(
                 "{:<6} {:<15} {:<25} {:<10} {:<10}",
-                id,
-                zone.name,
-                interfaces,
-                zone.default_input_policy,
-                zone.default_forward_policy
+                id, zone.name, interfaces, zone.default_input_policy, zone.default_forward_policy
             );
         }
     }
@@ -1482,7 +1544,10 @@ mod pretty {
         for rule in &response.rules {
             let id = rule.id.map(|i| i.to_string()).unwrap_or("-".to_string());
             let zone = rule.zone.as_deref().unwrap_or("any");
-            let proto = rule.protocol.map(|p| p.to_string()).unwrap_or("any".to_string());
+            let proto = rule
+                .protocol
+                .map(|p| p.to_string())
+                .unwrap_or("any".to_string());
             let port = match (rule.port_start, rule.port_end) {
                 (None, _) => "any".to_string(),
                 (Some(start), None) => start.to_string(),
@@ -1530,7 +1595,10 @@ mod pretty {
             let id = rule.id.map(|i| i.to_string()).unwrap_or("-".to_string());
             let src_zone = rule.source_zone.as_deref().unwrap_or("any");
             let dst_zone = rule.dest_zone.as_deref().unwrap_or("any");
-            let proto = rule.protocol.map(|p| p.to_string()).unwrap_or("any".to_string());
+            let proto = rule
+                .protocol
+                .map(|p| p.to_string())
+                .unwrap_or("any".to_string());
             let port = match (rule.dest_port_start, rule.dest_port_end) {
                 (None, _) => "any".to_string(),
                 (Some(start), None) => start.to_string(),
@@ -1575,7 +1643,10 @@ mod pretty {
                 let session_id = response.session_id.as_ref().unwrap();
                 println!("\n  Session ID: {}", session_id);
                 println!("  IMPORTANT: Confirm within 60 seconds or changes will be rolled back!");
-                println!("\n  To confirm: keystonectl firewall confirm --session-id {}", session_id);
+                println!(
+                    "\n  To confirm: keystonectl firewall confirm --session-id {}",
+                    session_id
+                );
                 println!("  To rollback: keystonectl firewall rollback");
             }
         } else {
@@ -1617,17 +1688,40 @@ mod pretty {
 
     pub fn firewall_settings(response: &FirewallGlobalSettingsResponse) {
         println!("=== Firewall Global Settings ===\n");
-        
+
         println!("ICMP Settings:");
-        println!("  Ping from WAN: {}", if response.settings.ping_wan_enabled { "Enabled" } else { "Disabled" });
-        println!("  Ping from LAN: {}", if response.settings.ping_lan_enabled { "Enabled" } else { "Disabled" });
+        println!(
+            "  Ping from WAN: {}",
+            if response.settings.ping_wan_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
+        println!(
+            "  Ping from LAN: {}",
+            if response.settings.ping_lan_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
         println!();
-        
+
         println!("NAT Settings:");
-        println!("  Hairpin NAT: {}", if response.settings.hairpin_nat_enabled { "Enabled" } else { "Disabled" });
+        println!(
+            "  Hairpin NAT: {}",
+            if response.settings.hairpin_nat_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
         println!();
-        
-        println!("Note: Dangerous ICMP types (timestamp, redirect, address-mask) are always blocked.");
+
+        println!(
+            "Note: Dangerous ICMP types (timestamp, redirect, address-mask) are always blocked."
+        );
     }
 
     pub fn save_firewall_settings(response: &SaveFirewallGlobalSettingsResponse) {
@@ -1645,16 +1739,30 @@ mod pretty {
 
     pub fn dnsmasq_state(response: &DnsmasqStateResponse) {
         println!("=== DNS & DHCP State ===\n");
-        
+
         // Config summary
-        println!("Service: {}", if response.config.enabled { "Enabled" } else { "Disabled" });
+        println!(
+            "Service: {}",
+            if response.config.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
         println!("Upstream DNS: {}", response.config.upstream_mode);
         println!("Cache Size: {}", response.config.cache_size);
         if let Some(domain) = &response.config.local_domain {
             println!("Local Domain: {}", domain);
         }
-        println!("DNSSEC: {}", if response.config.dnssec_enabled { "Enabled" } else { "Disabled" });
-        
+        println!(
+            "DNSSEC: {}",
+            if response.config.dnssec_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
+
         println!("\nStatistics:");
         println!("  DHCP Ranges: {}", response.dhcp_ranges.len());
         println!("  Static Leases: {}", response.static_leases.len());
@@ -1666,16 +1774,45 @@ mod pretty {
 
     pub fn dnsmasq_config(config: &DnsmasqConfig) {
         println!("=== DNS Configuration ===\n");
-        println!("Service: {}", if config.enabled { "Enabled" } else { "Disabled" });
+        println!(
+            "Service: {}",
+            if config.enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
         println!("DNS Port: {}", config.dns_port);
         println!("Upstream Mode: {}", config.upstream_mode);
         println!("Cache Size: {}", config.cache_size);
-        println!("Local Domain: {}", config.local_domain.as_deref().unwrap_or("-"));
-        println!("DNSSEC: {}", if config.dnssec_enabled { "Enabled" } else { "Disabled" });
-        println!("Domain Needed: {}", if config.domain_needed { "Yes" } else { "No" });
-        println!("Bogus Priv: {}", if config.bogus_priv { "Yes" } else { "No" });
-        println!("Expand Hosts: {}", if config.expand_hosts { "Yes" } else { "No" });
-        println!("Log Queries: {}", if config.log_queries { "Yes" } else { "No" });
+        println!(
+            "Local Domain: {}",
+            config.local_domain.as_deref().unwrap_or("-")
+        );
+        println!(
+            "DNSSEC: {}",
+            if config.dnssec_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            }
+        );
+        println!(
+            "Domain Needed: {}",
+            if config.domain_needed { "Yes" } else { "No" }
+        );
+        println!(
+            "Bogus Priv: {}",
+            if config.bogus_priv { "Yes" } else { "No" }
+        );
+        println!(
+            "Expand Hosts: {}",
+            if config.expand_hosts { "Yes" } else { "No" }
+        );
+        println!(
+            "Log Queries: {}",
+            if config.log_queries { "Yes" } else { "No" }
+        );
         println!("Log DHCP: {}", if config.log_dhcp { "Yes" } else { "No" });
     }
 
@@ -1806,7 +1943,12 @@ mod pretty {
         for rec in records {
             let id = rec.id.map(|i| i.to_string()).unwrap_or("-".to_string());
             let hostnames = if rec.hostnames.len() > 2 {
-                format!("{}, {} (+{})", rec.hostnames[0], rec.hostnames[1], rec.hostnames.len() - 2)
+                format!(
+                    "{}, {} (+{})",
+                    rec.hostnames[0],
+                    rec.hostnames[1],
+                    rec.hostnames.len() - 2
+                )
             } else {
                 rec.hostnames.join(", ")
             };
@@ -1923,11 +2065,11 @@ mod pretty {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        
+
         if expires_at <= now {
             return "Expired".to_string();
         }
-        
+
         let remaining = expires_at - now;
         if remaining < 60 {
             format!("{}s", remaining)
@@ -2072,8 +2214,9 @@ async fn main() -> Result<()> {
                     Some(p) => p,
                     None => {
                         // Prompt for password securely
-                        let pass1 = rpassword::prompt_password(format!("Password for {}: ", username))
-                            .context("Failed to read password")?;
+                        let pass1 =
+                            rpassword::prompt_password(format!("Password for {}: ", username))
+                                .context("Failed to read password")?;
                         let pass2 = rpassword::prompt_password("Confirm password: ")
                             .context("Failed to read password confirmation")?;
                         if pass1 != pass2 {
@@ -2190,8 +2333,9 @@ async fn main() -> Result<()> {
                         default_forward_policy: forward_policy,
                     };
                     let request = SaveFirewallZoneRequest { zone };
-                    let response: SaveFirewallZoneResponse =
-                        client.post("/firewall/zones", &request, Some(&token)).await?;
+                    let response: SaveFirewallZoneResponse = client
+                        .post("/firewall/zones", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_zone);
                     if !response.success {
                         std::process::exit(1);
@@ -2201,8 +2345,9 @@ async fn main() -> Result<()> {
                 ZonesCommands::Delete { token, id } => {
                     let token = get_token(token)?;
                     let request = DeleteFirewallZoneRequest { id };
-                    let response: DeleteFirewallZoneResponse =
-                        client.delete("/firewall/zones", &request, Some(&token)).await?;
+                    let response: DeleteFirewallZoneResponse = client
+                        .delete("/firewall/zones", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::delete_zone);
                     if !response.success {
                         std::process::exit(1);
@@ -2226,9 +2371,8 @@ async fn main() -> Result<()> {
                     enabled,
                 } => {
                     let token = get_token(token)?;
-                    let policy: FirewallAction = policy
-                        .parse()
-                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let policy: FirewallAction =
+                        policy.parse().map_err(|e: String| anyhow::anyhow!(e))?;
                     let forward = ZoneForwardPolicy {
                         id: None,
                         source_zone: source,
@@ -2281,9 +2425,8 @@ async fn main() -> Result<()> {
                     enabled,
                 } => {
                     let token = get_token(token)?;
-                    let protocol: RuleProtocol = protocol
-                        .parse()
-                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let protocol: RuleProtocol =
+                        protocol.parse().map_err(|e: String| anyhow::anyhow!(e))?;
                     let port_forward = PortForward {
                         id: None,
                         name,
@@ -2349,9 +2492,8 @@ async fn main() -> Result<()> {
                         .map(|p| p.parse())
                         .transpose()
                         .map_err(|e: String| anyhow::anyhow!(e))?;
-                    let action: FirewallAction = action
-                        .parse()
-                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let action: FirewallAction =
+                        action.parse().map_err(|e: String| anyhow::anyhow!(e))?;
                     let rule = InputRule {
                         id: None,
                         name,
@@ -2422,9 +2564,8 @@ async fn main() -> Result<()> {
                         .map(|p| p.parse())
                         .transpose()
                         .map_err(|e: String| anyhow::anyhow!(e))?;
-                    let action: FirewallAction = action
-                        .parse()
-                        .map_err(|e: String| anyhow::anyhow!(e))?;
+                    let action: FirewallAction =
+                        action.parse().map_err(|e: String| anyhow::anyhow!(e))?;
                     let rule = ForwardRule {
                         id: None,
                         name,
@@ -2481,21 +2622,23 @@ async fn main() -> Result<()> {
                     hairpin_nat,
                 } => {
                     let token = get_token(token)?;
-                    
+
                     // First, fetch current settings
                     let current: FirewallGlobalSettingsResponse =
                         client.get("/firewall/settings", Some(&token)).await?;
-                    
+
                     // Update with any provided values
                     let settings = FirewallGlobalSettings {
                         ping_wan_enabled: ping_wan.unwrap_or(current.settings.ping_wan_enabled),
                         ping_lan_enabled: ping_lan.unwrap_or(current.settings.ping_lan_enabled),
-                        hairpin_nat_enabled: hairpin_nat.unwrap_or(current.settings.hairpin_nat_enabled),
+                        hairpin_nat_enabled: hairpin_nat
+                            .unwrap_or(current.settings.hairpin_nat_enabled),
                     };
-                    
+
                     let request = SaveFirewallGlobalSettingsRequest { settings };
-                    let response: SaveFirewallGlobalSettingsResponse =
-                        client.post("/firewall/settings", &request, Some(&token)).await?;
+                    let response: SaveFirewallGlobalSettingsResponse = client
+                        .post("/firewall/settings", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_firewall_settings);
                     if !response.success {
                         std::process::exit(1);
@@ -2513,8 +2656,9 @@ async fn main() -> Result<()> {
             FirewallCommands::Apply { token } => {
                 let token = get_token(token)?;
                 let request = FirewallApplyRequest {};
-                let response: FirewallApplyResponse =
-                    client.post("/firewall/apply", &request, Some(&token)).await?;
+                let response: FirewallApplyResponse = client
+                    .post("/firewall/apply", &request, Some(&token))
+                    .await?;
                 output(cli.json, &response, pretty::firewall_apply);
                 if !response.success {
                     std::process::exit(1);
@@ -2524,8 +2668,9 @@ async fn main() -> Result<()> {
             FirewallCommands::Confirm { token, session_id } => {
                 let token = get_token(token)?;
                 let request = FirewallConfirmRequest { session_id };
-                let response: FirewallConfirmResponse =
-                    client.post("/firewall/confirm", &request, Some(&token)).await?;
+                let response: FirewallConfirmResponse = client
+                    .post("/firewall/confirm", &request, Some(&token))
+                    .await?;
                 output(cli.json, &response, pretty::firewall_confirm);
                 if !response.success {
                     std::process::exit(1);
@@ -2617,8 +2762,9 @@ async fn main() -> Result<()> {
                     };
 
                     let request = SaveDnsmasqConfigRequest { config };
-                    let response: SaveDnsmasqConfigResponse =
-                        client.post("/dnsmasq/config", &request, Some(&token)).await?;
+                    let response: SaveDnsmasqConfigResponse = client
+                        .post("/dnsmasq/config", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_dnsmasq_config);
                     if !response.success {
                         std::process::exit(1);
@@ -2658,8 +2804,9 @@ async fn main() -> Result<()> {
                         ipv6_prefix: None,
                     };
                     let request = SaveDhcpRangeRequest { range };
-                    let response: SaveDhcpRangeResponse =
-                        client.post("/dnsmasq/ranges", &request, Some(&token)).await?;
+                    let response: SaveDhcpRangeResponse = client
+                        .post("/dnsmasq/ranges", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_dhcp_range);
                     if !response.success {
                         std::process::exit(1);
@@ -2669,12 +2816,22 @@ async fn main() -> Result<()> {
                 DhcpRangeCommands::Delete { token, id } => {
                     let token = get_token(token)?;
                     let request = DeleteDhcpRangeRequest { id };
-                    let response: serde_json::Value =
-                        client.delete("/dnsmasq/ranges", &request, Some(&token)).await?;
-                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    let response: serde_json::Value = client
+                        .delete("/dnsmasq/ranges", &request, Some(&token))
+                        .await?;
+                    let success = response
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let message = response
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&response).unwrap_or_default()
+                        );
                     } else {
                         pretty::delete_success(success, message);
                     }
@@ -2711,8 +2868,9 @@ async fn main() -> Result<()> {
                         set_tags: Vec::new(),
                     };
                     let request = SaveStaticLeaseRequest { lease };
-                    let response: SaveStaticLeaseResponse =
-                        client.post("/dnsmasq/static-leases", &request, Some(&token)).await?;
+                    let response: SaveStaticLeaseResponse = client
+                        .post("/dnsmasq/static-leases", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_static_lease);
                     if !response.success {
                         std::process::exit(1);
@@ -2722,12 +2880,22 @@ async fn main() -> Result<()> {
                 StaticLeaseCommands::Delete { token, id } => {
                     let token = get_token(token)?;
                     let request = DeleteStaticLeaseRequest { id };
-                    let response: serde_json::Value =
-                        client.delete("/dnsmasq/static-leases", &request, Some(&token)).await?;
-                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    let response: serde_json::Value = client
+                        .delete("/dnsmasq/static-leases", &request, Some(&token))
+                        .await?;
+                    let success = response
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let message = response
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&response).unwrap_or_default()
+                        );
                     } else {
                         pretty::delete_success(success, message);
                     }
@@ -2766,8 +2934,9 @@ async fn main() -> Result<()> {
                         force,
                     };
                     let request = SaveDhcpOptionRequest { option: opt };
-                    let response: SaveDhcpOptionResponse =
-                        client.post("/dnsmasq/dhcp-options", &request, Some(&token)).await?;
+                    let response: SaveDhcpOptionResponse = client
+                        .post("/dnsmasq/dhcp-options", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_dhcp_option);
                     if !response.success {
                         std::process::exit(1);
@@ -2777,12 +2946,22 @@ async fn main() -> Result<()> {
                 DhcpOptionCommands::Delete { token, id } => {
                     let token = get_token(token)?;
                     let request = DeleteDhcpOptionRequest { id };
-                    let response: serde_json::Value =
-                        client.delete("/dnsmasq/dhcp-options", &request, Some(&token)).await?;
-                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    let response: serde_json::Value = client
+                        .delete("/dnsmasq/dhcp-options", &request, Some(&token))
+                        .await?;
+                    let success = response
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let message = response
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&response).unwrap_or_default()
+                        );
                     } else {
                         pretty::delete_success(success, message);
                     }
@@ -2832,8 +3011,9 @@ async fn main() -> Result<()> {
                         enabled,
                     };
                     let request = SaveHostRecordRequest { record };
-                    let response: SaveHostRecordResponse =
-                        client.post("/dnsmasq/host-records", &request, Some(&token)).await?;
+                    let response: SaveHostRecordResponse = client
+                        .post("/dnsmasq/host-records", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_host_record);
                     if !response.success {
                         std::process::exit(1);
@@ -2843,12 +3023,22 @@ async fn main() -> Result<()> {
                 HostRecordCommands::Delete { token, id } => {
                     let token = get_token(token)?;
                     let request = DeleteHostRecordRequest { id };
-                    let response: serde_json::Value =
-                        client.delete("/dnsmasq/host-records", &request, Some(&token)).await?;
-                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    let response: serde_json::Value = client
+                        .delete("/dnsmasq/host-records", &request, Some(&token))
+                        .await?;
+                    let success = response
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let message = response
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&response).unwrap_or_default()
+                        );
                     } else {
                         pretty::delete_success(success, message);
                     }
@@ -2881,8 +3071,9 @@ async fn main() -> Result<()> {
                         enabled,
                     };
                     let request = SaveCnameRecordRequest { record };
-                    let response: SaveCnameRecordResponse =
-                        client.post("/dnsmasq/cname-records", &request, Some(&token)).await?;
+                    let response: SaveCnameRecordResponse = client
+                        .post("/dnsmasq/cname-records", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_cname_record);
                     if !response.success {
                         std::process::exit(1);
@@ -2892,12 +3083,22 @@ async fn main() -> Result<()> {
                 CnameRecordCommands::Delete { token, id } => {
                     let token = get_token(token)?;
                     let request = DeleteCnameRecordRequest { id };
-                    let response: serde_json::Value =
-                        client.delete("/dnsmasq/cname-records", &request, Some(&token)).await?;
-                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    let response: serde_json::Value = client
+                        .delete("/dnsmasq/cname-records", &request, Some(&token))
+                        .await?;
+                    let success = response
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let message = response
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&response).unwrap_or_default()
+                        );
                     } else {
                         pretty::delete_success(success, message);
                     }
@@ -2912,7 +3113,11 @@ async fn main() -> Result<()> {
                     let token = get_token(token)?;
                     let response: DnsmasqStateResponse =
                         client.get("/dnsmasq/state", Some(&token)).await?;
-                    output(cli.json, &response.address_overrides, pretty::address_overrides);
+                    output(
+                        cli.json,
+                        &response.address_overrides,
+                        pretty::address_overrides,
+                    );
                 }
 
                 AddressOverrideCommands::Add {
@@ -2938,7 +3143,9 @@ async fn main() -> Result<()> {
                     };
 
                     // Validate redirect_to is provided when action is redirect
-                    if matches!(action_enum, DnsmasqAddressAction::Redirect) && redirect_to.is_none() {
+                    if matches!(action_enum, DnsmasqAddressAction::Redirect)
+                        && redirect_to.is_none()
+                    {
                         anyhow::bail!("--redirect-to is required when action is 'redirect'");
                     }
 
@@ -2949,9 +3156,12 @@ async fn main() -> Result<()> {
                         redirect_address: redirect_to,
                         enabled,
                     };
-                    let request = SaveAddressOverrideRequest { override_entry: ovr };
-                    let response: SaveAddressOverrideResponse =
-                        client.post("/dnsmasq/address-overrides", &request, Some(&token)).await?;
+                    let request = SaveAddressOverrideRequest {
+                        override_entry: ovr,
+                    };
+                    let response: SaveAddressOverrideResponse = client
+                        .post("/dnsmasq/address-overrides", &request, Some(&token))
+                        .await?;
                     output(cli.json, &response, pretty::save_address_override);
                     if !response.success {
                         std::process::exit(1);
@@ -2961,12 +3171,22 @@ async fn main() -> Result<()> {
                 AddressOverrideCommands::Delete { token, id } => {
                     let token = get_token(token)?;
                     let request = DeleteAddressOverrideRequest { id };
-                    let response: serde_json::Value =
-                        client.delete("/dnsmasq/address-overrides", &request, Some(&token)).await?;
-                    let success = response.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let message = response.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                    let response: serde_json::Value = client
+                        .delete("/dnsmasq/address-overrides", &request, Some(&token))
+                        .await?;
+                    let success = response
+                        .get("success")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let message = response
+                        .get("message")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
                     if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&response).unwrap_or_default()
+                        );
                     } else {
                         pretty::delete_success(success, message);
                     }
@@ -2993,8 +3213,9 @@ async fn main() -> Result<()> {
             DnsmasqCommands::Apply { token } => {
                 let token = get_token(token)?;
                 let request = DnsmasqApplyRequest {};
-                let response: DnsmasqApplyResponse =
-                    client.post("/dnsmasq/apply", &request, Some(&token)).await?;
+                let response: DnsmasqApplyResponse = client
+                    .post("/dnsmasq/apply", &request, Some(&token))
+                    .await?;
                 output(cli.json, &response, pretty::dnsmasq_apply);
                 if !response.success {
                     std::process::exit(1);

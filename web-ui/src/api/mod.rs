@@ -9,12 +9,14 @@
 //! - `bridges` - Bridge configuration
 //! - `firewall` - Firewall zones, rules, and settings
 //! - `dnsmasq` - DNS/DHCP configuration
+//! - `caddy` - Caddy reverse proxy configuration
 //!
 //! All functions use the shared `client` module for HTTP requests,
 //! which provides centralized error handling and authentication.
 
 pub mod auth;
 pub mod bridges;
+pub mod caddy;
 pub mod client;
 pub mod dashboard;
 pub mod dnsmasq;
@@ -28,6 +30,7 @@ pub mod vlans;
 // Re-export all public functions from submodules for backward compatibility
 pub use auth::*;
 pub use bridges::*;
+pub use caddy::*;
 pub use dashboard::*;
 pub use dnsmasq::*;
 pub use firewall::*;

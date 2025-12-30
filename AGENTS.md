@@ -127,6 +127,12 @@ just ci             # clippy + fmt-check + test
 
 - **Formatting**: Use `rustfmt` with default settings
 - **Linting**: All clippy warnings must be addressed
+  - **No Warning Suppression**: Do not suppress warnings with `#[allow(...)]` unless strictly necessary
+  - **Dead Code**: Delete unused code rather than suppressing warnings - it can be regenerated if needed later
+  - **Exceptions**: Only suppress warnings for:
+    - False positives that are verifiably incorrect
+    - Generated code or external macros you cannot control
+    - Temporary code with immediate plans (same PR/session) to use it
 - **Documentation**: Public APIs must have doc comments
 - **Tests**: Add tests for new functionality in `core/`
 - Do *not* create .md files unless explicitly requested.

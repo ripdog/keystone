@@ -122,9 +122,11 @@ pub fn BridgesPage(
         }
 
         let stp_forward_delay: u32 = match stp_forward_delay_str.parse() {
-            Ok(delay) if delay >= 2 && delay <= 30 => delay,
+            Ok(delay) if (2..=30).contains(&delay) => delay,
             _ => {
-                set_modal_error.set(Some("STP forward delay must be between 2 and 30 seconds".to_string()));
+                set_modal_error.set(Some(
+                    "STP forward delay must be between 2 and 30 seconds".to_string(),
+                ));
                 return;
             }
         };

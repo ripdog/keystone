@@ -124,13 +124,13 @@ pub fn StaticIpSettings(
             // DNS Servers
             <div>
                 <label class="block text-gray-300 mb-2 font-medium">"DNS Servers"</label>
-                
+
                 <Show when=move || show_dhcp_warnings && dhcp_use_dns.get()>
                     <div class="bg-blue-900/30 border border-blue-600 text-blue-200 px-3 py-2 rounded mb-2 text-sm">
                         "DHCP DNS is enabled. Static DNS servers will be used in addition to DHCP-provided servers."
                     </div>
                 </Show>
-                
+
                 <div class="space-y-2">
                     <For
                         each=dns_indexed

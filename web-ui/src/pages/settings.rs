@@ -87,7 +87,11 @@ pub fn SettingsPage(
             id: user_id,
             username: username.clone(),
             email: if email.is_empty() { None } else { Some(email) },
-            password: if password.is_empty() { None } else { Some(password) },
+            password: if password.is_empty() {
+                None
+            } else {
+                Some(password)
+            },
         };
 
         spawn_local(async move {
@@ -125,7 +129,10 @@ pub fn SettingsPage(
         };
 
         if !web_sys::window()
-            .and_then(|w| w.confirm_with_message("Are you sure you want to delete this user?").ok())
+            .and_then(|w| {
+                w.confirm_with_message("Are you sure you want to delete this user?")
+                    .ok()
+            })
             .unwrap_or(false)
         {
             return;
@@ -138,7 +145,10 @@ pub fn SettingsPage(
                         set_success_msg.set(Some(response.message.clone()));
                         // Reload users
                         if let Ok(users_list) = api::fetch_users(&token).await {
-                            leptos::logging::log!("Reloaded {} users after delete", users_list.len());
+                            leptos::logging::log!(
+                                "Reloaded {} users after delete",
+                                users_list.len()
+                            );
                             set_users.set(users_list);
                         } else {
                             leptos::logging::warn!("Failed to reload users after delete");

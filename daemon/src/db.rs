@@ -4,12 +4,12 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    ActivationPolicy, AddressScope, BridgeConfig, DhcpMode,
-    Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
-    IpMasqueradeMode, Ipv6AcceptRaConfig, LinkLocalMode,
-    ManagedInterface, RouteType, StaticAddress, StaticRoute, User, UserInfo, VlanConfig,
+    ActivationPolicy, AddressScope, BridgeConfig, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
+    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, Ipv6AcceptRaConfig,
+    LinkLocalMode, ManagedInterface, RouteType, StaticAddress, StaticRoute, User, UserInfo,
+    VlanConfig,
 };
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use tracing::info;
 
 const DB_PATH: &str = "/var/lib/keystone/keystone.db";
@@ -25,11 +25,10 @@ impl Database {
     pub async fn new() -> Result<Self> {
         // Ensure directory exists
         let db_dir = std::path::Path::new(DB_PATH).parent().unwrap();
-        std::fs::create_dir_all(db_dir)
-            .context("Failed to create database directory")?;
+        std::fs::create_dir_all(db_dir).context("Failed to create database directory")?;
 
         let db_url = format!("sqlite:{}?mode=rwc", DB_PATH);
-        
+
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect(&db_url)
@@ -118,12 +117,12 @@ impl Database {
     /// Get or create JWT signing key
     pub async fn get_or_create_jwt_key(&self) -> Result<Vec<u8>> {
         // Try to get existing key
-        if let Some(row) = sqlx::query_as::<_, (Vec<u8>,)>(
-            "SELECT key_bytes FROM jwt_key WHERE id = 1"
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .context("Failed to fetch JWT key")? {
+        if let Some(row) =
+            sqlx::query_as::<_, (Vec<u8>,)>("SELECT key_bytes FROM jwt_key WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await
+                .context("Failed to fetch JWT key")?
+        {
             info!("Loaded existing JWT key from database");
             return Ok(row.0);
         }
@@ -136,14 +135,12 @@ impl Database {
             .unwrap()
             .as_secs() as i64;
 
-        sqlx::query(
-            "INSERT INTO jwt_key (id, key_bytes, created_at) VALUES (1, ?, ?)"
-        )
-        .bind(&key_bytes[..])
-        .bind(now)
-        .execute(&self.pool)
-        .await
-        .context("Failed to create JWT key")?;
+        sqlx::query("INSERT INTO jwt_key (id, key_bytes, created_at) VALUES (1, ?, ?)")
+            .bind(&key_bytes[..])
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .context("Failed to create JWT key")?;
 
         info!("Generated new JWT key and stored in database");
         Ok(key_bytes.to_vec())
@@ -181,17 +178,24 @@ impl Database {
         .await
         .context("Failed to fetch user")?;
 
-        Ok(row.map(|(id, username, email, password_hash, created_at)| User {
-            id,
-            username,
-            email,
-            password_hash,
-            created_at,
-        }))
+        Ok(
+            row.map(|(id, username, email, password_hash, created_at)| User {
+                id,
+                username,
+                email,
+                password_hash,
+                created_at,
+            }),
+        )
     }
 
     /// Create a new user
-    pub async fn create_user(&self, username: &str, email: Option<&str>, password_hash: &str) -> Result<i64> {
+    pub async fn create_user(
+        &self,
+        username: &str,
+        email: Option<&str>,
+        password_hash: &str,
+    ) -> Result<i64> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -212,28 +216,30 @@ impl Database {
     }
 
     /// Update user information
-    pub async fn update_user(&self, id: i64, username: &str, email: Option<&str>, password_hash: Option<&str>) -> Result<()> {
+    pub async fn update_user(
+        &self,
+        id: i64,
+        username: &str,
+        email: Option<&str>,
+        password_hash: Option<&str>,
+    ) -> Result<()> {
         if let Some(hash) = password_hash {
-            sqlx::query(
-                "UPDATE users SET username = ?, email = ?, password_hash = ? WHERE id = ?",
-            )
-            .bind(username)
-            .bind(email)
-            .bind(hash)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .context("Failed to update user")?;
+            sqlx::query("UPDATE users SET username = ?, email = ?, password_hash = ? WHERE id = ?")
+                .bind(username)
+                .bind(email)
+                .bind(hash)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .context("Failed to update user")?;
         } else {
-            sqlx::query(
-                "UPDATE users SET username = ?, email = ? WHERE id = ?",
-            )
-            .bind(username)
-            .bind(email)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .context("Failed to update user")?;
+            sqlx::query("UPDATE users SET username = ?, email = ? WHERE id = ?")
+                .bind(username)
+                .bind(email)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .context("Failed to update user")?;
         }
 
         info!("Updated user {} (id: {})", username, id);
@@ -267,7 +273,23 @@ impl Database {
         .context("Failed to fetch interface configs")?;
 
         let mut configs = Vec::new();
-        for (id, name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy, mtu) in rows {
+        for (
+            id,
+            name,
+            role,
+            enabled,
+            description,
+            dhcp_mode,
+            gateway,
+            ipv6_accept_ra,
+            ip_forward,
+            ip_masquerade,
+            link_local,
+            required_for_online,
+            activation_policy,
+            mtu,
+        ) in rows
+        {
             let addresses = self.get_interface_addresses(id).await?;
             let routes = self.get_interface_routes(id).await?;
             let dns_servers = self.get_interface_dns(id).await?;
@@ -291,7 +313,9 @@ impl Database {
                 gateway,
                 link_local: link_local.parse().unwrap_or(LinkLocalMode::default()),
                 required_for_online,
-                activation_policy: activation_policy.parse().unwrap_or(ActivationPolicy::default()),
+                activation_policy: activation_policy
+                    .parse()
+                    .unwrap_or(ActivationPolicy::default()),
                 dhcpv4_client,
                 dhcpv6_client,
                 ipv6_accept_ra,
@@ -318,7 +342,22 @@ impl Database {
         .context("Failed to fetch interface config")?;
 
         match row {
-            Some((id, name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy, mtu)) => {
+            Some((
+                id,
+                name,
+                role,
+                enabled,
+                description,
+                dhcp_mode,
+                gateway,
+                ipv6_accept_ra,
+                ip_forward,
+                ip_masquerade,
+                link_local,
+                required_for_online,
+                activation_policy,
+                mtu,
+            )) => {
                 let addresses = self.get_interface_addresses(id).await?;
                 let routes = self.get_interface_routes(id).await?;
                 let dns_servers = self.get_interface_dns(id).await?;
@@ -342,7 +381,9 @@ impl Database {
                     gateway,
                     link_local: link_local.parse().unwrap_or(LinkLocalMode::default()),
                     required_for_online,
-                    activation_policy: activation_policy.parse().unwrap_or(ActivationPolicy::default()),
+                    activation_policy: activation_policy
+                        .parse()
+                        .unwrap_or(ActivationPolicy::default()),
                     dhcpv4_client,
                     dhcpv6_client,
                     ipv6_accept_ra,
@@ -524,7 +565,8 @@ impl Database {
         }
 
         // Save IPv6 Accept RA config
-        self.save_ipv6_accept_ra_config_tx(&mut tx, config_id, &config.ipv6_accept_ra_config).await?;
+        self.save_ipv6_accept_ra_config_tx(&mut tx, config_id, &config.ipv6_accept_ra_config)
+            .await?;
 
         tx.commit().await.context("Failed to commit transaction")?;
         info!("Saved interface config for {}", config.name);
@@ -619,8 +661,8 @@ impl Database {
         .await
         .context("Failed to fetch DHCPv4 client config")?;
 
-        Ok(row.map(|(send_hostname, hostname, use_dns, use_ntp, use_routes, use_gateway, use_mtu, use_domains, route_metric)| {
-            Dhcpv4ClientConfig {
+        Ok(row.map(
+            |(
                 send_hostname,
                 hostname,
                 use_dns,
@@ -629,9 +671,21 @@ impl Database {
                 use_gateway,
                 use_mtu,
                 use_domains,
-                route_metric: route_metric.map(|m| m as u32),
-            }
-        }))
+                route_metric,
+            )| {
+                Dhcpv4ClientConfig {
+                    send_hostname,
+                    hostname,
+                    use_dns,
+                    use_ntp,
+                    use_routes,
+                    use_gateway,
+                    use_mtu,
+                    use_domains,
+                    route_metric: route_metric.map(|m| m as u32),
+                }
+            },
+        ))
     }
 
     async fn get_dhcpv6_client_config(&self, config_id: i64) -> Result<Option<Dhcpv6ClientConfig>> {
@@ -644,26 +698,31 @@ impl Database {
         .await
         .context("Failed to fetch DHCPv6 client config")?;
 
-        Ok(row.map(|(use_dns, use_ntp, use_domains, prefix_delegation_hint, rapid_commit, without_ra)| {
-            Dhcpv6ClientConfig {
-                use_dns,
-                use_ntp,
-                use_domains,
-                prefix_delegation_hint,
-                rapid_commit,
-                without_ra,
-            }
-        }))
+        Ok(row.map(
+            |(use_dns, use_ntp, use_domains, prefix_delegation_hint, rapid_commit, without_ra)| {
+                Dhcpv6ClientConfig {
+                    use_dns,
+                    use_ntp,
+                    use_domains,
+                    prefix_delegation_hint,
+                    rapid_commit,
+                    without_ra,
+                }
+            },
+        ))
     }
 
     // ============================================================================
     // IPv6 Accept RA Configuration
     // ============================================================================
 
-    async fn get_ipv6_accept_ra_config(&self, config_id: i64) -> Result<Option<Ipv6AcceptRaConfig>> {
+    async fn get_ipv6_accept_ra_config(
+        &self,
+        config_id: i64,
+    ) -> Result<Option<Ipv6AcceptRaConfig>> {
         let row = sqlx::query_as::<_, (bool, bool, bool, bool)>(
             r#"SELECT use_dns, use_gateway, use_route_prefix, use_autonomous_prefix
-               FROM ipv6_accept_ra_config WHERE interface_config_id = ?"#
+               FROM ipv6_accept_ra_config WHERE interface_config_id = ?"#,
         )
         .bind(config_id)
         .fetch_optional(&self.pool)
@@ -728,23 +787,31 @@ impl Database {
 
         let vlans = rows
             .into_iter()
-            .map(|(id, name, parent_interface, vlan_id, protocol, description, interface_config_id)| {
-                VlanConfig {
-                    id: Some(id),
+            .map(
+                |(
+                    id,
                     name,
                     parent_interface,
-                    vlan_id: vlan_id as u16,
-                    protocol: protocol.parse().unwrap_or_default(),
+                    vlan_id,
+                    protocol,
                     description,
                     interface_config_id,
-                }
-            })
+                )| {
+                    VlanConfig {
+                        id: Some(id),
+                        name,
+                        parent_interface,
+                        vlan_id: vlan_id as u16,
+                        protocol: protocol.parse().unwrap_or_default(),
+                        description,
+                        interface_config_id,
+                    }
+                },
+            )
             .collect();
 
         Ok(vlans)
     }
-
-    
 
     /// Get a single VLAN by ID
     pub async fn get_vlan(&self, id: i64) -> Result<Option<VlanConfig>> {
@@ -757,20 +824,20 @@ impl Database {
         .await
         .context("Failed to fetch VLAN")?;
 
-        Ok(row.map(|(id, name, parent_interface, vlan_id, protocol, description, interface_config_id)| {
-            VlanConfig {
-                id: Some(id),
-                name,
-                parent_interface,
-                vlan_id: vlan_id as u16,
-                protocol: protocol.parse().unwrap_or_default(),
-                description,
-                interface_config_id,
-            }
-        }))
+        Ok(row.map(
+            |(id, name, parent_interface, vlan_id, protocol, description, interface_config_id)| {
+                VlanConfig {
+                    id: Some(id),
+                    name,
+                    parent_interface,
+                    vlan_id: vlan_id as u16,
+                    protocol: protocol.parse().unwrap_or_default(),
+                    description,
+                    interface_config_id,
+                }
+            },
+        ))
     }
-
-    
 
     /// Save (insert or update) a VLAN configuration
     pub async fn save_vlan(&self, config: &VlanConfig) -> Result<i64> {
@@ -795,7 +862,7 @@ impl Database {
                 r#"UPDATE vlan_config SET 
                    name = ?, parent_interface = ?, vlan_id = ?, protocol = ?, 
                    description = ?, interface_config_id = ?, updated_at = strftime('%s', 'now')
-                   WHERE id = ?"#
+                   WHERE id = ?"#,
             )
             .bind(&config.name)
             .bind(&config.parent_interface)
@@ -842,9 +909,12 @@ impl Database {
     }
 
     /// Get VLAN names attached to an interface (for populating vlans field in InterfaceConfig)
-    pub async fn get_vlan_names_for_interface(&self, parent_interface: &str) -> Result<Vec<String>> {
+    pub async fn get_vlan_names_for_interface(
+        &self,
+        parent_interface: &str,
+    ) -> Result<Vec<String>> {
         let rows = sqlx::query_as::<_, (String,)>(
-            "SELECT name FROM vlan_config WHERE parent_interface = ? ORDER BY vlan_id"
+            "SELECT name FROM vlan_config WHERE parent_interface = ? ORDER BY vlan_id",
         )
         .bind(parent_interface)
         .fetch_all(&self.pool)
@@ -871,18 +941,29 @@ impl Database {
 
         let bridges = rows
             .into_iter()
-            .map(|(id, name, members_json, stp, stp_forward_delay, description, interface_config_id)| {
-                let members: Vec<String> = serde_json::from_str(&members_json).unwrap_or_default();
-                BridgeConfig {
-                    id: Some(id),
+            .map(
+                |(
+                    id,
                     name,
-                    members,
-                    stp: stp != 0,
-                    stp_forward_delay: stp_forward_delay as u32,
+                    members_json,
+                    stp,
+                    stp_forward_delay,
                     description,
                     interface_config_id,
-                }
-            })
+                )| {
+                    let members: Vec<String> =
+                        serde_json::from_str(&members_json).unwrap_or_default();
+                    BridgeConfig {
+                        id: Some(id),
+                        name,
+                        members,
+                        stp: stp != 0,
+                        stp_forward_delay: stp_forward_delay as u32,
+                        description,
+                        interface_config_id,
+                    }
+                },
+            )
             .collect();
 
         Ok(bridges)
@@ -900,27 +981,27 @@ impl Database {
         .await
         .context("Failed to fetch bridge")?;
 
-        Ok(row.map(|(id, name, members_json, stp, stp_forward_delay, description, interface_config_id)| {
-            let members: Vec<String> = serde_json::from_str(&members_json).unwrap_or_default();
-            BridgeConfig {
-                id: Some(id),
-                name,
-                members,
-                stp: stp != 0,
-                stp_forward_delay: stp_forward_delay as u32,
-                description,
-                interface_config_id,
-            }
-        }))
+        Ok(row.map(
+            |(id, name, members_json, stp, stp_forward_delay, description, interface_config_id)| {
+                let members: Vec<String> = serde_json::from_str(&members_json).unwrap_or_default();
+                BridgeConfig {
+                    id: Some(id),
+                    name,
+                    members,
+                    stp: stp != 0,
+                    stp_forward_delay: stp_forward_delay as u32,
+                    description,
+                    interface_config_id,
+                }
+            },
+        ))
     }
-
-    
 
     /// Save (insert or update) a bridge configuration
     pub async fn save_bridge(&self, config: &BridgeConfig) -> Result<i64> {
-        let members_json = serde_json::to_string(&config.members)
-            .context("Failed to serialize bridge members")?;
-        
+        let members_json =
+            serde_json::to_string(&config.members).context("Failed to serialize bridge members")?;
+
         let stp_int = if config.stp { 1 } else { 0 };
 
         if let Some(id) = config.id {
@@ -930,7 +1011,7 @@ impl Database {
                  SET name = ?, members = ?, stp = ?, stp_forward_delay = ?, 
                      description = ?, interface_config_id = ?, 
                      updated_at = strftime('%s', 'now')
-                 WHERE id = ?"
+                 WHERE id = ?",
             )
             .bind(&config.name)
             .bind(&members_json)
@@ -949,7 +1030,7 @@ impl Database {
             let result = sqlx::query(
                 "INSERT INTO bridge_config 
                  (name, members, stp, stp_forward_delay, description, interface_config_id) 
-                 VALUES (?, ?, ?, ?, ?, ?)"
+                 VALUES (?, ?, ?, ?, ?, ?)",
             )
             .bind(&config.name)
             .bind(&members_json)
@@ -2030,7 +2111,9 @@ impl Database {
     // ========================================================================
 
     /// Get global firewall settings
-    pub async fn get_firewall_global_settings(&self) -> Result<keystone_core::FirewallGlobalSettings> {
+    pub async fn get_firewall_global_settings(
+        &self,
+    ) -> Result<keystone_core::FirewallGlobalSettings> {
         let row = sqlx::query_as::<_, (bool, bool, bool)>(
             "SELECT ping_wan_enabled, ping_lan_enabled, hairpin_nat_enabled 
              FROM firewall_global_settings WHERE id = 1",
@@ -2105,9 +2188,7 @@ impl Database {
     }
 
     /// Get pending rollback state
-    pub async fn get_rollback_state(
-        &self,
-    ) -> Result<Option<(keystone_core::FirewallConfig, i64)>> {
+    pub async fn get_rollback_state(&self) -> Result<Option<(keystone_core::FirewallConfig, i64)>> {
         let row = sqlx::query_as::<_, (String, i64)>(
             "SELECT previous_config, rollback_at FROM firewall_rollback_state WHERE id = 1",
         )
@@ -2136,4 +2217,3 @@ impl Database {
         Ok(())
     }
 }
-

@@ -47,7 +47,7 @@ pub fn VlansPage(
                     }
                 }
             });
-            
+
             spawn_local(async move {
                 match api::fetch_managed_interfaces(&token_clone).await {
                     Ok(interfaces) => {
@@ -117,7 +117,7 @@ pub fn VlansPage(
         }
 
         let vlan_id: u16 = match vlan_id_str.parse() {
-            Ok(id) if id >= 1 && id <= 4094 => id,
+            Ok(id) if (1..=4094).contains(&id) => id,
             _ => {
                 set_modal_error.set(Some("VLAN ID must be between 1 and 4094".to_string()));
                 return;

@@ -3,8 +3,8 @@
 use anyhow::Result;
 use keystone_core::{
     DnsmasqAddressAction, DnsmasqAddressOverride, DnsmasqCnameRecord, DnsmasqConfig,
-    DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord, DnsmasqIpv6Mode,
-    DnsmasqStaticLease, DnsmasqStateResponse, DnsmasqUpstreamMode, DnsmasqUpstreamServer,
+    DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord, DnsmasqIpv6Mode, DnsmasqStateResponse,
+    DnsmasqStaticLease, DnsmasqUpstreamMode, DnsmasqUpstreamServer,
 };
 use sqlx::{Row, SqlitePool};
 
@@ -23,7 +23,9 @@ pub async fn load_dnsmasq_config(pool: &SqlitePool) -> Result<DnsmasqConfig> {
 
     let config = if let Some(row) = row {
         let upstream_mode_str: String = row.get("upstream_mode");
-        let upstream_mode = upstream_mode_str.parse().unwrap_or(DnsmasqUpstreamMode::System);
+        let upstream_mode = upstream_mode_str
+            .parse()
+            .unwrap_or(DnsmasqUpstreamMode::System);
 
         DnsmasqConfig {
             enabled: row.get::<i32, _>("enabled") != 0,
@@ -35,9 +37,9 @@ pub async fn load_dnsmasq_config(pool: &SqlitePool) -> Result<DnsmasqConfig> {
             local_domain: row.get("local_domain"),
             expand_hosts: row.get::<i32, _>("expand_hosts") != 0,
             upstream_mode,
-            upstream_servers: Vec::new(), // Loaded separately
-            listen_interfaces: Vec::new(), // Loaded separately
-            except_interfaces: Vec::new(), // Loaded separately
+            upstream_servers: Vec::new(),   // Loaded separately
+            listen_interfaces: Vec::new(),  // Loaded separately
+            except_interfaces: Vec::new(),  // Loaded separately
             no_dhcp_interfaces: Vec::new(), // Loaded separately
             bind_dynamic: row.get::<i32, _>("bind_dynamic") != 0,
             log_queries: row.get::<i32, _>("log_queries") != 0,
@@ -96,7 +98,12 @@ pub async fn save_dnsmasq_config(pool: &SqlitePool, config: &DnsmasqConfig) -> R
     // Save interface lists
     save_interface_list(pool, "dnsmasq_listen_interfaces", &config.listen_interfaces).await?;
     save_interface_list(pool, "dnsmasq_except_interfaces", &config.except_interfaces).await?;
-    save_interface_list(pool, "dnsmasq_no_dhcp_interfaces", &config.no_dhcp_interfaces).await?;
+    save_interface_list(
+        pool,
+        "dnsmasq_no_dhcp_interfaces",
+        &config.no_dhcp_interfaces,
+    )
+    .await?;
 
     Ok(())
 }

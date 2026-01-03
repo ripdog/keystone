@@ -21,7 +21,7 @@
 //! - `keystone_nat` - NAT rules (prerouting/postrouting chains)
 
 mod apply;
-mod generate;
+pub(crate) mod generate;
 pub mod routes;
 
 pub use apply::*;

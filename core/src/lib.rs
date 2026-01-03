@@ -2111,19 +2111,11 @@ pub struct FirewallCountersResponse {
 // ============================================================================
 
 /// Global application settings that affect system-wide behavior
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct GlobalSettings {
     /// When true, prevents applying any configuration changes to the router.
     /// Useful for preventing accidental changes in production.
     pub config_changes_disabled: bool,
-}
-
-impl Default for GlobalSettings {
-    fn default() -> Self {
-        Self {
-            config_changes_disabled: false,
-        }
-    }
 }
 
 /// Response containing global settings
@@ -2576,7 +2568,7 @@ impl Default for SystemdUnit {
 }
 
 /// Detailed status of a systemd unit
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SystemdUnitDetail {
     /// Basic unit info
     pub unit: SystemdUnit,
@@ -2592,20 +2584,6 @@ pub struct SystemdUnitDetail {
     pub result: Option<String>,
     /// Recent log lines from journald
     pub recent_logs: Vec<String>,
-}
-
-impl Default for SystemdUnitDetail {
-    fn default() -> Self {
-        Self {
-            unit: SystemdUnit::default(),
-            main_pid: None,
-            memory_bytes: None,
-            active_enter_timestamp: None,
-            inactive_enter_timestamp: None,
-            result: None,
-            recent_logs: Vec::new(),
-        }
-    }
 }
 
 // ============================================================================

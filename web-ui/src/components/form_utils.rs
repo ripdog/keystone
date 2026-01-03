@@ -120,12 +120,10 @@ pub fn MultiSearchSelector(
                     on:focus=move |_| show_dropdown.set(true)
                     on:blur=move |_| {
                         // Delay hiding dropdown to allow click events to fire
-                        let handle = leptos::prelude::set_timeout(
+                        leptos::prelude::set_timeout(
                             move || show_dropdown.set(false),
                             std::time::Duration::from_millis(200)
                         );
-                        // Keep handle alive
-                        let _ = handle;
                     }
                 />
 

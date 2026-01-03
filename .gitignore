@@ -22,3 +22,5 @@ web-ui/pkg/
 .vagrant/
 *.box
 
+/logs
+session-*

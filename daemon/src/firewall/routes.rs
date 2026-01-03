@@ -476,6 +476,20 @@ async fn apply_firewall(
     State(state): State<FirewallState>,
 ) -> Result<Json<FirewallApplyResponse>, AppError> {
     info!("Applying firewall configuration");
+
+    // Check if configuration changes are disabled
+    let global_settings = state.db.get_global_settings().await?;
+    if global_settings.config_changes_disabled {
+        return Ok(Json(FirewallApplyResponse {
+            success: false,
+            message: "Configuration changes are disabled. Unlock in Settings to apply changes."
+                .to_string(),
+            pending_confirmation: false,
+            confirm_deadline: None,
+            session_id: None,
+        }));
+    }
+
     let response = state.apply_manager.apply(None).await?;
     Ok(Json(response))
 }

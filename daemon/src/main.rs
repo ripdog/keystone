@@ -895,6 +895,17 @@ async fn apply_networkd(
 ) -> Result<Json<ApplyConfigResponse>, AppError> {
     info!("Applying networkd configuration");
 
+    // Check if configuration changes are disabled
+    let global_settings = state.db.get_global_settings().await?;
+    if global_settings.config_changes_disabled {
+        return Ok(Json(ApplyConfigResponse {
+            success: false,
+            message: "Configuration changes are disabled. Unlock in Settings to apply changes."
+                .to_string(),
+            errors: Vec::new(),
+        }));
+    }
+
     // Get all interface configs from database
     let configs = state.db.get_interface_configs().await?;
 

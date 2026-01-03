@@ -137,6 +137,17 @@ async fn apply_caddy(
     State(state): State<CaddyState>,
 ) -> Result<Json<CaddyApplyResponse>, AppError> {
     info!("Applying Caddy configuration");
+
+    // Check if configuration changes are disabled
+    let global_settings = state.db.get_global_settings().await?;
+    if global_settings.config_changes_disabled {
+        return Ok(Json(CaddyApplyResponse {
+            success: false,
+            message: "Configuration changes are disabled. Unlock in Settings to apply changes."
+                .to_string(),
+        }));
+    }
+
     let pool = state.db.pool();
 
     match caddy::apply_caddy_config(pool).await {

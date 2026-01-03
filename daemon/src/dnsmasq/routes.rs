@@ -533,6 +533,17 @@ async fn apply_dnsmasq(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<DnsmasqApplyResponse>, AppError> {
     info!("Applying dnsmasq configuration");
+
+    // Check if configuration changes are disabled
+    let global_settings = state.db.get_global_settings().await?;
+    if global_settings.config_changes_disabled {
+        return Ok(Json(DnsmasqApplyResponse {
+            success: false,
+            message: "Configuration changes are disabled. Unlock in Settings to apply changes."
+                .to_string(),
+        }));
+    }
+
     let pool = state.db.pool();
 
     match dnsmasq::apply_dnsmasq_config(pool).await {

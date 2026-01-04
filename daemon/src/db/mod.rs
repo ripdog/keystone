@@ -23,7 +23,7 @@ use keystone_core::{
     GlobalSettings, InputRule, InterfaceConfig, ManagedInterface, PortForward, User, UserInfo,
     VlanConfig, ZoneForwardPolicy,
 };
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use tracing::info;
 
 const DB_PATH: &str = "/var/lib/keystone/keystone.db";
@@ -98,7 +98,9 @@ impl Database {
         email: Option<&str>,
         password_hash: &str,
     ) -> Result<i64> {
-        self.users().create_user(username, email, password_hash).await
+        self.users()
+            .create_user(username, email, password_hash)
+            .await
     }
 
     /// Update user information
@@ -109,7 +111,9 @@ impl Database {
         email: Option<&str>,
         password_hash: Option<&str>,
     ) -> Result<()> {
-        self.users().update_user(id, username, email, password_hash).await
+        self.users()
+            .update_user(id, username, email, password_hash)
+            .await
     }
 
     /// Delete a user
@@ -325,8 +329,13 @@ impl Database {
     }
 
     /// Save global firewall settings
-    pub async fn save_firewall_global_settings(&self, settings: &FirewallGlobalSettings) -> Result<()> {
-        self.firewall().save_firewall_global_settings(settings).await
+    pub async fn save_firewall_global_settings(
+        &self,
+        settings: &FirewallGlobalSettings,
+    ) -> Result<()> {
+        self.firewall()
+            .save_firewall_global_settings(settings)
+            .await
     }
 
     /// Save rollback state for safe apply
@@ -335,7 +344,9 @@ impl Database {
         config: &FirewallConfig,
         rollback_at: i64,
     ) -> Result<()> {
-        self.firewall().save_rollback_state(config, rollback_at).await
+        self.firewall()
+            .save_rollback_state(config, rollback_at)
+            .await
     }
 
     /// Get pending rollback state
@@ -364,5 +375,10 @@ impl Database {
     /// Save global application settings
     pub async fn save_global_settings(&self, settings: &GlobalSettings) -> Result<()> {
         self.settings().save_global_settings(settings).await
+    }
+
+    /// Mark setup as complete
+    pub async fn mark_setup_complete(&self) -> Result<()> {
+        self.settings().mark_setup_complete().await
     }
 }

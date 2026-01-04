@@ -11,6 +11,7 @@ mod db;
 mod dnsmasq;
 mod firewall;
 mod networkd;
+mod status;
 mod systemd;
 
 use auth::AuthManager;
@@ -25,13 +26,14 @@ use axum::{
 use config::Config;
 use db::Database;
 use keystone_core::{
-    ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
-    DeleteUserResponse, DeleteVlanResponse, GlobalSettingsResponse, InterfaceConfigResponse,
-    InterfaceConfigsResponse, InterfaceCounters, KeystoneError, LoginRequest, LoginResponse,
-    ManagedInterfacesResponse, SaveGlobalSettingsRequest, SaveGlobalSettingsResponse,
-    SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
-    SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest,
-    SaveVlanConfigResponse, SystemState, UsersResponse, VlanConfigResponse, VlanConfigsResponse,
+    ApplyConfigRequest, ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse,
+    DashboardResponse, DeleteUserRequest, DeleteUserResponse, DeleteVlanResponse,
+    GlobalSettingsResponse, InterfaceConfigResponse, InterfaceConfigsResponse, InterfaceCounters,
+    KeystoneError, LoginRequest, LoginResponse, ManagedInterfacesResponse,
+    SaveGlobalSettingsRequest, SaveGlobalSettingsResponse, SaveInterfaceConfigRequest,
+    SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
+    SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest, SaveVlanConfigResponse, SystemCheck,
+    SystemState, SystemStatusResponse, UsersResponse, VlanConfigResponse, VlanConfigsResponse,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -177,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/users", delete(delete_user))
         .route("/settings", get(get_global_settings))
         .route("/settings", post(save_global_settings))
+        .route("/complete-setup", post(complete_setup))
         // Merge firewall routes
         .merge(firewall::routes::firewall_routes(firewall_state))
         // Merge dnsmasq routes
@@ -193,6 +196,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/login", post(login))
+        .route("/system-status", get(get_system_status))
         .merge(protected)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
@@ -276,6 +280,45 @@ async fn health_check() -> impl IntoResponse {
         "status": "healthy",
         "service": "keystone-daemon"
     }))
+}
+
+/// GET /system-status - Get system status checks (public endpoint)
+async fn get_system_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<SystemStatusResponse>, AppError> {
+    info!("Performing system status checks");
+
+    let settings = state.db.get_global_settings().await?;
+    let mut response = status::perform_all_checks(settings.setup_complete);
+
+    // Database probe check: verify DB is usable at runtime
+    let db_check = match state.db.get_global_settings().await {
+        Ok(_) => SystemCheck {
+            id: "db_probe".to_string(),
+            name: "Database".to_string(),
+            category: CheckCategory::Configuration,
+            severity: CheckSeverity::Pass,
+            message: "Database is accessible".to_string(),
+            fix_advice: None,
+        },
+        Err(e) => SystemCheck {
+            id: "db_probe".to_string(),
+            name: "Database".to_string(),
+            category: CheckCategory::Configuration,
+            severity: CheckSeverity::Error,
+            message: format!("Database error: {}", e),
+            fix_advice: Some("Check /var/lib/keystone permissions and disk space".to_string()),
+        },
+    };
+
+    if db_check.severity == CheckSeverity::Error {
+        response.error_count += 1;
+        response.all_checks_pass = false;
+    }
+
+    response.checks.push(db_check);
+
+    Ok(Json(response))
 }
 
 /// POST /login - Authenticate and receive JWT token
@@ -1157,6 +1200,35 @@ async fn save_global_settings(
         } else {
             "Configuration lock disabled".to_string()
         },
+    }))
+}
+
+/// POST /complete-setup - Mark initial setup as complete
+async fn complete_setup(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<CompleteSetupResponse>, AppError> {
+    info!("Completing initial setup");
+
+    // Perform status checks to ensure all required checks pass
+    let settings = state.db.get_global_settings().await?;
+    let status = status::perform_all_checks(settings.setup_complete);
+
+    if !status.all_checks_pass {
+        return Ok(Json(CompleteSetupResponse {
+            success: false,
+            message: format!(
+                "Cannot complete setup: {} error(s) must be resolved first",
+                status.error_count
+            ),
+        }));
+    }
+
+    // Mark setup as complete
+    state.db.mark_setup_complete().await?;
+
+    Ok(Json(CompleteSetupResponse {
+        success: true,
+        message: "Setup completed successfully".to_string(),
     }))
 }
 

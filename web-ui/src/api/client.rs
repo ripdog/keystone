@@ -16,6 +16,16 @@ pub async fn get<T: DeserializeOwned>(url: &str, token: &str) -> Result<T, Strin
     handle_response(response).await
 }
 
+/// Perform a GET request without authentication (for public endpoints)
+pub async fn get_public<T: DeserializeOwned>(url: &str) -> Result<T, String> {
+    let response = gloo_net::http::Request::get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    handle_response(response).await
+}
+
 /// Perform a POST request with authentication and JSON body
 pub async fn post<T: DeserializeOwned, B: Serialize>(
     url: &str,

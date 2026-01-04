@@ -1072,7 +1072,10 @@ impl<'a> FirewallDb<'a> {
     }
 
     /// Save global firewall settings
-    pub async fn save_firewall_global_settings(&self, settings: &FirewallGlobalSettings) -> Result<()> {
+    pub async fn save_firewall_global_settings(
+        &self,
+        settings: &FirewallGlobalSettings,
+    ) -> Result<()> {
         sqlx::query(
             r#"INSERT OR REPLACE INTO firewall_global_settings 
                (id, ping_wan_enabled, ping_lan_enabled, hairpin_nat_enabled, updated_at)

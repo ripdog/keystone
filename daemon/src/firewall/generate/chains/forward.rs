@@ -3,6 +3,7 @@
 //! This module handles generation of the forward chain which controls
 //! traffic passing through the router (between interfaces/zones).
 
+use crate::firewall::generate::FILTER_TABLE;
 use crate::firewall::generate::chains::input::{
     create_conntrack_established_rule, create_conntrack_invalid_rule,
 };
@@ -10,7 +11,6 @@ use crate::firewall::generate::statements::{
     add_protocol_match, create_daddr_match, create_iif_match, create_oif_match, create_saddr_match,
     parse_rate_limit,
 };
-use crate::firewall::generate::FILTER_TABLE;
 use keystone_core::{FirewallAction, FirewallConfig, ForwardRule, ZoneForwardPolicy};
 use nftables::{
     batch::Batch,
@@ -106,7 +106,12 @@ fn create_forward_rule(
 
     // Match protocol and ports
     if let Some(protocol) = &rule.protocol {
-        add_protocol_match(&mut exprs, protocol, rule.dest_port_start, rule.dest_port_end);
+        add_protocol_match(
+            &mut exprs,
+            protocol,
+            rule.dest_port_start,
+            rule.dest_port_end,
+        );
     }
 
     // Rate limiting

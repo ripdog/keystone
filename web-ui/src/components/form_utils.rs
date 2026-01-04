@@ -21,7 +21,7 @@ pub fn event_target_value(ev: &web_sys::Event) -> String {
 }
 
 /// Multi-search selector component for selecting multiple items from a list
-/// 
+///
 /// Features:
 /// - Search/filter available items
 /// - Add items by clicking or typing
@@ -47,8 +47,9 @@ pub fn MultiSearchSelector(
     let filtered_items = Signal::derive(move || {
         let query = search_query.get().to_lowercase();
         let selected = selected_items.get();
-        
-        available_items.get()
+
+        available_items
+            .get()
             .into_iter()
             .filter(|item| {
                 // Exclude already selected items
@@ -82,7 +83,7 @@ pub fn MultiSearchSelector(
             {label.map(|l| view! {
                 <label class="block text-sm text-gray-400 mb-1">{l}</label>
             })}
-            
+
             // Selected items as tags
             <div class="flex flex-wrap gap-2 mb-2">
                 <For

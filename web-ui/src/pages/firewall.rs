@@ -530,9 +530,7 @@ fn ZoneEditor(
         async move {
             api::fetch_managed_interfaces(&token)
                 .await
-                .map(|interfaces| {
-                    interfaces.into_iter().map(|i| i.name).collect::<Vec<_>>()
-                })
+                .map(|interfaces| interfaces.into_iter().map(|i| i.name).collect::<Vec<_>>())
         }
     });
 

@@ -6,10 +6,8 @@
 use crate::firewall::generate::statements::{
     add_protocol_match, create_iif_match, create_saddr_match, parse_rate_limit,
 };
-use crate::firewall::generate::{find_wan_zones, FILTER_TABLE};
-use keystone_core::{
-    FirewallAction, FirewallConfig, FirewallPolicy, FirewallZone, InputRule,
-};
+use crate::firewall::generate::{FILTER_TABLE, find_wan_zones};
+use keystone_core::{FirewallAction, FirewallConfig, FirewallPolicy, FirewallZone, InputRule};
 use nftables::{
     batch::Batch,
     expr::{Expression, Meta, MetaKey, Payload, PayloadField},
@@ -273,8 +271,7 @@ fn create_icmp_type_drop_rule(icmp_type: u8, comment: &str) -> Rule<'static> {
 
 /// Create a rule to accept ICMP ping (echo-request) from specific interfaces
 fn create_icmp_ping_accept_rule(interfaces: &[String], comment: &str) -> Rule<'static> {
-    let ifaces: Vec<Cow<'static, str>> =
-        interfaces.iter().map(|s| Cow::Owned(s.clone())).collect();
+    let ifaces: Vec<Cow<'static, str>> = interfaces.iter().map(|s| Cow::Owned(s.clone())).collect();
 
     let exprs = vec![
         // Match input interface

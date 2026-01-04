@@ -11,6 +11,7 @@ mod networkd_preview;
 mod service_detail;
 mod services;
 mod settings;
+mod status;
 mod vlans;
 
 pub use bridges::*;
@@ -24,4 +25,5 @@ pub use networkd_preview::*;
 pub use service_detail::*;
 pub use services::*;
 pub use settings::*;
+pub use status::*;
 pub use vlans::*;

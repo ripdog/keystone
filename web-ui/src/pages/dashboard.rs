@@ -25,6 +25,7 @@ pub fn DashboardPage(
     let (rates, set_rates) = signal(Vec::<InterfaceRate>::new());
     let (prev_counters, set_prev_counters) = signal(Vec::<InterfaceCounters>::new());
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
+    let (status_error, set_status_error) = signal(Option::<(u32, String)>::None); // (error_count, short_message)
 
     let do_poll = move || {
         let Some(token) = auth_token.get_untracked() else {
@@ -90,6 +91,28 @@ pub fn DashboardPage(
         }
     });
 
+    // Async system status banner (loads after main content)
+    Effect::new(move || {
+        leptos::task::spawn_local(async move {
+            match api::fetch_system_status().await {
+                Ok(status) => {
+                    if status.error_count > 0 {
+                        set_status_error.set(Some((
+                            status.error_count,
+                            format!("{} system status error(s) detected", status.error_count),
+                        )));
+                    } else {
+                        set_status_error.set(None);
+                    }
+                }
+                Err(_) => {
+                    // Don't spam the dashboard if status can't be loaded
+                    set_status_error.set(None);
+                }
+            }
+        });
+    });
+
     let format_rate = |bps: u64| -> String {
         if bps >= 1_000_000 {
             format!("{:>6.1} MB/s", (bps as f64) / 1_000_000.0)
@@ -106,6 +129,24 @@ pub fn DashboardPage(
                 <h1 class="text-2xl font-semibold text-blue-300">"Dashboard"</h1>
                 <p class="text-gray-400">"Live network status"</p>
             </div>
+
+            <Show when=move || status_error.get().is_some()>
+                <div class="p-3 bg-yellow-900/50 border border-yellow-600 rounded text-yellow-200 text-sm">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            {move || status_error.get().map(|(_, msg)| msg).unwrap_or_default()}
+                            " · "
+                            <a class="underline hover:text-yellow-100" href="/status">"View details"</a>
+                        </div>
+                        <button
+                            class="text-yellow-200/70 hover:text-yellow-100"
+                            on:click=move |_| set_status_error.set(None)
+                        >
+                            "×"
+                        </button>
+                    </div>
+                </div>
+            </Show>
 
             <Show when=move || error_msg.get().is_some()>
                 <div class="p-3 bg-red-900/50 border border-red-500 rounded text-red-200 text-sm">

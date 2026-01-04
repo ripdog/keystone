@@ -2116,6 +2116,10 @@ pub struct GlobalSettings {
     /// When true, prevents applying any configuration changes to the router.
     /// Useful for preventing accidental changes in production.
     pub config_changes_disabled: bool,
+    /// When true, indicates that initial setup is complete and system checks passed.
+    /// Until this is true, the web UI will redirect all routes to /status.
+    #[serde(default)]
+    pub setup_complete: bool,
 }
 
 /// Response containing global settings
@@ -2133,6 +2137,105 @@ pub struct SaveGlobalSettingsRequest {
 /// Response from saving global settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveGlobalSettingsResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+// ============================================================================
+// System Status Check Types
+// ============================================================================
+
+/// Severity level for a system status check
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CheckSeverity {
+    /// Check passed
+    Pass,
+    /// Warning - system may work but with limitations
+    Warning,
+    /// Error - system will not function correctly
+    Error,
+}
+
+impl std::fmt::Display for CheckSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckSeverity::Pass => write!(f, "pass"),
+            CheckSeverity::Warning => write!(f, "warning"),
+            CheckSeverity::Error => write!(f, "error"),
+        }
+    }
+}
+
+/// Category of system check
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckCategory {
+    /// Required package installation
+    Package,
+    /// Service status
+    Service,
+    /// File/directory permissions
+    Permission,
+    /// Network interfaces
+    Network,
+    /// System configuration
+    Configuration,
+}
+
+impl std::fmt::Display for CheckCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckCategory::Package => write!(f, "Package"),
+            CheckCategory::Service => write!(f, "Service"),
+            CheckCategory::Permission => write!(f, "Permission"),
+            CheckCategory::Network => write!(f, "Network"),
+            CheckCategory::Configuration => write!(f, "Configuration"),
+        }
+    }
+}
+
+/// A single system status check result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemCheck {
+    /// Unique identifier for this check
+    pub id: String,
+    /// Human-readable name
+    pub name: String,
+    /// Category of this check
+    pub category: CheckCategory,
+    /// Severity level (pass, warning, error)
+    pub severity: CheckSeverity,
+    /// Detailed message explaining the check result
+    pub message: String,
+    /// Advice on how to fix the issue (if not passing)
+    pub fix_advice: Option<String>,
+}
+
+/// Complete system status response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemStatusResponse {
+    /// Whether all required checks pass (no errors)
+    pub all_checks_pass: bool,
+    /// Whether setup is already complete
+    pub setup_complete: bool,
+    /// Total count of errors
+    pub error_count: u32,
+    /// Total count of warnings
+    pub warning_count: u32,
+    /// All individual check results
+    pub checks: Vec<SystemCheck>,
+}
+
+/// Request to complete setup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompleteSetupRequest {
+    // Empty - just marks setup as complete
+}
+
+/// Response from completing setup
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompleteSetupResponse {
     pub success: bool,
     pub message: String,
 }

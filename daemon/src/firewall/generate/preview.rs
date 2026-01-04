@@ -3,7 +3,7 @@
 //! This module generates a human-readable representation of the firewall
 //! configuration in nftables syntax format.
 
-use crate::firewall::generate::{find_wan_zones, FILTER_TABLE, NAT_TABLE};
+use crate::firewall::generate::{FILTER_TABLE, NAT_TABLE, find_wan_zones};
 use keystone_core::{
     FirewallConfig, FirewallPolicy, ForwardRule, InputRule, PortForward, RuleProtocol,
 };

@@ -8,7 +8,7 @@ use crate::firewall::generate::statements::{
     create_daddr_match, create_dport_match, create_iif_match, create_protocol_match,
     create_saddr_match,
 };
-use crate::firewall::generate::{find_wan_zones, NAT_TABLE};
+use crate::firewall::generate::{NAT_TABLE, find_wan_zones};
 use keystone_core::{FirewallConfig, PortForward, RuleProtocol};
 use nftables::{
     batch::Batch,

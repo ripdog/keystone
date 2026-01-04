@@ -590,10 +590,7 @@ impl<'a> InterfacesDb<'a> {
     }
 
     /// Get VLAN names attached to an interface (for populating vlans field in InterfaceConfig)
-    async fn get_vlan_names_for_interface(
-        &self,
-        parent_interface: &str,
-    ) -> Result<Vec<String>> {
+    async fn get_vlan_names_for_interface(&self, parent_interface: &str) -> Result<Vec<String>> {
         let rows = sqlx::query_as::<_, (String,)>(
             "SELECT name FROM vlan_config WHERE parent_interface = ? ORDER BY vlan_id",
         )

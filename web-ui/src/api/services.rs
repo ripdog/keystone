@@ -24,8 +24,14 @@ pub async fn fetch_unit_detail(
 }
 
 /// Start a systemd unit
-pub async fn start_unit(token: &str, unit_name: &str) -> Result<SystemdUnitControlResponse, String> {
-    let url = format!("/api/systemd/units/{}/start", urlencoding::encode(unit_name));
+pub async fn start_unit(
+    token: &str,
+    unit_name: &str,
+) -> Result<SystemdUnitControlResponse, String> {
+    let url = format!(
+        "/api/systemd/units/{}/start",
+        urlencoding::encode(unit_name)
+    );
     client::post_empty(&url, token).await
 }
 

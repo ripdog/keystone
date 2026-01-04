@@ -110,7 +110,7 @@ pub fn generate_caddyfile(config: &CaddyConfig, bind_ip: Option<&str>) -> String
 }
 
 /// Build the site address for the Caddyfile
-/// 
+///
 /// Caddy site address format:
 /// - For HTTPS (default): `example.com` or `example.com:8443`
 /// - For HTTP only: `http://example.com` or `http://example.com:8080`

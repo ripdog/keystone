@@ -86,9 +86,7 @@ pub fn ServiceDetailPage(
     let (action_in_progress, set_action_in_progress) = signal(false);
 
     // Get the unit name from URL params
-    let unit_name = move || {
-        params.get().get("name").unwrap_or_default()
-    };
+    let unit_name = move || params.get().get("name").unwrap_or_default();
 
     // Load unit details
     let load_unit = move || {
@@ -337,7 +335,7 @@ pub fn ServiceDetailPage(
                     let is_active = matches!(unit.active_state, SystemdActiveState::Active);
                     let logs = detail.recent_logs.clone();
                     let unit_enabled = unit.enabled;
-                    
+
                     // Clone values that will be used in nested closures
                     let result_for_class = detail.result.clone();
                     let result_for_display = detail.result.clone();

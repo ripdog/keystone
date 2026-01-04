@@ -40,11 +40,7 @@ pub async fn list_units(keystone_only: bool) -> Result<Vec<SystemdUnit>> {
         .map(|(name, state)| {
             let is_enabled = state == "enabled" || state == "enabled-runtime" || state == "static";
             // Extract just the unit name from the path
-            let unit_name = name
-                .rsplit('/')
-                .next()
-                .unwrap_or(&name)
-                .to_string();
+            let unit_name = name.rsplit('/').next().unwrap_or(&name).to_string();
             (unit_name, is_enabled)
         })
         .collect();

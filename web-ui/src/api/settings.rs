@@ -1,11 +1,11 @@
 //! Global settings API functions
 
 use keystone_core::{
-    ApplyAllResponse, GlobalSettings, GlobalSettingsResponse, SaveGlobalSettingsRequest,
-    SaveGlobalSettingsResponse,
+    ApplyAllResponse, CompleteSetupResponse, GlobalSettings, GlobalSettingsResponse,
+    SaveGlobalSettingsRequest, SaveGlobalSettingsResponse, SystemStatusResponse,
 };
 
-use super::client::{get, post, post_empty};
+use super::client::{get, get_public, post, post_empty};
 
 /// Fetch global settings from the API
 pub async fn fetch_global_settings(token: &str) -> Result<GlobalSettings, String> {
@@ -20,6 +20,20 @@ pub async fn save_global_settings(
 ) -> Result<SaveGlobalSettingsResponse, String> {
     let request = SaveGlobalSettingsRequest { settings };
     post("/api/settings", token, &request).await
+}
+
+// ============================================================================
+// System Status
+// ============================================================================
+
+/// Fetch system status checks (public endpoint - no auth required)
+pub async fn fetch_system_status() -> Result<SystemStatusResponse, String> {
+    get_public("/api/system-status").await
+}
+
+/// Complete initial setup (requires all checks to pass)
+pub async fn complete_setup(token: &str) -> Result<CompleteSetupResponse, String> {
+    post_empty("/api/complete-setup", token).await
 }
 
 // ============================================================================

@@ -49,9 +49,8 @@ pub fn AppLayout(
                     } else {
                         // Timer expired - clear pending session
                         pending_session.set(None);
-                        apply_message.set(
-                            "Firewall changes timed out and were rolled back.".to_string(),
-                        );
+                        apply_message
+                            .set("Firewall changes timed out and were rolled back.".to_string());
                         apply_error.set(true);
                     }
                 });

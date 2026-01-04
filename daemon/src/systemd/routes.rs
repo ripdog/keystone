@@ -1,15 +1,11 @@
 //! HTTP routes for systemd unit management
 
 use axum::{
-    Json,
+    Json, Router,
     extract::{Path, Query},
     routing::{get, post},
-    Router,
 };
-use keystone_core::{
-    SystemdUnitControlResponse, SystemdUnitDetailResponse,
-    SystemdUnitsResponse,
-};
+use keystone_core::{SystemdUnitControlResponse, SystemdUnitDetailResponse, SystemdUnitsResponse};
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::info;
@@ -29,11 +25,16 @@ fn default_true() -> bool {
 }
 
 /// GET /systemd/units - List systemd units
-async fn list_units(Query(query): Query<ListUnitsQuery>) -> Result<Json<SystemdUnitsResponse>, AppError> {
-    info!("Listing systemd units (keystone_only={})", query.keystone_only);
-    
+async fn list_units(
+    Query(query): Query<ListUnitsQuery>,
+) -> Result<Json<SystemdUnitsResponse>, AppError> {
+    info!(
+        "Listing systemd units (keystone_only={})",
+        query.keystone_only
+    );
+
     let units = super::list_units(query.keystone_only).await?;
-    
+
     Ok(Json(SystemdUnitsResponse { units }))
 }
 
@@ -42,9 +43,9 @@ async fn get_unit_detail(
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitDetailResponse>, AppError> {
     info!("Getting detail for unit: {}", name);
-    
+
     let unit = super::get_unit_detail(&name).await?;
-    
+
     Ok(Json(SystemdUnitDetailResponse { unit }))
 }
 
@@ -53,7 +54,7 @@ async fn start_unit(
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Starting unit: {}", name);
-    
+
     match super::start_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
             success: true,
@@ -67,11 +68,9 @@ async fn start_unit(
 }
 
 /// POST /systemd/units/:name/stop - Stop a unit
-async fn stop_unit(
-    Path(name): Path<String>,
-) -> Result<Json<SystemdUnitControlResponse>, AppError> {
+async fn stop_unit(Path(name): Path<String>) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Stopping unit: {}", name);
-    
+
     match super::stop_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
             success: true,
@@ -89,7 +88,7 @@ async fn restart_unit(
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Restarting unit: {}", name);
-    
+
     match super::restart_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
             success: true,
@@ -107,7 +106,7 @@ async fn enable_unit(
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Enabling unit: {}", name);
-    
+
     match super::enable_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
             success: true,
@@ -125,7 +124,7 @@ async fn disable_unit(
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Disabling unit: {}", name);
-    
+
     match super::disable_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
             success: true,

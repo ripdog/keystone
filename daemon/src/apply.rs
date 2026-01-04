@@ -166,12 +166,9 @@ pub async fn apply_all(
         }
     } else {
         let failed: Vec<&str> = [
-            (!components.networkd.success && !components.networkd.skipped)
-                .then_some("networkd"),
-            (!components.firewall.success && !components.firewall.skipped)
-                .then_some("firewall"),
-            (!components.dnsmasq.success && !components.dnsmasq.skipped)
-                .then_some("dnsmasq"),
+            (!components.networkd.success && !components.networkd.skipped).then_some("networkd"),
+            (!components.firewall.success && !components.firewall.skipped).then_some("firewall"),
+            (!components.dnsmasq.success && !components.dnsmasq.skipped).then_some("dnsmasq"),
             (!components.caddy.success && !components.caddy.skipped).then_some("caddy"),
         ]
         .into_iter()

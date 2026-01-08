@@ -300,6 +300,10 @@ impl FirewallApplyManager {
 
 /// Apply a firewall config to nftables
 async fn apply_config_to_nftables(config: &FirewallConfig) -> Result<()> {
+    // First, delete any existing keystone tables (ignore errors if they don't exist)
+    // This is done as a separate step because nftables JSON API doesn't have "delete if exists"
+    cleanup_existing_tables().await;
+
     // Generate the nftables JSON ruleset
     let ruleset = generate_ruleset(config);
 
@@ -340,6 +344,35 @@ async fn apply_config_to_nftables(config: &FirewallConfig) -> Result<()> {
 
     info!("nftables ruleset applied successfully");
     Ok(())
+}
+
+/// Clean up existing keystone tables before applying new ruleset.
+/// This is done as a separate step because nftables JSON API doesn't support "delete if exists".
+/// Errors are silently ignored since tables may not exist on first run.
+async fn cleanup_existing_tables() {
+    use crate::firewall::generate::{FILTER_TABLE, NAT_TABLE};
+
+    // Try to delete existing tables - ignore errors if they don't exist
+    for table_name in [FILTER_TABLE, NAT_TABLE] {
+        let result = Command::new("nft")
+            .args(["delete", "table", "inet", table_name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        match result {
+            Ok(status) if status.success() => {
+                info!("Deleted existing table: inet {}", table_name);
+            }
+            Ok(_) => {
+                // Table doesn't exist or other error - this is fine on first run
+            }
+            Err(e) => {
+                warn!("Failed to run nft delete for {}: {}", table_name, e);
+            }
+        }
+    }
 }
 
 /// Get current config as nftables JSON string (for preview)

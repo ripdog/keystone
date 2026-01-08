@@ -48,26 +48,20 @@ pub fn generate_ruleset(config: &FirewallConfig) -> GeneratedRuleset<'static> {
     // Build zone-to-interfaces mapping for quick lookup
     let zone_interfaces = build_zone_interface_map(&config.zones);
 
-    // Flush existing keystone tables (atomic replacement)
-    batch.add_cmd(nftables::schema::NfCmd::Flush(
-        nftables::schema::FlushObject::Table(Table {
-            family: NfFamily::INet,
-            name: Cow::Borrowed(FILTER_TABLE),
-            ..Default::default()
-        }),
-    ));
-    batch.add_cmd(nftables::schema::NfCmd::Flush(
-        nftables::schema::FlushObject::Table(Table {
-            family: NfFamily::INet,
-            name: Cow::Borrowed(NAT_TABLE),
-            ..Default::default()
-        }),
-    ));
+    // Note: Table creation is idempotent - if table exists, add just succeeds.
+    // The apply function handles cleanup of existing tables separately.
 
     // Create filter table
     batch.add(NfListObject::Table(Table {
         family: NfFamily::INet,
         name: Cow::Borrowed(FILTER_TABLE),
+        ..Default::default()
+    }));
+
+    // Create NAT table
+    batch.add(NfListObject::Table(Table {
+        family: NfFamily::INet,
+        name: Cow::Borrowed(NAT_TABLE),
         ..Default::default()
     }));
 

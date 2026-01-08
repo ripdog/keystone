@@ -12,9 +12,9 @@ use crate::firewall::generate::{NAT_TABLE, find_wan_zones};
 use keystone_core::{FirewallConfig, PortForward, RuleProtocol};
 use nftables::{
     batch::Batch,
-    expr::{Expression, Meta, MetaKey, Payload, PayloadField, RTKey},
+    expr::{Expression, Meta, MetaKey},
     schema::{Chain, NfListObject, Rule},
-    stmt::{Counter, Mangle, Match, Operator, Statement},
+    stmt::{Counter, Match, Operator, Statement},
     types::{NfChainType, NfFamily, NfHook},
 };
 use std::borrow::Cow;
@@ -269,8 +269,10 @@ pub fn generate_postrouting_chain(
     // WAN masquerade rules
     for zone in wan_zones {
         for iface in &zone.interfaces {
-            // MSS clamping for the interface
-            batch.add(NfListObject::Rule(create_mss_clamp_rule(iface)));
+            // TODO: MSS clamping is disabled due to nftables JSON generation issues
+            // The nftables crate doesn't properly support tcp option maxseg mangling
+            // See: https://wiki.nftables.org/wiki-nftables/index.php/Mangling_packet_headers
+            // batch.add(NfListObject::Rule(create_mss_clamp_rule(iface)));
 
             // Masquerade for the interface
             batch.add(NfListObject::Rule(create_masquerade_rule(iface)));
@@ -324,58 +326,6 @@ fn create_hairpin_snat_rule(
         ))),
         ..Default::default()
     })
-}
-
-/// Create an MSS clamping rule for an interface
-fn create_mss_clamp_rule(interface: &str) -> Rule<'static> {
-    Rule {
-        family: NfFamily::INet,
-        table: Cow::Borrowed(NAT_TABLE),
-        chain: Cow::Borrowed("postrouting"),
-        expr: vec![
-            Statement::Match(Match {
-                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
-                    key: MetaKey::Oifname,
-                })),
-                right: Expression::String(Cow::Owned(interface.to_string())),
-                op: Operator::EQ,
-            }),
-            Statement::Match(Match {
-                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
-                    key: MetaKey::L4proto,
-                })),
-                right: Expression::String(Cow::Borrowed("tcp")),
-                op: Operator::EQ,
-            }),
-            // Match SYN flag
-            Statement::Match(Match {
-                left: Expression::Named(nftables::expr::NamedExpression::Payload(
-                    Payload::PayloadField(PayloadField {
-                        protocol: Cow::Borrowed("tcp"),
-                        field: Cow::Borrowed("flags"),
-                    }),
-                )),
-                right: Expression::String(Cow::Borrowed("syn")),
-                op: Operator::IN,
-            }),
-            // Set MSS to path MTU
-            Statement::Mangle(Mangle {
-                key: Expression::Named(nftables::expr::NamedExpression::Payload(
-                    Payload::PayloadField(PayloadField {
-                        protocol: Cow::Borrowed("tcp"),
-                        field: Cow::Borrowed("option"),
-                    }),
-                )),
-                value: Expression::Named(nftables::expr::NamedExpression::RT(nftables::expr::RT {
-                    key: RTKey::MTU,
-                    family: None,
-                })),
-            }),
-        ]
-        .into(),
-        comment: Some(Cow::Owned(format!("MSS clamp for {}", interface))),
-        ..Default::default()
-    }
 }
 
 /// Create a masquerade rule for an interface

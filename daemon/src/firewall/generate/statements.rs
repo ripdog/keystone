@@ -152,55 +152,42 @@ pub fn parse_rate_limit(rate_str: &str) -> Option<Statement<'static>> {
     }))
 }
 
-/// Create a match statement for TCP+UDP protocols
-pub fn create_tcpudp_match() -> Statement<'static> {
-    Statement::Match(Match {
-        left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
-            key: MetaKey::L4proto,
-        })),
-        right: Expression::List(vec![
-            Expression::String(Cow::Borrowed("tcp")),
-            Expression::String(Cow::Borrowed("udp")),
-        ]),
-        op: Operator::IN,
-    })
+/// Expand a RuleProtocol into concrete protocol strings for nftables.
+///
+/// nftables JSON doesn't support matching multiple protocols in a single rule,
+/// so TcpUdp must be expanded into separate rules for each protocol.
+/// Returns None for protocols that don't need explicit matching (Any).
+pub fn expand_protocol(protocol: &RuleProtocol) -> Vec<Option<&'static str>> {
+    match protocol {
+        RuleProtocol::Any => vec![None],
+        RuleProtocol::Tcp => vec![Some("tcp")],
+        RuleProtocol::Udp => vec![Some("udp")],
+        RuleProtocol::TcpUdp => vec![Some("tcp"), Some("udp")],
+        RuleProtocol::Icmp => vec![Some("icmp")],
+        RuleProtocol::Icmpv6 => vec![Some("icmpv6")],
+    }
 }
 
-/// Add protocol matching statements to the expression list based on RuleProtocol.
+/// Add protocol matching statements to the expression list.
 ///
 /// This handles the common pattern of matching protocol and optionally port(s).
-/// Returns true if any statements were added.
-pub fn add_protocol_match(
+/// The `protocol` parameter should be a concrete protocol string from `expand_protocol()`.
+///
+/// For TcpUdp, callers should iterate over the result of `expand_protocol()` and
+/// generate separate rules for each protocol.
+pub fn add_protocol_match_concrete(
     exprs: &mut Vec<Statement<'static>>,
-    protocol: &RuleProtocol,
+    protocol: Option<&'static str>,
     port_start: Option<u16>,
     port_end: Option<u16>,
 ) {
-    match protocol {
-        RuleProtocol::Any => {}
-        RuleProtocol::Tcp => {
-            exprs.push(create_protocol_match("tcp"));
-            if let Some(start) = port_start {
-                exprs.push(create_dport_match(start, port_end));
-            }
-        }
-        RuleProtocol::Udp => {
-            exprs.push(create_protocol_match("udp"));
-            if let Some(start) = port_start {
-                exprs.push(create_dport_match(start, port_end));
-            }
-        }
-        RuleProtocol::TcpUdp => {
-            exprs.push(create_tcpudp_match());
-            if let Some(start) = port_start {
-                exprs.push(create_dport_match(start, port_end));
-            }
-        }
-        RuleProtocol::Icmp => {
-            exprs.push(create_protocol_match("icmp"));
-        }
-        RuleProtocol::Icmpv6 => {
-            exprs.push(create_protocol_match("icmpv6"));
+    if let Some(proto) = protocol {
+        exprs.push(create_protocol_match(proto));
+        // Only add port matching for TCP/UDP
+        if (proto == "tcp" || proto == "udp")
+            && let Some(start) = port_start
+        {
+            exprs.push(create_dport_match(start, port_end));
         }
     }
 }

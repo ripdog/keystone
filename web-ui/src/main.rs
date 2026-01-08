@@ -27,7 +27,7 @@ use tracing::{error, info};
 #[cfg(feature = "server")]
 const DAEMON_SOCKET: &str = "/run/keystone.sock";
 #[cfg(feature = "server")]
-const LISTEN_ADDR: &str = "127.0.0.1:3000";
+const LISTEN_ADDR: &str = "0.0.0.0:8080";
 
 #[cfg(feature = "server")]
 #[tokio::main]

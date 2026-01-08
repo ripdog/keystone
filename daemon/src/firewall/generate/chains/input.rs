@@ -4,7 +4,8 @@
 //! traffic destined for the router itself.
 
 use crate::firewall::generate::statements::{
-    add_protocol_match, create_iif_match, create_saddr_match, parse_rate_limit,
+    add_protocol_match_concrete, create_iif_match, create_saddr_match, expand_protocol,
+    parse_rate_limit,
 };
 use crate::firewall::generate::{FILTER_TABLE, find_wan_zones};
 use keystone_core::{FirewallAction, FirewallConfig, FirewallPolicy, FirewallZone, InputRule};
@@ -62,7 +63,7 @@ pub fn generate_input_chain(
     sorted_rules.sort_by_key(|r| r.position);
 
     for rule in sorted_rules {
-        if let Some(nf_rule) = create_input_rule(rule, zone_interfaces) {
+        for nf_rule in create_input_rules(rule, zone_interfaces) {
             batch.add(NfListObject::Rule(nf_rule));
         }
     }
@@ -231,7 +232,9 @@ fn generate_icmp_input_rules(
     // - Destination Unreachable (type 3) - needed for PMTUD
     // - Time Exceeded (type 11) - needed for traceroute
     // - Parameter Problem (type 12) - needed for proper error reporting
-    batch.add(NfListObject::Rule(create_icmp_essential_accept_rule()));
+    for rule in create_icmp_essential_accept_rules() {
+        batch.add(NfListObject::Rule(rule));
+    }
 }
 
 /// Create a rule to drop a specific ICMP type
@@ -323,8 +326,18 @@ fn create_icmp_ping_accept_rule(interfaces: &[String], comment: &str) -> Rule<'s
     }
 }
 
-/// Create a rule to accept essential ICMP types for proper network operation
-fn create_icmp_essential_accept_rule() -> Rule<'static> {
+/// Create rules to accept essential ICMP types for proper network operation
+/// Returns 3 separate rules for dest-unreachable, time-exceeded, parameter-problem
+fn create_icmp_essential_accept_rules() -> Vec<Rule<'static>> {
+    vec![
+        create_icmp_type_accept_rule(3, "Accept ICMP destination-unreachable"),
+        create_icmp_type_accept_rule(11, "Accept ICMP time-exceeded"),
+        create_icmp_type_accept_rule(12, "Accept ICMP parameter-problem"),
+    ]
+}
+
+/// Create a rule to accept a specific ICMP type
+fn create_icmp_type_accept_rule(icmp_type: u8, comment: &str) -> Rule<'static> {
     Rule {
         family: NfFamily::INet,
         table: Cow::Borrowed(FILTER_TABLE),
@@ -338,7 +351,7 @@ fn create_icmp_essential_accept_rule() -> Rule<'static> {
                 right: Expression::String(Cow::Borrowed("icmp")),
                 op: Operator::EQ,
             }),
-            // Match essential types: 3 (dest-unreachable), 11 (time-exceeded), 12 (parameter-problem)
+            // Match specific ICMP type
             Statement::Match(Match {
                 left: Expression::Named(nftables::expr::NamedExpression::Payload(
                     Payload::PayloadField(PayloadField {
@@ -346,29 +359,55 @@ fn create_icmp_essential_accept_rule() -> Rule<'static> {
                         field: Cow::Borrowed("type"),
                     }),
                 )),
-                right: Expression::List(vec![
-                    Expression::Number(3),  // destination-unreachable
-                    Expression::Number(11), // time-exceeded
-                    Expression::Number(12), // parameter-problem
-                ]),
-                op: Operator::IN,
+                right: Expression::Number(icmp_type as u32),
+                op: Operator::EQ,
             }),
             Statement::Counter(Counter::Anonymous(None)),
             Statement::Accept(None),
         ]
         .into(),
-        comment: Some(Cow::Borrowed(
-            "Accept essential ICMP (dest-unreach, time-exceeded, param-problem)",
-        )),
+        comment: Some(Cow::Owned(comment.to_string())),
         ..Default::default()
     }
 }
 
-/// Create an nftables rule from an InputRule
-fn create_input_rule(
+/// Create nftables rules from an InputRule.
+///
+/// Returns multiple rules for TcpUdp protocol (one for TCP, one for UDP),
+/// since nftables doesn't support matching multiple protocols in a single rule.
+fn create_input_rules(
     rule: &InputRule,
     zone_interfaces: &HashMap<String, Vec<String>>,
-) -> Option<Rule<'static>> {
+) -> Vec<Rule<'static>> {
+    // Determine which protocols to generate rules for
+    let protocols = rule
+        .protocol
+        .as_ref()
+        .map(expand_protocol)
+        .unwrap_or_else(|| vec![None]);
+
+    protocols
+        .into_iter()
+        .map(|proto| {
+            create_input_rule_for_protocol(
+                rule,
+                zone_interfaces,
+                proto,
+                rule.port_start,
+                rule.port_end,
+            )
+        })
+        .collect()
+}
+
+/// Create a single nftables rule for a specific protocol
+fn create_input_rule_for_protocol(
+    rule: &InputRule,
+    zone_interfaces: &HashMap<String, Vec<String>>,
+    protocol: Option<&'static str>,
+    port_start: Option<u16>,
+    port_end: Option<u16>,
+) -> Rule<'static> {
     let mut exprs: Vec<Statement> = Vec::new();
 
     // Match source zone (interface)
@@ -385,9 +424,7 @@ fn create_input_rule(
     }
 
     // Match protocol and ports
-    if let Some(protocol) = &rule.protocol {
-        add_protocol_match(&mut exprs, protocol, rule.port_start, rule.port_end);
-    }
+    add_protocol_match_concrete(&mut exprs, protocol, port_start, port_end);
 
     // Rate limiting
     if let Some(ref rate_limit) = rule.rate_limit
@@ -423,14 +460,14 @@ fn create_input_rule(
         FirewallAction::Reject => Statement::Reject(None),
     });
 
-    Some(Rule {
+    Rule {
         family: NfFamily::INet,
         table: Cow::Borrowed(FILTER_TABLE),
         chain: Cow::Borrowed("input"),
         expr: exprs.into(),
         comment: Some(Cow::Owned(rule.name.clone())),
         ..Default::default()
-    })
+    }
 }
 
 /// Create a zone default input policy rule

@@ -8,8 +8,8 @@ use crate::firewall::generate::chains::input::{
     create_conntrack_established_rule, create_conntrack_invalid_rule,
 };
 use crate::firewall::generate::statements::{
-    add_protocol_match, create_daddr_match, create_iif_match, create_oif_match, create_saddr_match,
-    parse_rate_limit,
+    add_protocol_match_concrete, create_daddr_match, create_iif_match, create_oif_match,
+    create_saddr_match, expand_protocol, parse_rate_limit,
 };
 use keystone_core::{FirewallAction, FirewallConfig, ForwardRule, ZoneForwardPolicy};
 use nftables::{
@@ -56,7 +56,7 @@ pub fn generate_forward_chain(
     sorted_rules.sort_by_key(|r| r.position);
 
     for rule in sorted_rules {
-        if let Some(nf_rule) = create_forward_rule(rule, zone_interfaces) {
+        for nf_rule in create_forward_rules(rule, zone_interfaces) {
             batch.add(NfListObject::Rule(nf_rule));
         }
     }
@@ -71,11 +71,43 @@ pub fn generate_forward_chain(
     }
 }
 
-/// Create an nftables rule from a ForwardRule
-fn create_forward_rule(
+/// Create nftables rules from a ForwardRule.
+///
+/// Returns multiple rules for TcpUdp protocol (one for TCP, one for UDP),
+/// since nftables doesn't support matching multiple protocols in a single rule.
+fn create_forward_rules(
     rule: &ForwardRule,
     zone_interfaces: &HashMap<String, Vec<String>>,
-) -> Option<Rule<'static>> {
+) -> Vec<Rule<'static>> {
+    // Determine which protocols to generate rules for
+    let protocols = rule
+        .protocol
+        .as_ref()
+        .map(expand_protocol)
+        .unwrap_or_else(|| vec![None]);
+
+    protocols
+        .into_iter()
+        .map(|proto| {
+            create_forward_rule_for_protocol(
+                rule,
+                zone_interfaces,
+                proto,
+                rule.dest_port_start,
+                rule.dest_port_end,
+            )
+        })
+        .collect()
+}
+
+/// Create a single nftables rule for a specific protocol
+fn create_forward_rule_for_protocol(
+    rule: &ForwardRule,
+    zone_interfaces: &HashMap<String, Vec<String>>,
+    protocol: Option<&'static str>,
+    port_start: Option<u16>,
+    port_end: Option<u16>,
+) -> Rule<'static> {
     let mut exprs: Vec<Statement> = Vec::new();
 
     // Match source zone
@@ -105,14 +137,7 @@ fn create_forward_rule(
     }
 
     // Match protocol and ports
-    if let Some(protocol) = &rule.protocol {
-        add_protocol_match(
-            &mut exprs,
-            protocol,
-            rule.dest_port_start,
-            rule.dest_port_end,
-        );
-    }
+    add_protocol_match_concrete(&mut exprs, protocol, port_start, port_end);
 
     // Rate limiting
     if let Some(ref rate_limit) = rule.rate_limit
@@ -148,14 +173,14 @@ fn create_forward_rule(
         FirewallAction::Reject => Statement::Reject(None),
     });
 
-    Some(Rule {
+    Rule {
         family: NfFamily::INet,
         table: Cow::Borrowed(FILTER_TABLE),
         chain: Cow::Borrowed("forward"),
         expr: exprs.into(),
         comment: Some(Cow::Owned(rule.name.clone())),
         ..Default::default()
-    })
+    }
 }
 
 /// Create a zone-to-zone forwarding rule

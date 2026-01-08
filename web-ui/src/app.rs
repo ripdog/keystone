@@ -8,7 +8,7 @@ use crate::components::{AppLayout, LoginPage, clear_stored_token, get_stored_tok
 use crate::pages::{
     BridgesPage, CaddyPage, DashboardPage, DnsmasqPage, FirewallPage, InterfaceEditPage,
     InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage, SettingsPage, StatusPage,
-    VlansPage,
+    VlansPage, WizardPage,
 };
 use keystone_core::SystemState;
 use leptos::prelude::*;
@@ -81,25 +81,14 @@ pub fn App() -> impl IntoView {
                 </div>
             </Show>
 
-            // Show status page when setup is not complete
+            // Show wizard when setup is not complete
             <Show when=move || setup_state.get() == SetupState::NeedsSetup>
-                <Show
-                    when=move || auth_token.get().is_some()
-                    fallback=move || view! {
-                        // Show login or status page for unauthenticated users
-                        <StatusPage
-                            auth_token=auth_token
-                            on_setup_complete=on_setup_complete
-                            on_unauthorized=on_unauthorized
-                        />
-                    }
-                >
-                    <StatusPage
-                        auth_token=auth_token
-                        on_setup_complete=on_setup_complete
-                        on_unauthorized=on_unauthorized
-                    />
-                </Show>
+                <WizardPage
+                    auth_token=auth_token
+                    set_auth_token=set_auth_token
+                    on_wizard_complete=on_setup_complete
+                    on_unauthorized=on_unauthorized
+                />
             </Show>
 
             // Show normal app when setup is complete

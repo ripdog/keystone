@@ -21,7 +21,7 @@ use anyhow::{Context, Result};
 use keystone_core::{
     BridgeConfig, FirewallConfig, FirewallGlobalSettings, FirewallZone, ForwardRule,
     GlobalSettings, InputRule, InterfaceConfig, ManagedInterface, PortForward, User, UserInfo,
-    VlanConfig, ZoneForwardPolicy,
+    VlanConfig, WizardStep, ZoneForwardPolicy,
 };
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use tracing::info;
@@ -380,5 +380,15 @@ impl Database {
     /// Mark setup as complete
     pub async fn mark_setup_complete(&self) -> Result<()> {
         self.settings().mark_setup_complete().await
+    }
+
+    /// Get current wizard step
+    pub async fn get_wizard_step(&self) -> Result<WizardStep> {
+        self.settings().get_wizard_step().await
+    }
+
+    /// Set wizard step
+    pub async fn set_wizard_step(&self, step: WizardStep) -> Result<()> {
+        self.settings().set_wizard_step(step).await
     }
 }

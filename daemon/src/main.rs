@@ -13,6 +13,7 @@ mod firewall;
 mod networkd;
 mod status;
 mod systemd;
+mod wizard;
 
 use auth::AuthManager;
 use axum::{
@@ -188,6 +189,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(caddy::routes::caddy_routes(caddy_state))
         // Merge systemd routes
         .merge(systemd::routes::systemd_routes())
+        // Merge wizard routes
+        .merge(wizard::wizard_routes(db.clone()))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,

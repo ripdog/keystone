@@ -101,6 +101,7 @@ use keystone_core::{
     SaveZoneForwardRequest,
     SaveZoneForwardResponse,
     SystemState,
+    SystemStatusResponse,
     UsersResponse,
     ZoneForwardPolicy,
     ZoneForwardsResponse,
@@ -111,6 +112,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tokio::net::UnixStream;
+
+mod wizard;
 
 const SOCKET_PATH: &str = "/run/keystone.sock";
 
@@ -175,7 +178,7 @@ struct Cli {
     socket: String,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -2130,12 +2133,22 @@ async fn main() -> Result<()> {
     let client = DaemonClient::new(cli.socket);
 
     match cli.command {
-        Commands::Health => {
+        None => {
+            // No command specified - check if setup is needed and run wizard or show status
+            let status: SystemStatusResponse = client.get("/status", None).await?;
+            if !status.setup_complete {
+                wizard::run_wizard(&client).await?;
+            } else {
+                wizard::show_status(&client).await?;
+            }
+        }
+
+        Some(Commands::Health) => {
             let response: serde_json::Value = client.get("/health", None).await?;
             output(cli.json, &response, pretty::health);
         }
 
-        Commands::Login { username, password } => {
+        Some(Commands::Login { username, password }) => {
             let password = match password {
                 Some(p) => p,
                 None => {
@@ -2152,19 +2165,19 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::State { token } => {
+        Some(Commands::State { token }) => {
             let token = get_token(token)?;
             let response: SystemState = client.get("/state", Some(&token)).await?;
             output(cli.json, &response, pretty::state);
         }
 
-        Commands::Dashboard { token } => {
+        Some(Commands::Dashboard { token }) => {
             let token = get_token(token)?;
             let response: DashboardResponse = client.get("/dashboard", Some(&token)).await?;
             output(cli.json, &response, pretty::dashboard);
         }
 
-        Commands::Apply { token, file } => {
+        Some(Commands::Apply { token, file }) => {
             let token = get_token(token)?;
             let json_input = read_json_input(file.as_deref())?;
             let state: SystemState =
@@ -2178,7 +2191,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        Commands::Users(subcmd) => match subcmd {
+        Some(Commands::Users(subcmd)) => match subcmd {
             UsersCommands::List { token } => {
                 let token = get_token(token)?;
                 let response: UsersResponse = client.get("/users", Some(&token)).await?;
@@ -2256,7 +2269,7 @@ async fn main() -> Result<()> {
             }
         },
 
-        Commands::Interfaces(subcmd) => match subcmd {
+        Some(Commands::Interfaces(subcmd)) => match subcmd {
             InterfacesCommands::List { token } => {
                 let token = get_token(token)?;
                 let response: ManagedInterfacesResponse =
@@ -2279,7 +2292,7 @@ async fn main() -> Result<()> {
             }
         },
 
-        Commands::Firewall(subcmd) => match subcmd {
+        Some(Commands::Firewall(subcmd)) => match subcmd {
             FirewallCommands::Zones(zones_cmd) => match zones_cmd {
                 ZonesCommands::List { token } => {
                     let token = get_token(token)?;
@@ -2677,7 +2690,7 @@ async fn main() -> Result<()> {
             }
         },
 
-        Commands::Dnsmasq(subcmd) => match subcmd {
+        Some(Commands::Dnsmasq(subcmd)) => match subcmd {
             DnsmasqCommands::State { token } => {
                 let token = get_token(token)?;
                 let response: DnsmasqStateResponse =

@@ -27,6 +27,7 @@ pub mod services;
 pub mod settings;
 pub mod users;
 pub mod vlans;
+pub mod wizard;
 
 // Client module provides the HTTP request helpers used by submodules
 
@@ -42,3 +43,4 @@ pub use services::*;
 pub use settings::*;
 pub use users::*;
 pub use vlans::*;
+pub use wizard::*;

@@ -13,6 +13,7 @@ mod services;
 mod settings;
 mod status;
 mod vlans;
+mod wizard;
 
 pub use bridges::*;
 pub use caddy::*;
@@ -27,3 +28,4 @@ pub use services::*;
 pub use settings::*;
 pub use status::*;
 pub use vlans::*;
+pub use wizard::*;

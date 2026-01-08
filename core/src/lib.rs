@@ -2120,6 +2120,9 @@ pub struct GlobalSettings {
     /// Until this is true, the web UI will redirect all routes to /status.
     #[serde(default)]
     pub setup_complete: bool,
+    /// Current wizard step (0-4). When >= 4, wizard is complete.
+    #[serde(default)]
+    pub wizard_step: u8,
 }
 
 /// Response containing global settings
@@ -2715,6 +2718,158 @@ pub struct SystemdUnitControlRequest {
 /// Response from unit control operations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemdUnitControlResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+// ============================================================================
+// Setup Wizard Types
+// ============================================================================
+
+/// Wizard step identifier
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[repr(u8)]
+pub enum WizardStep {
+    /// Wizard not started - show welcome screen
+    #[default]
+    NotStarted = 0,
+    /// User has changed the default password
+    PasswordChanged = 1,
+    /// System checks have passed
+    SystemChecksCompleted = 2,
+    /// Interfaces have been assigned to zones (WAN/LAN)
+    InterfacesAssigned = 3,
+    /// Wizard is complete
+    Complete = 4,
+}
+
+impl WizardStep {
+    /// Get the step number (0-4)
+    pub fn as_u8(&self) -> u8 {
+        *self as u8
+    }
+
+    /// Create from a step number
+    pub fn from_u8(n: u8) -> Self {
+        match n {
+            0 => WizardStep::NotStarted,
+            1 => WizardStep::PasswordChanged,
+            2 => WizardStep::SystemChecksCompleted,
+            3 => WizardStep::InterfacesAssigned,
+            _ => WizardStep::Complete,
+        }
+    }
+
+    /// Get the next step
+    pub fn next(&self) -> Self {
+        WizardStep::from_u8(self.as_u8().saturating_add(1))
+    }
+
+    /// Check if the wizard is complete
+    pub fn is_complete(&self) -> bool {
+        *self == WizardStep::Complete
+    }
+
+    /// Get human-readable step name
+    pub fn name(&self) -> &'static str {
+        match self {
+            WizardStep::NotStarted => "Welcome",
+            WizardStep::PasswordChanged => "Change Password",
+            WizardStep::SystemChecksCompleted => "System Checks",
+            WizardStep::InterfacesAssigned => "Configure Interfaces",
+            WizardStep::Complete => "Complete",
+        }
+    }
+}
+
+impl std::fmt::Display for WizardStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+/// Current wizard state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardState {
+    /// Current step in the wizard
+    pub current_step: WizardStep,
+    /// Whether the wizard is complete
+    pub is_complete: bool,
+    /// Total number of steps
+    pub total_steps: u8,
+    /// System status (from checks)
+    pub system_status: Option<SystemStatusResponse>,
+}
+
+impl Default for WizardState {
+    fn default() -> Self {
+        Self {
+            current_step: WizardStep::NotStarted,
+            is_complete: false,
+            total_steps: WizardStep::Complete.as_u8(),
+            system_status: None,
+        }
+    }
+}
+
+/// Response containing wizard state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardStateResponse {
+    pub state: WizardState,
+}
+
+/// Request to advance wizard to next step
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardAdvanceRequest {
+    /// The step we're completing (for validation)
+    pub completing_step: WizardStep,
+}
+
+/// Response from advancing wizard
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardAdvanceResponse {
+    pub success: bool,
+    pub message: String,
+    /// The new current step
+    pub new_step: WizardStep,
+}
+
+/// Request to skip wizard (for advanced users)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardSkipRequest {
+    /// Confirmation that user understands the risks
+    pub confirm_skip: bool,
+}
+
+/// Response from skipping wizard
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardSkipResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+/// Interface assignment for wizard step
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardInterfaceAssignment {
+    /// Interface name
+    pub name: String,
+    /// Assigned role (WAN or LAN)
+    pub role: InterfaceRole,
+    /// Whether to use DHCP (for WAN interfaces)
+    pub use_dhcp: bool,
+    /// Static IP if not using DHCP (CIDR notation)
+    pub static_ip: Option<String>,
+}
+
+/// Request to save interface assignments in wizard
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardSaveInterfacesRequest {
+    pub assignments: Vec<WizardInterfaceAssignment>,
+}
+
+/// Response from saving interface assignments
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardSaveInterfacesResponse {
     pub success: bool,
     pub message: String,
 }

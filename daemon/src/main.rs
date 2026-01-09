@@ -201,8 +201,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/login", post(login))
         .route("/system-status", get(get_system_status))
         .merge(protected)
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+        // State must be applied before TraceLayer so middleware/handlers can
+        // reliably extract State<Arc<AppState>>.
+        .with_state(state)
+        .layer(TraceLayer::new_for_http());
 
     // Check for development mode (HTTP listener instead of Unix socket)
     let dev_mode = std::env::var("KEYSTONE_DEV").is_ok();

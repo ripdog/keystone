@@ -72,6 +72,19 @@ pub enum Commands {
     #[command(subcommand)]
     Firewall(FirewallCommands),
 
+    /// Run interactive first-run setup wizard
+    Setup,
+
+    /// Mark setup complete after running all checks
+    ///
+    /// Intended for automation: scripts can configure the system via other
+    /// commands, then call this once to run checks and flip the setup flag.
+    CompleteSetupNow {
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
     /// Manage DNS & DHCP (dnsmasq) configuration
     #[command(subcommand)]
     Dnsmasq(DnsmasqCommands),

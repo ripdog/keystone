@@ -8,10 +8,10 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use keystone_core::{
-    ApplyConfigRequest, ApplyConfigResponse, DashboardResponse, DeleteUserRequest,
-    DeleteUserResponse, LoginRequest, LoginResponse, ManagedInterfacesResponse,
+    ApplyConfigRequest, ApplyConfigResponse, CompleteSetupResponse, DashboardResponse,
+    DeleteUserRequest, DeleteUserResponse, LoginRequest, LoginResponse, ManagedInterfacesResponse,
     SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse,
-    SystemState, SystemStatusResponse, UsersResponse,
+    SystemState, UsersResponse,
 };
 
 mod client;
@@ -162,12 +162,17 @@ async fn main() -> Result<()> {
 
     match cli.command {
         None => {
-            // No command specified - check if setup is needed and run wizard or show status
-            let status: SystemStatusResponse = client.get("/status", None).await?;
-            if !status.setup_complete {
-                wizard::run_wizard(&client).await?;
-            } else {
-                wizard::show_status(&client).await?;
+            // No command specified - default to dashboard
+            // If the daemon rejects dashboard because setup isn't complete,
+            // fall back to prompting the user to run the setup wizard.
+            let authed = client.authed(get_token(None)?);
+            match authed.get::<DashboardResponse>("/dashboard").await {
+                Ok(response) => output(cli.json, &response, pretty::dashboard),
+                Err(e) => {
+                    eprintln!("{e}");
+                    eprintln!("If this system is not set up yet, run: keystonectl setup");
+                    std::process::exit(1);
+                }
             }
         }
 
@@ -194,25 +199,24 @@ async fn main() -> Result<()> {
         }
 
         Some(Commands::State { token }) => {
-            let token = get_token(token)?;
-            let response: SystemState = client.get("/state", Some(&token)).await?;
+            let authed = client.authed(get_token(token)?);
+            let response: SystemState = authed.get("/state").await?;
             output(cli.json, &response, pretty::state);
         }
 
         Some(Commands::Dashboard { token }) => {
-            let token = get_token(token)?;
-            let response: DashboardResponse = client.get("/dashboard", Some(&token)).await?;
+            let authed = client.authed(get_token(token)?);
+            let response: DashboardResponse = authed.get("/dashboard").await?;
             output(cli.json, &response, pretty::dashboard);
         }
 
         Some(Commands::Apply { token, file }) => {
-            let token = get_token(token)?;
+            let authed = client.authed(get_token(token)?);
             let json_input = read_json_input(file.as_deref())?;
             let state: SystemState =
                 serde_json::from_str(&json_input).context("Invalid JSON input")?;
             let request = ApplyConfigRequest { state };
-            let response: ApplyConfigResponse =
-                client.post("/apply", &request, Some(&token)).await?;
+            let response: ApplyConfigResponse = authed.post("/apply", &request).await?;
             output(cli.json, &response, pretty::apply);
             if !response.success {
                 std::process::exit(1);
@@ -221,8 +225,8 @@ async fn main() -> Result<()> {
 
         Some(Commands::Users(subcmd)) => match subcmd {
             UsersCommands::List { token } => {
-                let token = get_token(token)?;
-                let response: UsersResponse = client.get("/users", Some(&token)).await?;
+                let authed = client.authed(get_token(token)?);
+                let response: UsersResponse = authed.get("/users").await?;
                 output(cli.json, &response, pretty::users);
             }
 
@@ -232,7 +236,7 @@ async fn main() -> Result<()> {
                 email,
                 password,
             } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let password = match password {
                     Some(p) => p,
                     None => {
@@ -255,8 +259,7 @@ async fn main() -> Result<()> {
                     email,
                     password: Some(password),
                 };
-                let response: SaveUserResponse =
-                    client.post("/users", &request, Some(&token)).await?;
+                let response: SaveUserResponse = authed.post("/users", &request).await?;
                 output(cli.json, &response, pretty::save_user);
                 if !response.success {
                     std::process::exit(1);
@@ -270,15 +273,14 @@ async fn main() -> Result<()> {
                 email,
                 password,
             } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let request = SaveUserRequest {
                     id: Some(id),
                     username,
                     email,
                     password,
                 };
-                let response: SaveUserResponse =
-                    client.post("/users", &request, Some(&token)).await?;
+                let response: SaveUserResponse = authed.post("/users", &request).await?;
                 output(cli.json, &response, pretty::save_user);
                 if !response.success {
                     std::process::exit(1);
@@ -286,10 +288,9 @@ async fn main() -> Result<()> {
             }
 
             UsersCommands::Delete { token, id } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let request = DeleteUserRequest { id };
-                let response: DeleteUserResponse =
-                    client.delete("/users", &request, Some(&token)).await?;
+                let response: DeleteUserResponse = authed.delete("/users", &request).await?;
                 output(cli.json, &response, pretty::delete_user);
                 if !response.success {
                     std::process::exit(1);
@@ -299,20 +300,18 @@ async fn main() -> Result<()> {
 
         Some(Commands::Interfaces(subcmd)) => match subcmd {
             InterfacesCommands::List { token } => {
-                let token = get_token(token)?;
-                let response: ManagedInterfacesResponse =
-                    client.get("/managed-interfaces", Some(&token)).await?;
+                let authed = client.authed(get_token(token)?);
+                let response: ManagedInterfacesResponse = authed.get("/managed-interfaces").await?;
                 output(cli.json, &response, pretty::managed_interfaces);
             }
 
             InterfacesCommands::Save { token, file } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let json_input = read_json_input(file.as_deref())?;
                 let request: SaveManagedInterfacesRequest =
                     serde_json::from_str(&json_input).context("Invalid JSON input")?;
-                let response: SaveManagedInterfacesResponse = client
-                    .post("/managed-interfaces", &request, Some(&token))
-                    .await?;
+                let response: SaveManagedInterfacesResponse =
+                    authed.post("/managed-interfaces", &request).await?;
                 output(cli.json, &response, pretty::save_interfaces);
                 if !response.success {
                     std::process::exit(1);
@@ -322,6 +321,19 @@ async fn main() -> Result<()> {
 
         Some(Commands::Firewall(subcmd)) => {
             handle_firewall_command(&client, cli.json, subcmd).await?
+        }
+
+        Some(Commands::Setup) => {
+            wizard::run_wizard(&client).await?;
+        }
+
+        Some(Commands::CompleteSetupNow { token }) => {
+            let authed = client.authed(get_token(token)?);
+            let response: CompleteSetupResponse = authed.post("/complete-setup", &()).await?;
+            output(cli.json, &response, |r| println!("{}", r.message));
+            if !response.success {
+                std::process::exit(1);
+            }
         }
 
         Some(Commands::Dnsmasq(subcmd)) => {

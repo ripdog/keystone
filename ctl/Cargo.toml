@@ -30,6 +30,9 @@ rpassword = "7.3"
 inquire = "0.9"
 console = "0.15"
 
+[dev-dependencies]
+tempfile = "3.10"
+
 [[bin]]
 name = "keystonectl"
 path = "src/main.rs"

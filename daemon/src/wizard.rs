@@ -85,7 +85,10 @@ async fn advance_wizard(
             // Just need to acknowledge the welcome screen
         }
         WizardStep::PasswordChanged => {
-            // Check that system checks pass before allowing to proceed
+            // Password was changed; proceed to system checks.
+        }
+        WizardStep::SystemChecksCompleted => {
+            // Check that system checks pass before allowing to proceed to interface assignment
             let status = status::perform_all_checks(settings.setup_complete);
             if !status.all_checks_pass {
                 return Ok(Json(WizardAdvanceResponse {
@@ -97,8 +100,8 @@ async fn advance_wizard(
                     new_step: current_step,
                 }));
             }
-        }
-        WizardStep::SystemChecksCompleted => {
+
+            // Check that at least one interface is configured
             // Check that at least one interface is configured
             let zones = db.get_firewall_zones().await?;
             if zones.is_empty() {

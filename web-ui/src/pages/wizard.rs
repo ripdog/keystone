@@ -526,7 +526,7 @@ fn PasswordStep(
                 Ok(response) => {
                     if response.success {
                         // Now advance the wizard
-                        match api::advance_wizard(&token, WizardStep::NotStarted).await {
+                        match api::advance_wizard(&token, WizardStep::PasswordChanged).await {
                             Ok(advance_response) => {
                                 if advance_response.success {
                                     on_advance.run(());

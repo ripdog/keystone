@@ -11,9 +11,21 @@ pub struct DaemonClient {
     socket_path: String,
 }
 
+pub struct AuthedDaemonClient<'a> {
+    client: &'a DaemonClient,
+    token: String,
+}
+
 impl DaemonClient {
     pub fn new(socket_path: String) -> Self {
         Self { socket_path }
+    }
+
+    pub fn authed(&self, token: String) -> AuthedDaemonClient<'_> {
+        AuthedDaemonClient {
+            client: self,
+            token,
+        }
     }
 
     async fn request<T: DeserializeOwned>(
@@ -103,5 +115,35 @@ impl DaemonClient {
         token: Option<&str>,
     ) -> Result<T> {
         self.request("DELETE", path, Some(body), token).await
+    }
+}
+
+impl<'a> AuthedDaemonClient<'a> {
+    pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.client.get(path, Some(&self.token)).await
+    }
+
+    pub async fn post<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T> {
+        self.client.post(path, body, Some(&self.token)).await
+    }
+
+    pub async fn delete<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<T> {
+        self.client.delete(path, body, Some(&self.token)).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authed_client_retains_token() {
+        let client = DaemonClient::new("/nope".to_string());
+        let authed = client.authed("abc123".to_string());
+        assert_eq!(authed.token, "abc123");
     }
 }

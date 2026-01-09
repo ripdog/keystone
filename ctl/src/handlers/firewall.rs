@@ -18,9 +18,8 @@ pub async fn handle_firewall_command(
     match subcmd {
         FirewallCommands::Zones(zones_cmd) => match zones_cmd {
             ZonesCommands::List { token } => {
-                let token = get_token(token)?;
-                let response: FirewallZonesResponse =
-                    client.get("/firewall/zones", Some(&token)).await?;
+                let authed = client.authed(get_token(token)?);
+                let response: FirewallZonesResponse = authed.get("/firewall/zones").await?;
                 output(cli_json, &response, pretty::firewall_zones);
             }
 
@@ -32,7 +31,7 @@ pub async fn handle_firewall_command(
                 input_policy,
                 forward_policy,
             } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let interfaces_vec: Vec<String> = interfaces
                     .map(|s| s.split(',').map(|i| i.trim().to_string()).collect())
                     .unwrap_or_default();
@@ -54,9 +53,8 @@ pub async fn handle_firewall_command(
                 };
 
                 let request = SaveFirewallZoneRequest { zone };
-                let response: SaveFirewallZoneResponse = client
-                    .post("/firewall/zones", &request, Some(&token))
-                    .await?;
+                let response: SaveFirewallZoneResponse =
+                    authed.post("/firewall/zones", &request).await?;
                 output(cli_json, &response, pretty::save_zone);
                 if !response.success {
                     std::process::exit(1);
@@ -64,11 +62,10 @@ pub async fn handle_firewall_command(
             }
 
             ZonesCommands::Delete { token, id } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let request = DeleteFirewallZoneRequest { id };
-                let response: DeleteFirewallZoneResponse = client
-                    .delete("/firewall/zones", &request, Some(&token))
-                    .await?;
+                let response: DeleteFirewallZoneResponse =
+                    authed.delete("/firewall/zones", &request).await?;
                 output(cli_json, &response, pretty::delete_zone);
                 if !response.success {
                     std::process::exit(1);
@@ -78,9 +75,8 @@ pub async fn handle_firewall_command(
 
         FirewallCommands::ZoneForwards(zf_cmd) => match zf_cmd {
             ZoneForwardsCommands::List { token } => {
-                let token = get_token(token)?;
-                let response: ZoneForwardsResponse =
-                    client.get("/firewall/zone-forwards", Some(&token)).await?;
+                let authed = client.authed(get_token(token)?);
+                let response: ZoneForwardsResponse = authed.get("/firewall/zone-forwards").await?;
                 output(cli_json, &response, pretty::zone_forwards);
             }
 
@@ -91,7 +87,7 @@ pub async fn handle_firewall_command(
                 policy,
                 enabled,
             } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let policy: FirewallAction =
                     policy.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
@@ -104,9 +100,8 @@ pub async fn handle_firewall_command(
                 };
 
                 let request = SaveZoneForwardRequest { forward };
-                let response: SaveZoneForwardResponse = client
-                    .post("/firewall/zone-forwards", &request, Some(&token))
-                    .await?;
+                let response: SaveZoneForwardResponse =
+                    authed.post("/firewall/zone-forwards", &request).await?;
                 output(cli_json, &response, pretty::save_zone_forward);
                 if !response.success {
                     std::process::exit(1);
@@ -114,11 +109,10 @@ pub async fn handle_firewall_command(
             }
 
             ZoneForwardsCommands::Delete { token, id } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let request = DeleteZoneForwardRequest { id };
-                let response: DeleteZoneForwardResponse = client
-                    .delete("/firewall/zone-forwards", &request, Some(&token))
-                    .await?;
+                let response: DeleteZoneForwardResponse =
+                    authed.delete("/firewall/zone-forwards", &request).await?;
                 output(cli_json, &response, pretty::delete_zone_forward);
                 if !response.success {
                     std::process::exit(1);
@@ -128,9 +122,8 @@ pub async fn handle_firewall_command(
 
         FirewallCommands::PortForwards(pf_cmd) => match pf_cmd {
             PortForwardsCommands::List { token } => {
-                let token = get_token(token)?;
-                let response: PortForwardsResponse =
-                    client.get("/firewall/port-forwards", Some(&token)).await?;
+                let authed = client.authed(get_token(token)?);
+                let response: PortForwardsResponse = authed.get("/firewall/port-forwards").await?;
                 output(cli_json, &response, pretty::port_forwards);
             }
 
@@ -147,7 +140,7 @@ pub async fn handle_firewall_command(
                 dest_port,
                 enabled,
             } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let protocol: RuleProtocol =
                     protocol.parse().map_err(|e: String| anyhow::anyhow!(e))?;
 
@@ -166,9 +159,8 @@ pub async fn handle_firewall_command(
                 };
 
                 let request = SavePortForwardRequest { port_forward };
-                let response: SavePortForwardResponse = client
-                    .post("/firewall/port-forwards", &request, Some(&token))
-                    .await?;
+                let response: SavePortForwardResponse =
+                    authed.post("/firewall/port-forwards", &request).await?;
                 output(cli_json, &response, pretty::save_port_forward);
                 if !response.success {
                     std::process::exit(1);
@@ -176,11 +168,10 @@ pub async fn handle_firewall_command(
             }
 
             PortForwardsCommands::Delete { token, id } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let request = DeletePortForwardRequest { id };
-                let response: DeletePortForwardResponse = client
-                    .delete("/firewall/port-forwards", &request, Some(&token))
-                    .await?;
+                let response: DeletePortForwardResponse =
+                    authed.delete("/firewall/port-forwards", &request).await?;
                 output(cli_json, &response, pretty::delete_port_forward);
                 if !response.success {
                     std::process::exit(1);
@@ -190,9 +181,8 @@ pub async fn handle_firewall_command(
 
         FirewallCommands::InputRules(ir_cmd) => match ir_cmd {
             InputRulesCommands::List { token } => {
-                let token = get_token(token)?;
-                let response: InputRulesResponse =
-                    client.get("/firewall/input-rules", Some(&token)).await?;
+                let authed = client.authed(get_token(token)?);
+                let response: InputRulesResponse = authed.get("/firewall/input-rules").await?;
                 output(cli_json, &response, pretty::input_rules);
             }
 
@@ -212,7 +202,7 @@ pub async fn handle_firewall_command(
                 position,
                 enabled,
             } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let protocol: Option<RuleProtocol> = protocol
                     .map(|p| p.parse())
                     .transpose()
@@ -238,9 +228,8 @@ pub async fn handle_firewall_command(
                 };
 
                 let request = SaveInputRuleRequest { rule };
-                let response: SaveInputRuleResponse = client
-                    .post("/firewall/input-rules", &request, Some(&token))
-                    .await?;
+                let response: SaveInputRuleResponse =
+                    authed.post("/firewall/input-rules", &request).await?;
                 output(cli_json, &response, pretty::save_input_rule);
                 if !response.success {
                     std::process::exit(1);
@@ -248,11 +237,10 @@ pub async fn handle_firewall_command(
             }
 
             InputRulesCommands::Delete { token, id } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let request = DeleteInputRuleRequest { id };
-                let response: DeleteInputRuleResponse = client
-                    .delete("/firewall/input-rules", &request, Some(&token))
-                    .await?;
+                let response: DeleteInputRuleResponse =
+                    authed.delete("/firewall/input-rules", &request).await?;
                 output(cli_json, &response, pretty::delete_input_rule);
                 if !response.success {
                     std::process::exit(1);
@@ -262,9 +250,8 @@ pub async fn handle_firewall_command(
 
         FirewallCommands::ForwardRules(fr_cmd) => match fr_cmd {
             ForwardRulesCommands::List { token } => {
-                let token = get_token(token)?;
-                let response: ForwardRulesResponse =
-                    client.get("/firewall/forward-rules", Some(&token)).await?;
+                let authed = client.authed(get_token(token)?);
+                let response: ForwardRulesResponse = authed.get("/firewall/forward-rules").await?;
                 output(cli_json, &response, pretty::forward_rules);
             }
 
@@ -286,7 +273,7 @@ pub async fn handle_firewall_command(
                 position,
                 enabled,
             } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let protocol: Option<RuleProtocol> = protocol
                     .map(|p| p.parse())
                     .transpose()
@@ -314,9 +301,8 @@ pub async fn handle_firewall_command(
                 };
 
                 let request = SaveForwardRuleRequest { rule };
-                let response: SaveForwardRuleResponse = client
-                    .post("/firewall/forward-rules", &request, Some(&token))
-                    .await?;
+                let response: SaveForwardRuleResponse =
+                    authed.post("/firewall/forward-rules", &request).await?;
                 output(cli_json, &response, pretty::save_forward_rule);
                 if !response.success {
                     std::process::exit(1);
@@ -324,11 +310,10 @@ pub async fn handle_firewall_command(
             }
 
             ForwardRulesCommands::Delete { token, id } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let request = DeleteForwardRuleRequest { id };
-                let response: DeleteForwardRuleResponse = client
-                    .delete("/firewall/forward-rules", &request, Some(&token))
-                    .await?;
+                let response: DeleteForwardRuleResponse =
+                    authed.delete("/firewall/forward-rules", &request).await?;
                 output(cli_json, &response, pretty::delete_forward_rule);
                 if !response.success {
                     std::process::exit(1);
@@ -338,9 +323,9 @@ pub async fn handle_firewall_command(
 
         FirewallCommands::Settings(settings_cmd) => match settings_cmd {
             SettingsCommands::Get { token } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
                 let response: FirewallGlobalSettingsResponse =
-                    client.get("/firewall/settings", Some(&token)).await?;
+                    authed.get("/firewall/settings").await?;
                 output(cli_json, &response, pretty::firewall_settings);
             }
 
@@ -350,10 +335,10 @@ pub async fn handle_firewall_command(
                 ping_lan,
                 hairpin_nat,
             } => {
-                let token = get_token(token)?;
+                let authed = client.authed(get_token(token)?);
 
                 let current: FirewallGlobalSettingsResponse =
-                    client.get("/firewall/settings", Some(&token)).await?;
+                    authed.get("/firewall/settings").await?;
 
                 let settings = FirewallGlobalSettings {
                     ping_wan_enabled: ping_wan.unwrap_or(current.settings.ping_wan_enabled),
@@ -363,9 +348,8 @@ pub async fn handle_firewall_command(
                 };
 
                 let request = SaveFirewallGlobalSettingsRequest { settings };
-                let response: SaveFirewallGlobalSettingsResponse = client
-                    .post("/firewall/settings", &request, Some(&token))
-                    .await?;
+                let response: SaveFirewallGlobalSettingsResponse =
+                    authed.post("/firewall/settings", &request).await?;
                 output(cli_json, &response, pretty::save_firewall_settings);
                 if !response.success {
                     std::process::exit(1);
@@ -374,18 +358,15 @@ pub async fn handle_firewall_command(
         },
 
         FirewallCommands::Preview { token } => {
-            let token = get_token(token)?;
-            let response: FirewallPreviewResponse =
-                client.get("/firewall/preview", Some(&token)).await?;
+            let authed = client.authed(get_token(token)?);
+            let response: FirewallPreviewResponse = authed.get("/firewall/preview").await?;
             output(cli_json, &response, pretty::firewall_preview);
         }
 
         FirewallCommands::Apply { token } => {
-            let token = get_token(token)?;
+            let authed = client.authed(get_token(token)?);
             let request = FirewallApplyRequest {};
-            let response: FirewallApplyResponse = client
-                .post("/firewall/apply", &request, Some(&token))
-                .await?;
+            let response: FirewallApplyResponse = authed.post("/firewall/apply", &request).await?;
             output(cli_json, &response, pretty::firewall_apply);
             if !response.success {
                 std::process::exit(1);
@@ -393,11 +374,10 @@ pub async fn handle_firewall_command(
         }
 
         FirewallCommands::Confirm { token, session_id } => {
-            let token = get_token(token)?;
+            let authed = client.authed(get_token(token)?);
             let request = FirewallConfirmRequest { session_id };
-            let response: FirewallConfirmResponse = client
-                .post("/firewall/confirm", &request, Some(&token))
-                .await?;
+            let response: FirewallConfirmResponse =
+                authed.post("/firewall/confirm", &request).await?;
             output(cli_json, &response, pretty::firewall_confirm);
             if !response.success {
                 std::process::exit(1);
@@ -405,9 +385,8 @@ pub async fn handle_firewall_command(
         }
 
         FirewallCommands::Rollback { token } => {
-            let token = get_token(token)?;
-            let response: FirewallRollbackResponse =
-                client.post("/firewall/rollback", &(), Some(&token)).await?;
+            let authed = client.authed(get_token(token)?);
+            let response: FirewallRollbackResponse = authed.post("/firewall/rollback", &()).await?;
             output(cli_json, &response, pretty::firewall_rollback);
             if !response.success {
                 std::process::exit(1);
@@ -415,9 +394,8 @@ pub async fn handle_firewall_command(
         }
 
         FirewallCommands::Status { token } => {
-            let token = get_token(token)?;
-            let response: FirewallStatusResponse =
-                client.get("/firewall/status", Some(&token)).await?;
+            let authed = client.authed(get_token(token)?);
+            let response: FirewallStatusResponse = authed.get("/firewall/status").await?;
             output(cli_json, &response, pretty::firewall_status);
         }
     }

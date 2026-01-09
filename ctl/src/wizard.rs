@@ -334,7 +334,7 @@ async fn system_checks_step(client: &DaemonClient, _token: &str) -> Result<()> {
     println!();
 
     loop {
-        let response: SystemStatusResponse = client.get("/status", None).await?;
+        let response: SystemStatusResponse = client.get("/status", Some(_token)).await?;
 
         // Display checks
         for check in &response.checks {

@@ -376,6 +376,39 @@ async fn auth_middleware(
     request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
+    let path = request.uri().path();
+
+    // Allow configuring the system before setup is complete, but block
+    // operational/read-heavy endpoints until /complete-setup succeeds.
+    //
+    // - Allowed pre-setup: wizard endpoints, user management (password change),
+    //   and all other config save endpoints.
+    // - Blocked pre-setup: dashboard/state reads and any endpoints that apply
+    //   configuration live.
+    let settings = state
+        .db
+        .get_global_settings()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if !settings.setup_complete {
+        let blocked_pre_setup = path == "/state"
+            || path == "/dashboard"
+            || path == "/apply"
+            || path == "/apply-networkd"
+            || path == "/apply-all"
+            || path == "/networkd-preview"
+            || path.starts_with("/firewall/")
+            || path.starts_with("/dnsmasq/")
+            || path.starts_with("/caddy/")
+            || path.starts_with("/systemd/");
+
+        if blocked_pre_setup {
+            warn!("Rejected request before setup complete: {}", path);
+            // Use a status code that indicates "setup required".
+            return Err(StatusCode::PRECONDITION_REQUIRED);
+        }
+    }
     let auth_header = request
         .headers()
         .get("Authorization")

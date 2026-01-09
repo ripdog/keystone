@@ -170,7 +170,10 @@ async fn main() -> Result<()> {
                 Ok(response) => output(cli.json, &response, pretty::dashboard),
                 Err(e) => {
                     eprintln!("{e}");
-                    eprintln!("If this system is not set up yet, run: keystonectl setup");
+                    eprintln!(
+                        "If this system is not set up yet, configure it and then run: keystonectl complete-setup-now"
+                    );
+                    eprintln!("For interactive setup, run: keystonectl setup");
                     std::process::exit(1);
                 }
             }

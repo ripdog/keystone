@@ -244,6 +244,8 @@ async fn login_step(client: &DaemonClient) -> Result<String> {
 
 /// Get current wizard state from daemon
 async fn get_wizard_state(client: &DaemonClient, token: &str) -> Result<WizardState> {
+    // Daemon routes are mounted under /api when accessed via the web UI proxy.
+    // keystonectl talks directly to the daemon, so it uses the raw paths.
     let response: WizardStateResponse = client.get("/wizard", Some(token)).await?;
     Ok(response.state)
 }

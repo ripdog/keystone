@@ -1,0 +1,693 @@
+use keystone_core::*;
+use std::path::PathBuf;
+
+use crate::token::{get_token_path, save_token};
+
+pub fn health(json: &serde_json::Value) {
+    if let Some(status) = json.get("status").and_then(|s| s.as_str()) {
+        let emoji = if status == "healthy" { "✓" } else { "✗" };
+        println!("{} Daemon status: {}", emoji, status);
+    }
+}
+
+pub fn login(response: &LoginResponse) {
+    if response.success {
+        println!("✓ Login successful");
+        if let Some(token) = &response.token {
+            // Save token to file
+            if let Err(e) = save_token(token) {
+                eprintln!("Warning: Failed to save token: {}", e);
+                println!("\nManually export token:");
+                println!("  export KEYSTONE_TOKEN=\"{}\"", token);
+            } else {
+                let token_path = get_token_path()
+                    .unwrap_or_else(|_| PathBuf::from("~/.local/state/keystone/token"));
+                println!("\n✓ Token saved to {}", token_path.display());
+                println!("  You can now run commands without specifying a token");
+            }
+        }
+    } else {
+        println!("✗ Login failed: {}", response.message);
+    }
+}
+
+pub fn state(state: &SystemState) {
+    println!("=== System State ===\n");
+
+    println!("Interfaces ({}):", state.interfaces.len());
+    for iface in &state.interfaces {
+        let status = if iface.enabled { "UP" } else { "DOWN" };
+        let addr = iface.address.as_deref().unwrap_or("no address");
+        let dhcp = if iface.dhcp_enabled { "DHCP" } else { "static" };
+        println!(
+            "  {} [{}] {} ({}, {})",
+            iface.name, iface.role, addr, dhcp, status
+        );
+    }
+
+    println!("\nFirewall: Zone-based firewall (run 'keystonectl firewall' for details)");
+}
+
+pub fn dashboard(dashboard: &DashboardResponse) {
+    state(&dashboard.state);
+
+    println!("\nInterface Counters:");
+    for counter in &dashboard.interface_counters {
+        println!(
+            "  {}: RX {} bytes ({} pkts), TX {} bytes ({} pkts)",
+            counter.name,
+            format_bytes(counter.rx_bytes),
+            counter.rx_packets,
+            format_bytes(counter.tx_bytes),
+            counter.tx_packets
+        );
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.2}G", bytes as f64 / 1_000_000_000.0)
+    } else if bytes >= 1_000_000 {
+        format!("{:.2}M", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.2}K", bytes as f64 / 1_000.0)
+    } else {
+        format!("{}", bytes)
+    }
+}
+
+pub fn apply(response: &ApplyConfigResponse) {
+    if response.success {
+        println!("✓ Configuration applied: {}", response.message);
+    } else {
+        println!("✗ Failed to apply configuration: {}", response.message);
+        for err in &response.errors {
+            println!("  - {}", err);
+        }
+    }
+}
+
+pub fn users(response: &UsersResponse) {
+    println!("=== Users ===\n");
+    println!("{:<6} {:<20} {:<30}", "ID", "Username", "Email");
+    println!("{}", "-".repeat(60));
+    for user in &response.users {
+        let email = user.email.as_deref().unwrap_or("-");
+        println!("{:<6} {:<20} {:<30}", user.id, user.username, email);
+    }
+}
+
+pub fn save_user(response: &SaveUserResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.user_id {
+            println!("  User ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn delete_user(response: &DeleteUserResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn managed_interfaces(response: &ManagedInterfacesResponse) {
+    println!("=== Managed Interfaces ===\n");
+    println!(
+        "{:<15} {:<6} {:<20} {:<8}",
+        "Name", "Role", "Static IP", "Enabled"
+    );
+    println!("{}", "-".repeat(55));
+    for iface in &response.interfaces {
+        let ip = iface.static_ip.as_deref().unwrap_or("DHCP");
+        let enabled = if iface.enabled { "yes" } else { "no" };
+        println!(
+            "{:<15} {:<6} {:<20} {:<8}",
+            iface.name, iface.role, ip, enabled
+        );
+    }
+}
+
+pub fn save_interfaces(response: &SaveManagedInterfacesResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+// Firewall pretty printing
+
+pub fn firewall_zones(response: &FirewallZonesResponse) {
+    println!("=== Firewall Zones ===\n");
+    if response.zones.is_empty() {
+        println!("No zones configured.");
+        return;
+    }
+    println!(
+        "{:<6} {:<15} {:<25} {:<10} {:<10}",
+        "ID", "Name", "Interfaces", "Input", "Forward"
+    );
+    println!("{}", "-".repeat(70));
+    for zone in &response.zones {
+        let id = zone.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let interfaces = if zone.interfaces.is_empty() {
+            "(none)".to_string()
+        } else {
+            zone.interfaces.join(", ")
+        };
+        println!(
+            "{:<6} {:<15} {:<25} {:<10} {:<10}",
+            id, zone.name, interfaces, zone.default_input_policy, zone.default_forward_policy
+        );
+    }
+}
+
+pub fn save_zone(response: &SaveFirewallZoneResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.zone_id {
+            println!("  Zone ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn delete_zone(response: &DeleteFirewallZoneResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn zone_forwards(response: &ZoneForwardsResponse) {
+    println!("=== Zone Forward Policies ===\n");
+    if response.forwards.is_empty() {
+        println!("No zone forwarding policies configured.");
+        return;
+    }
+    println!(
+        "{:<6} {:<15} {:<15} {:<10} {:<8}",
+        "ID", "Source", "Destination", "Policy", "Enabled"
+    );
+    println!("{}", "-".repeat(60));
+    for fwd in &response.forwards {
+        let id = fwd.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if fwd.enabled { "yes" } else { "no" };
+        println!(
+            "{:<6} {:<15} {:<15} {:<10} {:<8}",
+            id, fwd.source_zone, fwd.dest_zone, fwd.policy, enabled
+        );
+    }
+}
+
+pub fn save_zone_forward(response: &SaveZoneForwardResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.forward_id {
+            println!("  Forward Policy ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn delete_zone_forward(response: &DeleteZoneForwardResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn port_forwards(response: &PortForwardsResponse) {
+    println!("=== Port Forwards ===\n");
+    if response.port_forwards.is_empty() {
+        println!("No port forwards configured.");
+        return;
+    }
+    println!(
+        "{:<6} {:<20} {:<8} {:<12} {:<18} {:<8}",
+        "ID", "Name", "Proto", "Ext Port", "Destination", "Enabled"
+    );
+    println!("{}", "-".repeat(80));
+    for pf in &response.port_forwards {
+        let id = pf.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let ext_port = match pf.external_port_end {
+            Some(end) => format!("{}-{}", pf.external_port_start, end),
+            None => pf.external_port_start.to_string(),
+        };
+        let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
+        let proto = match pf.protocol {
+            RuleProtocol::Tcp => "tcp",
+            RuleProtocol::Udp => "udp",
+            RuleProtocol::TcpUdp => "tcp+udp",
+            RuleProtocol::Icmp => "icmp",
+            RuleProtocol::Icmpv6 => "icmpv6",
+            RuleProtocol::Any => "any",
+        };
+        let enabled = if pf.enabled { "yes" } else { "no" };
+        println!(
+            "{:<6} {:<20} {:<8} {:<12} {:<18} {:<8}",
+            id,
+            pf.name,
+            proto,
+            ext_port,
+            format!("{}:{}", pf.dest_ip, dest_port),
+            enabled
+        );
+    }
+}
+
+pub fn save_port_forward(response: &SavePortForwardResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.port_forward_id {
+            println!("  Port Forward ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn delete_port_forward(response: &DeletePortForwardResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn input_rules(response: &InputRulesResponse) {
+    println!("=== Input Rules ===\n");
+    if response.rules.is_empty() {
+        println!("No input rules configured.");
+        return;
+    }
+    for rule in &response.rules {
+        let id = rule.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if rule.enabled { "yes" } else { "no" };
+        let port = match (rule.port_start, rule.port_end) {
+            (Some(start), Some(end)) => format!("{}-{}", start, end),
+            (Some(start), None) => start.to_string(),
+            _ => "-".to_string(),
+        };
+        let proto = rule
+            .protocol
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "any".to_string());
+        println!(
+            "{}: {} proto={} port={} action={} enabled={}",
+            id, rule.name, proto, port, rule.action, enabled
+        );
+    }
+}
+
+pub fn save_input_rule(response: &SaveInputRuleResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.rule_id {
+            println!("  Rule ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn delete_input_rule(response: &DeleteInputRuleResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn forward_rules(response: &ForwardRulesResponse) {
+    println!("=== Forward Rules ===\n");
+    if response.rules.is_empty() {
+        println!("No forward rules configured.");
+        return;
+    }
+    for rule in &response.rules {
+        let id = rule.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if rule.enabled { "yes" } else { "no" };
+        println!(
+            "{}: {} action={} enabled={} src={:?} dest={:?}",
+            id, rule.name, rule.action, enabled, rule.source_zone, rule.dest_zone
+        );
+    }
+}
+
+pub fn save_forward_rule(response: &SaveForwardRuleResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.rule_id {
+            println!("  Rule ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn delete_forward_rule(response: &DeleteForwardRuleResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn firewall_settings(response: &FirewallGlobalSettingsResponse) {
+    println!("=== Firewall Settings ===\n");
+    println!("Ping WAN: {}", response.settings.ping_wan_enabled);
+    println!("Ping LAN: {}", response.settings.ping_lan_enabled);
+    println!("Hairpin NAT: {}", response.settings.hairpin_nat_enabled);
+}
+
+pub fn save_firewall_settings(response: &SaveFirewallGlobalSettingsResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn firewall_preview(response: &FirewallPreviewResponse) {
+    println!("=== Firewall Preview ===\n");
+    println!("{}", response.ruleset);
+}
+
+pub fn firewall_apply(response: &FirewallApplyResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(session_id) = &response.session_id {
+            println!("  Session ID: {}", session_id);
+            println!(
+                "  Run 'keystonectl firewall confirm --session-id {}'",
+                session_id
+            );
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn firewall_confirm(response: &FirewallConfirmResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn firewall_rollback(response: &FirewallRollbackResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn firewall_status(response: &FirewallStatusResponse) {
+    println!("=== Firewall Status ===\n");
+    println!("Pending confirmation: {}", response.pending_confirmation);
+    if let Some(session_id) = &response.session_id {
+        println!("Session ID: {}", session_id);
+    }
+}
+
+// dnsmasq
+
+pub fn dnsmasq_state(response: &DnsmasqStateResponse) {
+    dnsmasq_config(&response.config);
+    println!();
+    dhcp_ranges(&response.dhcp_ranges);
+    println!();
+    static_leases(&response.static_leases);
+    println!();
+    dhcp_options(&response.dhcp_options);
+    println!();
+    host_records(&response.host_records);
+    println!();
+    cname_records(&response.cname_records);
+    println!();
+    address_overrides(&response.address_overrides);
+}
+
+pub fn dnsmasq_config(config: &DnsmasqConfig) {
+    println!("=== DNS Configuration ===\n");
+    println!(
+        "Service: {}",
+        if config.enabled {
+            "Enabled"
+        } else {
+            "Disabled"
+        }
+    );
+    println!("DNS Port: {}", config.dns_port);
+    println!("Upstream Mode: {}", config.upstream_mode);
+    println!("Cache Size: {}", config.cache_size);
+    println!(
+        "Local Domain: {}",
+        config.local_domain.as_deref().unwrap_or("-")
+    );
+    println!(
+        "DNSSEC: {}",
+        if config.dnssec_enabled {
+            "Enabled"
+        } else {
+            "Disabled"
+        }
+    );
+    println!(
+        "Domain Needed: {}",
+        if config.domain_needed { "Yes" } else { "No" }
+    );
+    println!(
+        "Bogus Priv: {}",
+        if config.bogus_priv { "Yes" } else { "No" }
+    );
+    println!(
+        "Expand Hosts: {}",
+        if config.expand_hosts { "Yes" } else { "No" }
+    );
+    println!(
+        "Log Queries: {}",
+        if config.log_queries { "Yes" } else { "No" }
+    );
+    println!("Log DHCP: {}", if config.log_dhcp { "Yes" } else { "No" });
+}
+
+pub fn save_dnsmasq_config(response: &SaveDnsmasqConfigResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn dhcp_ranges(ranges: &[DnsmasqDhcpRange]) {
+    println!("=== DHCP Ranges ===\n");
+    if ranges.is_empty() {
+        println!("No DHCP ranges configured.");
+        return;
+    }
+    for r in ranges {
+        let id = r.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if r.enabled { "yes" } else { "no" };
+        println!(
+            "{}: {} iface={} {}-{} enabled={}",
+            id, r.name, r.interface, r.start_address, r.end_address, enabled
+        );
+    }
+}
+
+pub fn save_dhcp_range(response: &SaveDhcpRangeResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.range_id {
+            println!("  Range ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn static_leases(leases: &[DnsmasqStaticLease]) {
+    println!("=== Static Leases ===\n");
+    if leases.is_empty() {
+        println!("No static leases configured.");
+        return;
+    }
+    for l in leases {
+        let id = l.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if l.enabled { "yes" } else { "no" };
+        println!(
+            "{}: mac={} ip={} hostname={:?} enabled={}",
+            id, l.mac_address, l.ip_address, l.hostname, enabled
+        );
+    }
+}
+
+pub fn save_static_lease(response: &SaveStaticLeaseResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.lease_id {
+            println!("  Lease ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn dhcp_options(options: &[DnsmasqDhcpOption]) {
+    println!("=== DHCP Options ===\n");
+    if options.is_empty() {
+        println!("No DHCP options configured.");
+        return;
+    }
+    for o in options {
+        let id = o.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if o.enabled { "yes" } else { "no" };
+        println!(
+            "{}: opt={} val={} ipv6={} enabled={}",
+            id, o.option, o.value, o.ipv6, enabled
+        );
+    }
+}
+
+pub fn save_dhcp_option(response: &SaveDhcpOptionResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.option_id {
+            println!("  Option ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn host_records(records: &[DnsmasqHostRecord]) {
+    println!("=== Host Records ===\n");
+    if records.is_empty() {
+        println!("No host records configured.");
+        return;
+    }
+    for r in records {
+        let id = r.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if r.enabled { "yes" } else { "no" };
+        println!(
+            "{}: hosts={:?} ipv4={:?} ipv6={:?} enabled={}",
+            id, r.hostnames, r.ipv4_address, r.ipv6_address, enabled
+        );
+    }
+}
+
+pub fn save_host_record(response: &SaveHostRecordResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.record_id {
+            println!("  Record ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn cname_records(records: &[DnsmasqCnameRecord]) {
+    println!("=== CNAME Records ===\n");
+    if records.is_empty() {
+        println!("No CNAME records configured.");
+        return;
+    }
+    for r in records {
+        let id = r.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if r.enabled { "yes" } else { "no" };
+        println!("{}: {} -> {} enabled={}", id, r.alias, r.target, enabled);
+    }
+}
+
+pub fn save_cname_record(response: &SaveCnameRecordResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.record_id {
+            println!("  Record ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn address_overrides(overrides: &[DnsmasqAddressOverride]) {
+    println!("=== Address Overrides ===\n");
+    if overrides.is_empty() {
+        println!("No address overrides configured.");
+        return;
+    }
+    for o in overrides {
+        let id = o.id.map(|i| i.to_string()).unwrap_or("-".to_string());
+        let enabled = if o.enabled { "yes" } else { "no" };
+        let action = match o.action {
+            DnsmasqAddressAction::Block => "block",
+            DnsmasqAddressAction::Redirect => "redirect",
+            DnsmasqAddressAction::Null => "null",
+        };
+        println!(
+            "{}: domain={} action={} redirect_to={:?} enabled={}",
+            id, o.domain, action, o.redirect_address, enabled
+        );
+    }
+}
+
+pub fn save_address_override(response: &SaveAddressOverrideResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+        if let Some(id) = response.override_id {
+            println!("  Override ID: {}", id);
+        }
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn active_leases(response: &DhcpLeasesResponse) {
+    println!("=== Active DHCP Leases ===\n");
+    if response.leases.is_empty() {
+        println!("No active leases.");
+        return;
+    }
+    for l in &response.leases {
+        println!(
+            "- mac={} ip={} host={:?} expires={}",
+            l.mac_address, l.ip_address, l.hostname, l.expires_at
+        );
+    }
+}
+
+pub fn dnsmasq_preview(response: &DnsmasqPreviewResponse) {
+    println!("=== dnsmasq Configuration Preview ===\n");
+    println!("{}", response.config_content);
+}
+
+pub fn dnsmasq_apply(response: &DnsmasqApplyResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn delete_success(success: bool, message: &str) {
+    if success {
+        println!("✓ Deleted successfully");
+    } else {
+        println!("✗ {}", message);
+    }
+}

@@ -13,7 +13,8 @@ use keystone_core::{
     WizardSkipRequest, WizardSkipResponse, WizardState, WizardStateResponse, WizardStep,
 };
 
-use crate::{DaemonClient, save_token};
+use crate::client::DaemonClient;
+use crate::token::save_token;
 
 /// Run the interactive setup wizard
 pub async fn run_wizard(client: &DaemonClient) -> Result<()> {
@@ -511,7 +512,7 @@ async fn interface_assignment_step(client: &DaemonClient, token: &str) -> Result
 /// Show system status (when wizard is complete)
 pub async fn show_status(client: &DaemonClient) -> Result<()> {
     // Try to get token
-    let token = crate::load_token().ok();
+    let token = crate::token::load_token().ok();
 
     // Get dashboard data
     let dashboard: DashboardResponse = match &token {

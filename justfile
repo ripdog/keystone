@@ -11,16 +11,12 @@ default:
 #   Terminal 2: just serve-wasm       (frontend on :8080 with hot reload)
 # Access at: http://localhost:8080
 
+#LLMs: the justfile is for development work only, do NOT use release variants for build or running
 
 # Build all crates (debug)
 build:
     cargo build
     cp -r web-ui/dist target/debug/
-
-# Build all crates (release)
-build-release:
-    cargo build --release
-    cp -r web-ui/dist target/release/
 
 # Run tests
 test:
@@ -51,14 +47,13 @@ check:
     cargo check --all
 
 # Run daemon (requires root)
-run-daemon:
+run-daemon: build
     @echo "Starting daemon (requires root)..."
-    sudo target/release/keystone-daemon
+    sudo target/debug/keystone-daemon
 
 # Run web UI (unprivileged)
-run-web:
-    @echo "Starting web UI on http://localhost:3000"
-    target/release/keystone-web-ui
+run-web: build
+    cd web-ui && ~/.cargo/bin/trunk serve
 
 # Run daemon in dev mode with HTTP listener (for use with trunk serve)
 dev-daemon: build
@@ -70,38 +65,16 @@ dev-web: build
     @echo "Starting web UI in dev mode on http://localhost:3000"
     target/debug/keystone-web-ui
 
-# Build WASM frontend (requires trunk)
-build-wasm:
-    cd web-ui && ~/.cargo/bin/trunk build --release
-
-# Serve WASM frontend with hot reload (requires trunk)
-# Start the daemon first with: sudo just dev-daemon
-serve-wasm:
-    cd web-ui && ~/.cargo/bin/trunk serve
-
 # Build everything including WASM, then run (development)
-dev-full: build-wasm build
-    cp -r web-ui/dist target/debug/
-    @echo "✅ Full development build ready"
-    target/debug/keystone-web-ui
+#dev-full: build-wasm build
+#    cp -r web-ui/dist target/debug/
+#    @echo "✅ Full development build ready"
+#    target/debug/keystone-web-ui
 
-# Run web UI with WASM built (requires trunk)
-run-full: build-wasm build-release
-    cp -r web-ui/dist target/release/
-    @echo "✅ Web UI running with WASM at http://localhost:8080"
-    target/release/keystone-web-ui
 
 # Update dependencies
 update:
     cargo update
-
-# Install development dependencies
-install-dev-tools:
-    cargo install cargo-watch trunk
-
-# Check for outdated dependencies
-outdated:
-    cargo outdated
 
 # Generate documentation
 doc:
@@ -115,30 +88,9 @@ doc-open:
 audit:
     cargo audit
 
-# Benchmark (if benchmarks exist)
-bench:
-    cargo bench
-
 # Show dependency tree
 tree:
     cargo tree
-
-# Build core library only
-build-core:
-    cargo build -p keystone-core
-
-# Build daemon only
-build-daemon:
-    cargo build -p keystone-daemon --release
-
-# Build web UI only
-build-web:
-    cargo build -p keystone-web-ui --release
-    cp -r web-ui/dist target/release/
-
-# Build keystonectl only
-build-ctl:
-    cargo build -p keystonectl --release
 
 # Test core library only
 test-core:
@@ -156,18 +108,10 @@ test-web:
 fix:
     cargo clippy --all-targets --all-features --fix --allow-dirty
 
-# Prepare for release (CI + build release)
-release: ci build-release
-    @echo "✅ Release build ready!"
-    @ls -lh target/release/keystone-*
-
 # Quick development cycle (format + build + test)
 dev: fmt build test
     @echo "✅ Development cycle complete!"
 
-# Full clean rebuild
-rebuild: clean build-release
-    @echo "✅ Clean rebuild complete!"
 
 # Vagrant VM Commands
 # ====================

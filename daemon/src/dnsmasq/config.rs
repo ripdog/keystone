@@ -9,7 +9,14 @@ use keystone_core::{
 /// Default dnsmasq configuration directory
 pub const DNSMASQ_CONF_DIR: &str = "/etc/dnsmasq.d";
 
-/// Keystone's dnsmasq configuration file
+/// Main dnsmasq configuration file.
+///
+/// Keystone takes full ownership of this file when dnsmasq is enabled.
+pub const DNSMASQ_MAIN_CONFIG_PATH: &str = "/etc/dnsmasq.conf";
+
+/// Keystone's dnsmasq configuration file (legacy).
+///
+/// Kept for now so we can remove it during migration.
 pub const DNSMASQ_CONFIG_PATH: &str = "/etc/dnsmasq.d/50-keystone.conf";
 
 /// Dnsmasq lease file location
@@ -193,8 +200,14 @@ fn generate_dhcp_ranges(lines: &mut Vec<String>, ranges: &[DnsmasqDhcpRange]) {
             continue;
         }
 
-        // Generate tag from interface name for filtering
-        let tag = format!("set:{}", range.interface.replace(['-', '.'], "_"));
+        // To scope pools per-interface, Keystone uses dnsmasq tags.
+        // dnsmasq itself does *not* automatically bind DHCP to a tagged interface,
+        // so we also emit `interface=<name>` to ensure DHCP is activated on that NIC.
+        lines.push(format!("interface={}", range.interface));
+
+        // Generate tag from interface name for filtering.
+        // Keep this consistent with `interface=<name>` so dnsmasq can match tags.
+        let tag = format!("set:{}", range.interface);
 
         // Build the dhcp-range line
         let mut parts = vec![tag.clone()];
@@ -496,7 +509,7 @@ mod tests {
         let config = generate_dnsmasq_config(&state);
 
         assert!(
-            config.contains("dhcp-range=set:br_lan,192.168.1.100,192.168.1.200,255.255.255.0,24h")
+            config.contains("dhcp-range=set:br-lan,192.168.1.100,192.168.1.200,255.255.255.0,24h")
         );
     }
 

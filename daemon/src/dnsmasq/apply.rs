@@ -8,7 +8,8 @@ use std::process::Command;
 use tracing::{info, warn};
 
 use super::config::{
-    DNSMASQ_CONF_DIR, DNSMASQ_CONFIG_PATH, DNSMASQ_LEASE_FILE, generate_dnsmasq_config,
+    DNSMASQ_CONF_DIR, DNSMASQ_CONFIG_PATH, DNSMASQ_LEASE_FILE, DNSMASQ_MAIN_CONFIG_PATH,
+    generate_dnsmasq_config,
 };
 use super::db::load_dnsmasq_state;
 
@@ -53,21 +54,13 @@ pub fn validate_dnsmasq_config() -> Result<()> {
     Ok(())
 }
 
-/// Reload the dnsmasq service
-pub fn reload_dnsmasq() -> Result<()> {
-    // First try SIGHUP reload (graceful)
-    let output = Command::new("systemctl")
-        .args(["reload", "dnsmasq"])
-        .output()
-        .context("Failed to execute systemctl reload dnsmasq")?;
-
-    if output.status.success() {
-        info!("dnsmasq reloaded successfully");
-        return Ok(());
-    }
-
-    // If reload fails, try restart
-    warn!("dnsmasq reload failed, attempting restart");
+/// Restart the dnsmasq service.
+///
+/// We intentionally prefer `restart` over `reload` here. In some environments
+/// (notably the Arch unit using `Type=dbus`), `systemctl reload` can succeed
+/// without dnsmasq re-reading updated config fragments under `/etc/dnsmasq.d/`,
+/// leading to DNS working but DHCP (udp/67) not being activated.
+pub fn restart_dnsmasq() -> Result<()> {
     let output = Command::new("systemctl")
         .args(["restart", "dnsmasq"])
         .output()
@@ -146,21 +139,52 @@ pub fn write_dnsmasq_config(content: &str) -> Result<()> {
     ensure_dnsmasq_dir()?;
     ensure_lease_dir()?;
 
-    fs::write(DNSMASQ_CONFIG_PATH, content)
-        .with_context(|| format!("Failed to write dnsmasq config to {}", DNSMASQ_CONFIG_PATH))?;
+    // Keystone owns the main config file. We intentionally do not rely on
+    // distro-specific includes of `/etc/dnsmasq.d`.
+    fs::write(DNSMASQ_MAIN_CONFIG_PATH, content).with_context(|| {
+        format!(
+            "Failed to write dnsmasq config to {}",
+            DNSMASQ_MAIN_CONFIG_PATH
+        )
+    })?;
 
-    info!("Wrote dnsmasq configuration to {}", DNSMASQ_CONFIG_PATH);
+    // Remove legacy drop-in file if present.
+    let legacy_path = Path::new(DNSMASQ_CONFIG_PATH);
+    if legacy_path.exists() {
+        fs::remove_file(legacy_path).with_context(|| {
+            format!(
+                "Failed to remove legacy dnsmasq config: {}",
+                DNSMASQ_CONFIG_PATH
+            )
+        })?;
+    }
+
+    info!(
+        "Wrote dnsmasq configuration to {}",
+        DNSMASQ_MAIN_CONFIG_PATH
+    );
     Ok(())
 }
 
-/// Remove the Keystone dnsmasq configuration file
+/// Remove Keystone-owned dnsmasq configuration
 pub fn remove_dnsmasq_config() -> Result<()> {
-    let path = Path::new(DNSMASQ_CONFIG_PATH);
+    let path = Path::new(DNSMASQ_MAIN_CONFIG_PATH);
     if path.exists() {
-        fs::remove_file(path)
-            .with_context(|| format!("Failed to remove dnsmasq config: {}", DNSMASQ_CONFIG_PATH))?;
+        fs::remove_file(path).with_context(|| {
+            format!(
+                "Failed to remove dnsmasq config: {}",
+                DNSMASQ_MAIN_CONFIG_PATH
+            )
+        })?;
         info!("Removed dnsmasq configuration file");
     }
+
+    // Best-effort cleanup of legacy config file too.
+    let legacy_path = Path::new(DNSMASQ_CONFIG_PATH);
+    if legacy_path.exists() {
+        let _ = fs::remove_file(legacy_path);
+    }
+
     Ok(())
 }
 
@@ -169,9 +193,9 @@ pub fn remove_dnsmasq_config() -> Result<()> {
 /// This function:
 /// 1. Loads configuration from database
 /// 2. Generates config file content
-/// 3. Writes to /etc/dnsmasq.d/50-keystone.conf
+/// 3. Writes to /etc/dnsmasq.conf (Keystone-owned)
 /// 4. Validates the configuration
-/// 5. Reloads dnsmasq service
+/// 5. Restarts dnsmasq service
 pub async fn apply_dnsmasq_config(pool: &SqlitePool) -> Result<()> {
     // Load complete state from database
     let state = load_dnsmasq_state(pool).await?;
@@ -193,9 +217,9 @@ pub async fn apply_dnsmasq_config(pool: &SqlitePool) -> Result<()> {
     // Validate configuration
     validate_dnsmasq_config()?;
 
-    // Enable and reload/restart service
+    // Enable and restart service
     enable_dnsmasq()?;
-    reload_dnsmasq()?;
+    restart_dnsmasq()?;
 
     info!("dnsmasq configuration applied successfully");
     Ok(())
@@ -225,7 +249,7 @@ pub fn get_dnsmasq_status() -> DnsmasqServiceStatus {
         .map(|s| s.success())
         .unwrap_or(false);
 
-    let config_exists = Path::new(DNSMASQ_CONFIG_PATH).exists();
+    let config_exists = Path::new(DNSMASQ_MAIN_CONFIG_PATH).exists();
 
     DnsmasqServiceStatus {
         running,

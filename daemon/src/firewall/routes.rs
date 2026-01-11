@@ -20,8 +20,11 @@ use keystone_core::{
     DeleteResponse, FirewallApplyResponse, FirewallConfigResponse, FirewallConfirmRequest,
     FirewallConfirmResponse, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
     FirewallRollbackResponse, FirewallStatusResponse, FirewallZone, FirewallZonesResponse,
-    ForwardRule, InputRule, PortForward, ReorderRulesRequest, ReorderRulesResponse,
-    SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, ZoneForwardPolicy,
+    ForwardRulesResponse, InputRulesResponse, PortForwardsResponse, ReorderRulesRequest,
+    ReorderRulesResponse, SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
+    SaveFirewallZoneRequest, SaveFirewallZoneResponse, SaveForwardRuleRequest,
+    SaveForwardRuleResponse, SaveInputRuleRequest, SaveInputRuleResponse, SavePortForwardRequest,
+    SavePortForwardResponse, SaveZoneForwardRequest, SaveZoneForwardResponse, ZoneForwardsResponse,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -105,33 +108,34 @@ async fn get_zone(
 /// POST /firewall/zones - Create or update a zone
 async fn save_zone(
     State(state): State<FirewallState>,
-    Json(zone): Json<FirewallZone>,
-) -> Result<Json<SaveResponse>, AppError> {
+    Json(request): Json<SaveFirewallZoneRequest>,
+) -> Result<Json<SaveFirewallZoneResponse>, AppError> {
+    let zone = request.zone;
     info!("Saving firewall zone: {}", zone.name);
 
     // Validate zone name
     if zone.name.is_empty() {
-        return Ok(Json(SaveResponse {
+        return Ok(Json(SaveFirewallZoneResponse {
             success: false,
             message: "Zone name is required".to_string(),
-            id: None,
+            zone_id: None,
         }));
     }
 
     // Reserved zone names
     if zone.name == "any" || zone.name == "local" {
-        return Ok(Json(SaveResponse {
+        return Ok(Json(SaveFirewallZoneResponse {
             success: false,
             message: format!("Zone name '{}' is reserved", zone.name),
-            id: None,
+            zone_id: None,
         }));
     }
 
     let id = state.db.save_firewall_zone(&zone).await?;
-    Ok(Json(SaveResponse {
+    Ok(Json(SaveFirewallZoneResponse {
         success: true,
         message: "Zone saved".to_string(),
-        id: Some(id),
+        zone_id: Some(id),
     }))
 }
 
@@ -159,27 +163,28 @@ async fn delete_zone(
 /// GET /firewall/zone-forwards - Get all zone-to-zone forward policies
 async fn get_zone_forwards(
     State(state): State<FirewallState>,
-) -> Result<Json<Vec<ZoneForwardPolicy>>, AppError> {
+) -> Result<Json<ZoneForwardsResponse>, AppError> {
     info!("Getting zone forwards");
     let forwards = state.db.get_zone_forwards().await?;
-    Ok(Json(forwards))
+    Ok(Json(ZoneForwardsResponse { forwards }))
 }
 
 /// POST /firewall/zone-forwards - Create or update a zone forward policy
 async fn save_zone_forward(
     State(state): State<FirewallState>,
-    Json(forward): Json<ZoneForwardPolicy>,
-) -> Result<Json<SaveResponse>, AppError> {
+    Json(request): Json<SaveZoneForwardRequest>,
+) -> Result<Json<SaveZoneForwardResponse>, AppError> {
+    let forward = request.forward;
     info!(
         "Saving zone forward: {} -> {}",
         forward.source_zone, forward.dest_zone
     );
 
     let id = state.db.save_zone_forward(&forward).await?;
-    Ok(Json(SaveResponse {
+    Ok(Json(SaveZoneForwardResponse {
         success: true,
         message: "Zone forward saved".to_string(),
-        id: Some(id),
+        forward_id: Some(id),
     }))
 }
 
@@ -207,32 +212,33 @@ async fn delete_zone_forward(
 /// GET /firewall/input-rules - Get all input rules
 async fn get_input_rules(
     State(state): State<FirewallState>,
-) -> Result<Json<Vec<InputRule>>, AppError> {
+) -> Result<Json<InputRulesResponse>, AppError> {
     info!("Getting input rules");
     let rules = state.db.get_input_rules().await?;
-    Ok(Json(rules))
+    Ok(Json(InputRulesResponse { rules }))
 }
 
 /// POST /firewall/input-rules - Create or update an input rule
 async fn save_input_rule(
     State(state): State<FirewallState>,
-    Json(rule): Json<InputRule>,
-) -> Result<Json<SaveResponse>, AppError> {
+    Json(request): Json<SaveInputRuleRequest>,
+) -> Result<Json<SaveInputRuleResponse>, AppError> {
+    let rule = request.rule;
     info!("Saving input rule: {}", rule.name);
 
     if rule.name.is_empty() {
-        return Ok(Json(SaveResponse {
+        return Ok(Json(SaveInputRuleResponse {
             success: false,
             message: "Rule name is required".to_string(),
-            id: None,
+            rule_id: None,
         }));
     }
 
     let id = state.db.save_input_rule(&rule).await?;
-    Ok(Json(SaveResponse {
+    Ok(Json(SaveInputRuleResponse {
         success: true,
         message: "Input rule saved".to_string(),
-        id: Some(id),
+        rule_id: Some(id),
     }))
 }
 
@@ -282,32 +288,33 @@ async fn reorder_input_rules(
 /// GET /firewall/forward-rules - Get all forward rules
 async fn get_forward_rules(
     State(state): State<FirewallState>,
-) -> Result<Json<Vec<ForwardRule>>, AppError> {
+) -> Result<Json<ForwardRulesResponse>, AppError> {
     info!("Getting forward rules");
     let rules = state.db.get_forward_rules().await?;
-    Ok(Json(rules))
+    Ok(Json(ForwardRulesResponse { rules }))
 }
 
 /// POST /firewall/forward-rules - Create or update a forward rule
 async fn save_forward_rule(
     State(state): State<FirewallState>,
-    Json(rule): Json<ForwardRule>,
-) -> Result<Json<SaveResponse>, AppError> {
+    Json(request): Json<SaveForwardRuleRequest>,
+) -> Result<Json<SaveForwardRuleResponse>, AppError> {
+    let rule = request.rule;
     info!("Saving forward rule: {}", rule.name);
 
     if rule.name.is_empty() {
-        return Ok(Json(SaveResponse {
+        return Ok(Json(SaveForwardRuleResponse {
             success: false,
             message: "Rule name is required".to_string(),
-            id: None,
+            rule_id: None,
         }));
     }
 
     let id = state.db.save_forward_rule(&rule).await?;
-    Ok(Json(SaveResponse {
+    Ok(Json(SaveForwardRuleResponse {
         success: true,
         message: "Forward rule saved".to_string(),
-        id: Some(id),
+        rule_id: Some(id),
     }))
 }
 
@@ -355,40 +362,41 @@ async fn reorder_forward_rules(
 /// GET /firewall/port-forwards - Get all port forwards
 async fn get_port_forwards(
     State(state): State<FirewallState>,
-) -> Result<Json<Vec<PortForward>>, AppError> {
+) -> Result<Json<PortForwardsResponse>, AppError> {
     info!("Getting port forwards");
-    let pfs = state.db.get_port_forwards().await?;
-    Ok(Json(pfs))
+    let port_forwards = state.db.get_port_forwards().await?;
+    Ok(Json(PortForwardsResponse { port_forwards }))
 }
 
 /// POST /firewall/port-forwards - Create or update a port forward
 async fn save_port_forward(
     State(state): State<FirewallState>,
-    Json(pf): Json<PortForward>,
-) -> Result<Json<SaveResponse>, AppError> {
+    Json(request): Json<SavePortForwardRequest>,
+) -> Result<Json<SavePortForwardResponse>, AppError> {
+    let pf = request.port_forward;
     info!("Saving port forward: {}", pf.name);
 
     if pf.name.is_empty() {
-        return Ok(Json(SaveResponse {
+        return Ok(Json(SavePortForwardResponse {
             success: false,
             message: "Port forward name is required".to_string(),
-            id: None,
+            port_forward_id: None,
         }));
     }
 
     if pf.dest_ip.is_empty() {
-        return Ok(Json(SaveResponse {
+        return Ok(Json(SavePortForwardResponse {
             success: false,
             message: "Destination IP is required".to_string(),
-            id: None,
+            port_forward_id: None,
         }));
     }
 
     let id = state.db.save_port_forward(&pf).await?;
-    Ok(Json(SaveResponse {
+    Ok(Json(SavePortForwardResponse {
         success: true,
         message: "Port forward saved".to_string(),
-        id: Some(id),
+        port_forward_id: Some(id),
     }))
 }
 
@@ -519,16 +527,4 @@ async fn firewall_status(
 ) -> Result<Json<FirewallStatusResponse>, AppError> {
     let status = state.apply_manager.status().await;
     Ok(Json(status))
-}
-
-// ============================================================================
-// Helper Types
-// ============================================================================
-
-/// Generic save response
-#[derive(serde::Serialize)]
-struct SaveResponse {
-    success: bool,
-    message: String,
-    id: Option<i64>,
 }

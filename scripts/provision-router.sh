@@ -30,20 +30,40 @@ net.ipv6.conf.all.forwarding = 1
 EOF
 sysctl -p /etc/sysctl.d/99-keystone-router.conf
 
-# 4. Enable systemd-networkd (keystone uses this)
+# 4. Disable systemd-resolved so dnsmasq can bind :53
+# Arch enables systemd-resolved by default, which occupies 127.0.0.53:53.
+echo "Disabling systemd-resolved (dnsmasq needs port 53)..."
+systemctl disable --now systemd-resolved || true
+systemctl mask systemd-resolved || true
+rm -f /etc/resolv.conf
+cat > /etc/resolv.conf << 'EOF'
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+EOF
+
+# 5. Enable systemd-networkd (keystone uses this)
 echo "Enabling systemd-networkd..."
 systemctl enable systemd-networkd
 systemctl start systemd-networkd
 
-# 5. Create keystone directories
+# 6. Create keystone directories
 echo "Creating keystone directories..."
 mkdir -p /var/lib/keystone
 mkdir -p /etc/keystone
 
-# 6. Ensure LAN interface is up with the right IP
+# 6. Configure LAN interface (eth1) persistently with systemd-networkd
 echo "Configuring LAN interface..."
-ip addr show eth1 | grep -q "192.168.100.1" || ip addr add 192.168.100.1/24 dev eth1
-ip link set eth1 up
+cat > /etc/systemd/network/eth1.network << 'EOF'
+[Match]
+Name=eth1
+
+[Network]
+Address=192.168.100.1/24
+EOF
+# Reload networkd to apply the configuration
+systemctl restart systemd-networkd
+# Wait for interface to come up
+sleep 2
 
 echo ""
 echo "=== Provisioning Complete ==="

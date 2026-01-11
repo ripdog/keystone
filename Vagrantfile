@@ -24,6 +24,10 @@
 # - All test traffic goes through eth1 -> router -> internet
 # - Firewall rules tested on LAN traffic, not management traffic
 #
+# NOTE: We use :auto_config => false to prevent libvirt from assigning
+# an IP to the host bridge, which would conflict with the router VM.
+# IPs are configured in the provisioning scripts instead.
+#
 
 Vagrant.configure("2") do |config|
   
@@ -42,12 +46,12 @@ Vagrant.configure("2") do |config|
     
     # NETWORK 2: LAN (private network for client VMs)
     # Router acts as gateway for this network
+    # auto_config: false prevents host bridge IP conflict with router's 192.168.100.1
     router.vm.network :private_network,
-      :ip => "192.168.100.1",
       :libvirt__network_name => "keystone-lan",
-      :libvirt__netmask => "255.255.255.0",
       :libvirt__dhcp_enabled => false,
-      :libvirt__forward_mode => "none"  # Isolated - router handles NAT
+      :libvirt__forward_mode => "none",  # Isolated - router handles NAT
+      :auto_config => false
     
     # Provisioning
     router.vm.provision "shell", path: "scripts/provision-router.sh"
@@ -68,13 +72,12 @@ Vagrant.configure("2") do |config|
     
     # NETWORK: LAN (same network as router's eth1)
     # Client will get DHCP from router's dnsmasq on this interface
-    # We set a static IP here for Vagrant, but the client will use DHCP in practice
+    # auto_config: false - IP is configured in provisioning
     client.vm.network :private_network,
-      :ip => "192.168.100.10",
       :libvirt__network_name => "keystone-lan",
-      :libvirt__netmask => "255.255.255.0",
       :libvirt__dhcp_enabled => false,
-      :libvirt__forward_mode => "none"
+      :libvirt__forward_mode => "none",
+      :auto_config => false
     
     # Provisioning
     client.vm.provision "shell", path: "scripts/provision-client.sh"

@@ -85,10 +85,8 @@ async fn advance_wizard(
             // Just need to acknowledge the welcome screen
         }
         WizardStep::PasswordChanged => {
-            // Password was changed; proceed to system checks.
-        }
-        WizardStep::SystemChecksCompleted => {
-            // Check that system checks pass before allowing to proceed to interface assignment
+            // Password was changed; only allow proceeding if system checks pass.
+            // Never trust the client to have run checks.
             let status = status::perform_all_checks(settings.setup_complete);
             if !status.all_checks_pass {
                 return Ok(Json(WizardAdvanceResponse {
@@ -100,9 +98,12 @@ async fn advance_wizard(
                     new_step: current_step,
                 }));
             }
+        }
+        WizardStep::SystemChecksCompleted => {
+            // System checks were already performed in the previous screen.
+            // Don't re-run them here; this step is about interface assignment.
 
-            // Check that at least one interface is configured
-            // Check that at least one interface is configured
+            // Require that at least one firewall zone exists (wizard creates wan/lan).
             let zones = db.get_firewall_zones().await?;
             if zones.is_empty() {
                 return Ok(Json(WizardAdvanceResponse {

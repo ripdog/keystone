@@ -394,8 +394,7 @@ async fn auth_middleware(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if !settings.setup_complete {
-        let blocked_pre_setup = path == "/state"
-            || path == "/dashboard"
+        let blocked_pre_setup = path == "/dashboard"
             || path == "/apply"
             || path == "/apply-networkd"
             || path == "/apply-all"

@@ -254,11 +254,29 @@ impl<'a> InterfacesDb<'a> {
             .context("Failed to update interface config")?;
             id
         } else {
-            // Insert new
-            let result = sqlx::query(
-                r#"INSERT INTO interface_config 
+            // Insert new (or replace existing by interface_name)
+            //
+            // The wizard and other callers may send configs without `id` even if
+            // a row already exists. Since `interface_name` is UNIQUE, use an
+            // upsert keyed on `interface_name`.
+            let _result = sqlx::query(
+                r#"INSERT INTO interface_config
                    (interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy, mtu, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(interface_name) DO UPDATE SET
+                     role = excluded.role,
+                     enabled = excluded.enabled,
+                     description = excluded.description,
+                     dhcp_mode = excluded.dhcp_mode,
+                     gateway = excluded.gateway,
+                     ipv6_accept_ra = excluded.ipv6_accept_ra,
+                     ip_forward = excluded.ip_forward,
+                     ip_masquerade = excluded.ip_masquerade,
+                     link_local = excluded.link_local,
+                     required_for_online = excluded.required_for_online,
+                     activation_policy = excluded.activation_policy,
+                     mtu = excluded.mtu,
+                     updated_at = excluded.updated_at"#,
             )
             .bind(&config.name)
             .bind(config.role.to_string())
@@ -277,8 +295,17 @@ impl<'a> InterfacesDb<'a> {
             .bind(now)
             .execute(&mut *tx)
             .await
-            .context("Failed to insert interface config")?;
-            result.last_insert_rowid()
+            .context("Failed to upsert interface config")?;
+
+            let id_row: Option<(i64,)> =
+                sqlx::query_as("SELECT id FROM interface_config WHERE interface_name = ?")
+                    .bind(&config.name)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+
+            id_row
+                .map(|(id,)| id)
+                .ok_or_else(|| anyhow::anyhow!("Upsert did not create interface config"))?
         };
 
         // Clear and re-insert addresses

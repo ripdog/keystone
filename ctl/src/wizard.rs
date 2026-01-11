@@ -8,9 +8,10 @@ use console::{Term, style};
 use inquire::{Confirm, MultiSelect, Password, PasswordDisplayMode, Select, Text};
 use keystone_core::{
     DashboardResponse, InterfaceRole, LoginRequest, LoginResponse, SaveUserRequest,
-    SaveUserResponse, SystemStatusResponse, WizardAdvanceRequest, WizardAdvanceResponse,
-    WizardInterfaceAssignment, WizardSaveInterfacesRequest, WizardSaveInterfacesResponse,
-    WizardSkipRequest, WizardSkipResponse, WizardState, WizardStateResponse, WizardStep,
+    SaveUserResponse, SystemState, SystemStatusResponse, WizardAdvanceRequest,
+    WizardAdvanceResponse, WizardInterfaceAssignment, WizardSaveInterfacesRequest,
+    WizardSaveInterfacesResponse, WizardSkipRequest, WizardSkipResponse, WizardState,
+    WizardStateResponse, WizardStep,
 };
 
 use crate::client::DaemonClient;
@@ -118,6 +119,11 @@ pub async fn run_wizard(client: &DaemonClient) -> Result<()> {
         println!();
         system_checks_step(client, &token).await?;
         current_step = advance_wizard(client, &token, WizardStep::PasswordChanged).await?;
+    }
+
+    // Refresh wizard state after advancing.
+    if current_step == WizardStep::SystemChecksCompleted {
+        current_step = get_wizard_state(client, &token).await?.current_step;
     }
 
     // Step 3: Interface assignment
@@ -287,6 +293,7 @@ async fn change_password_step(client: &DaemonClient, token: &str) -> Result<()> 
         let new_password = Password::new("New password:")
             .with_display_mode(PasswordDisplayMode::Masked)
             .with_help_message("At least 8 characters")
+            .without_confirmation()
             .prompt()?;
 
         if new_password.len() < 8 {
@@ -299,6 +306,7 @@ async fn change_password_step(client: &DaemonClient, token: &str) -> Result<()> 
 
         let confirm_password = Password::new("Confirm password:")
             .with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation()
             .prompt()?;
 
         if new_password != confirm_password {
@@ -331,12 +339,12 @@ async fn change_password_step(client: &DaemonClient, token: &str) -> Result<()> 
 }
 
 /// Step 2: System requirements check
-async fn system_checks_step(client: &DaemonClient, _token: &str) -> Result<()> {
+async fn system_checks_step(client: &DaemonClient, token: &str) -> Result<()> {
     println!("{}", style("Checking system requirements...").dim());
     println!();
 
     loop {
-        let response: SystemStatusResponse = client.get("/status", Some(_token)).await?;
+        let response: SystemStatusResponse = client.get("/system-status", Some(token)).await?;
 
         // Display checks
         for check in &response.checks {
@@ -397,8 +405,10 @@ async fn interface_assignment_step(client: &DaemonClient, token: &str) -> Result
     println!();
 
     // Get available interfaces
-    let dashboard: DashboardResponse = client.get("/dashboard", Some(token)).await?;
-    let interfaces = dashboard.state.interfaces;
+    // During initial setup `/dashboard` is blocked until setup is complete.
+    // Use `/state` instead to list interfaces without traffic counters.
+    let state: SystemState = client.get("/state", Some(token)).await?;
+    let interfaces = state.interfaces;
 
     if interfaces.is_empty() {
         anyhow::bail!("No network interfaces found!");

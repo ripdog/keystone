@@ -221,7 +221,7 @@ pub enum FirewallCommands {
         token: Option<String>,
 
         /// Session ID from apply command
-        #[arg(short, long)]
+        #[arg(long)]
         session_id: String,
     },
 
@@ -280,6 +280,9 @@ pub enum ZonesCommands {
 
     /// Add a new firewall zone
     Add {
+        /// Zone ID to update (optional)
+        #[arg(long)]
+        id: Option<i64>,
         /// JWT token for authentication
         #[arg(short, long, env = "KEYSTONE_TOKEN")]
         token: Option<String>,

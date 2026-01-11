@@ -108,7 +108,20 @@ impl DaemonClient {
         self.request("POST", path, Some(body), token).await
     }
 
-    pub async fn delete<T: DeserializeOwned>(
+    pub async fn put<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+        token: Option<&str>,
+    ) -> Result<T> {
+        self.request("PUT", path, Some(body), token).await
+    }
+
+    pub async fn delete<T: DeserializeOwned>(&self, path: &str, token: Option<&str>) -> Result<T> {
+        self.request::<T>("DELETE", path, None::<&()>, token).await
+    }
+
+    pub async fn delete_with_body<T: DeserializeOwned>(
         &self,
         path: &str,
         body: &impl Serialize,
@@ -127,12 +140,22 @@ impl<'a> AuthedDaemonClient<'a> {
         self.client.post(path, body, Some(&self.token)).await
     }
 
-    pub async fn delete<T: DeserializeOwned>(
+    pub async fn put<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T> {
+        self.client.put(path, body, Some(&self.token)).await
+    }
+
+    pub async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.client.delete(path, Some(&self.token)).await
+    }
+
+    pub async fn delete_with_body<T: DeserializeOwned>(
         &self,
         path: &str,
         body: &impl Serialize,
     ) -> Result<T> {
-        self.client.delete(path, body, Some(&self.token)).await
+        self.client
+            .delete_with_body(path, body, Some(&self.token))
+            .await
     }
 }
 

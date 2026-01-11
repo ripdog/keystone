@@ -25,6 +25,7 @@ pub async fn handle_firewall_command(
 
             ZonesCommands::Add {
                 token,
+                id,
                 name,
                 description,
                 interfaces,
@@ -44,7 +45,7 @@ pub async fn handle_firewall_command(
                     .map_err(|e: String| anyhow::anyhow!(e))?;
 
                 let zone = FirewallZone {
-                    id: None,
+                    id,
                     name,
                     description,
                     interfaces: interfaces_vec,
@@ -63,9 +64,8 @@ pub async fn handle_firewall_command(
 
             ZonesCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
-                let request = DeleteFirewallZoneRequest { id };
                 let response: DeleteFirewallZoneResponse =
-                    authed.delete("/firewall/zones", &request).await?;
+                    authed.delete(&format!("/firewall/zones/{}", id)).await?;
                 output(cli_json, &response, pretty::delete_zone);
                 if !response.success {
                     std::process::exit(1);
@@ -110,9 +110,9 @@ pub async fn handle_firewall_command(
 
             ZoneForwardsCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
-                let request = DeleteZoneForwardRequest { id };
-                let response: DeleteZoneForwardResponse =
-                    authed.delete("/firewall/zone-forwards", &request).await?;
+                let response: DeleteZoneForwardResponse = authed
+                    .delete(&format!("/firewall/zone-forwards/{}", id))
+                    .await?;
                 output(cli_json, &response, pretty::delete_zone_forward);
                 if !response.success {
                     std::process::exit(1);
@@ -169,9 +169,9 @@ pub async fn handle_firewall_command(
 
             PortForwardsCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
-                let request = DeletePortForwardRequest { id };
-                let response: DeletePortForwardResponse =
-                    authed.delete("/firewall/port-forwards", &request).await?;
+                let response: DeletePortForwardResponse = authed
+                    .delete(&format!("/firewall/port-forwards/{}", id))
+                    .await?;
                 output(cli_json, &response, pretty::delete_port_forward);
                 if !response.success {
                     std::process::exit(1);
@@ -238,9 +238,9 @@ pub async fn handle_firewall_command(
 
             InputRulesCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
-                let request = DeleteInputRuleRequest { id };
-                let response: DeleteInputRuleResponse =
-                    authed.delete("/firewall/input-rules", &request).await?;
+                let response: DeleteInputRuleResponse = authed
+                    .delete(&format!("/firewall/input-rules/{}", id))
+                    .await?;
                 output(cli_json, &response, pretty::delete_input_rule);
                 if !response.success {
                     std::process::exit(1);
@@ -311,9 +311,9 @@ pub async fn handle_firewall_command(
 
             ForwardRulesCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
-                let request = DeleteForwardRuleRequest { id };
-                let response: DeleteForwardRuleResponse =
-                    authed.delete("/firewall/forward-rules", &request).await?;
+                let response: DeleteForwardRuleResponse = authed
+                    .delete(&format!("/firewall/forward-rules/{}", id))
+                    .await?;
                 output(cli_json, &response, pretty::delete_forward_rule);
                 if !response.success {
                     std::process::exit(1);

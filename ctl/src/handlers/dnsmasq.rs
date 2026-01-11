@@ -18,14 +18,14 @@ pub async fn handle_dnsmasq_command(
     match subcmd {
         DnsmasqCommands::State { token } => {
             let authed = client.authed(get_token(token)?);
-            let response: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+            let response: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
             output(cli_json, &response, pretty::dnsmasq_state);
         }
 
         DnsmasqCommands::Config(config_cmd) => match config_cmd {
             DnsmasqConfigCommands::Get { token } => {
                 let authed = client.authed(get_token(token)?);
-                let response: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+                let response: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
                 output(cli_json, &response.config, pretty::dnsmasq_config);
             }
 
@@ -41,7 +41,7 @@ pub async fn handle_dnsmasq_command(
             } => {
                 let authed = client.authed(get_token(token)?);
 
-                let current: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+                let current: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
 
                 let upstream = match upstream_mode.as_deref() {
                     Some("system") => Some(DnsmasqUpstreamMode::System),
@@ -77,7 +77,7 @@ pub async fn handle_dnsmasq_command(
 
                 let request = SaveDnsmasqConfigRequest { config };
                 let response: SaveDnsmasqConfigResponse =
-                    authed.post("/dnsmasq/config", &request).await?;
+                    authed.put("/dnsmasq/config", &request).await?;
                 output(cli_json, &response, pretty::save_dnsmasq_config);
                 if !response.success {
                     std::process::exit(1);
@@ -88,7 +88,7 @@ pub async fn handle_dnsmasq_command(
         DnsmasqCommands::Ranges(ranges_cmd) => match ranges_cmd {
             DhcpRangeCommands::List { token } => {
                 let authed = client.authed(get_token(token)?);
-                let response: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+                let response: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
                 output_slice(cli_json, &response.dhcp_ranges, pretty::dhcp_ranges);
             }
 
@@ -126,9 +126,8 @@ pub async fn handle_dnsmasq_command(
 
             DhcpRangeCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
-                let request = DeleteDhcpRangeRequest { id };
                 let response: serde_json::Value =
-                    authed.delete("/dnsmasq/ranges", &request).await?;
+                    authed.delete(&format!("/dnsmasq/ranges/{}", id)).await?;
 
                 let success = response
                     .get("success")
@@ -157,7 +156,7 @@ pub async fn handle_dnsmasq_command(
         DnsmasqCommands::Leases(leases_cmd) => match leases_cmd {
             StaticLeaseCommands::List { token } => {
                 let authed = client.authed(get_token(token)?);
-                let response: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+                let response: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
                 output_slice(cli_json, &response.static_leases, pretty::static_leases);
             }
 
@@ -181,7 +180,7 @@ pub async fn handle_dnsmasq_command(
                 };
                 let request = SaveStaticLeaseRequest { lease };
                 let response: SaveStaticLeaseResponse =
-                    authed.post("/dnsmasq/static-leases", &request).await?;
+                    authed.post("/dnsmasq/leases", &request).await?;
                 output(cli_json, &response, pretty::save_static_lease);
                 if !response.success {
                     std::process::exit(1);
@@ -190,9 +189,8 @@ pub async fn handle_dnsmasq_command(
 
             StaticLeaseCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
-                let request = DeleteStaticLeaseRequest { id };
                 let response: serde_json::Value =
-                    authed.delete("/dnsmasq/static-leases", &request).await?;
+                    authed.delete(&format!("/dnsmasq/leases/{}", id)).await?;
 
                 let success = response
                     .get("success")
@@ -221,7 +219,7 @@ pub async fn handle_dnsmasq_command(
         DnsmasqCommands::Options(options_cmd) => match options_cmd {
             DhcpOptionCommands::List { token } => {
                 let authed = client.authed(get_token(token)?);
-                let response: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+                let response: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
                 output_slice(cli_json, &response.dhcp_options, pretty::dhcp_options);
             }
 
@@ -247,7 +245,7 @@ pub async fn handle_dnsmasq_command(
                 };
                 let request = SaveDhcpOptionRequest { option: opt };
                 let response: SaveDhcpOptionResponse = client
-                    .post("/dnsmasq/dhcp-options", &request, Some(&token))
+                    .post("/dnsmasq/options", &request, Some(&token))
                     .await?;
                 output(cli_json, &response, pretty::save_dhcp_option);
                 if !response.success {
@@ -256,10 +254,9 @@ pub async fn handle_dnsmasq_command(
             }
 
             DhcpOptionCommands::Delete { token, id } => {
-                let token = get_token(token)?;
-                let request = DeleteDhcpOptionRequest { id };
-                let response: serde_json::Value = client
-                    .delete("/dnsmasq/dhcp-options", &request, Some(&token))
+                let authed = client.authed(get_token(token)?);
+                let response: serde_json::Value = authed
+                    .delete(&format!("/dnsmasq/options/{id}", id = id))
                     .await?;
 
                 let success = response
@@ -289,7 +286,7 @@ pub async fn handle_dnsmasq_command(
         DnsmasqCommands::Hosts(hosts_cmd) => match hosts_cmd {
             HostRecordCommands::List { token } => {
                 let authed = client.authed(get_token(token)?);
-                let response: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+                let response: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
                 output_slice(cli_json, &response.host_records, pretty::host_records);
             }
 
@@ -327,7 +324,7 @@ pub async fn handle_dnsmasq_command(
 
                 let request = SaveHostRecordRequest { record };
                 let response: SaveHostRecordResponse = client
-                    .post("/dnsmasq/host-records", &request, Some(&token))
+                    .post("/dnsmasq/hosts", &request, Some(&token))
                     .await?;
                 output(cli_json, &response, pretty::save_host_record);
                 if !response.success {
@@ -336,10 +333,9 @@ pub async fn handle_dnsmasq_command(
             }
 
             HostRecordCommands::Delete { token, id } => {
-                let token = get_token(token)?;
-                let request = DeleteHostRecordRequest { id };
-                let response: serde_json::Value = client
-                    .delete("/dnsmasq/host-records", &request, Some(&token))
+                let authed = client.authed(get_token(token)?);
+                let response: serde_json::Value = authed
+                    .delete(&format!("/dnsmasq/hosts/{id}", id = id))
                     .await?;
 
                 let success = response
@@ -369,7 +365,7 @@ pub async fn handle_dnsmasq_command(
         DnsmasqCommands::Cnames(cnames_cmd) => match cnames_cmd {
             CnameRecordCommands::List { token } => {
                 let authed = client.authed(get_token(token)?);
-                let response: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+                let response: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
                 output_slice(cli_json, &response.cname_records, pretty::cname_records);
             }
 
@@ -390,7 +386,7 @@ pub async fn handle_dnsmasq_command(
 
                 let request = SaveCnameRecordRequest { record };
                 let response: SaveCnameRecordResponse = client
-                    .post("/dnsmasq/cname-records", &request, Some(&token))
+                    .post("/dnsmasq/cnames", &request, Some(&token))
                     .await?;
                 output(cli_json, &response, pretty::save_cname_record);
                 if !response.success {
@@ -399,10 +395,9 @@ pub async fn handle_dnsmasq_command(
             }
 
             CnameRecordCommands::Delete { token, id } => {
-                let token = get_token(token)?;
-                let request = DeleteCnameRecordRequest { id };
-                let response: serde_json::Value = client
-                    .delete("/dnsmasq/cname-records", &request, Some(&token))
+                let authed = client.authed(get_token(token)?);
+                let response: serde_json::Value = authed
+                    .delete(&format!("/dnsmasq/cnames/{id}", id = id))
                     .await?;
 
                 let success = response
@@ -432,7 +427,7 @@ pub async fn handle_dnsmasq_command(
         DnsmasqCommands::Overrides(overrides_cmd) => match overrides_cmd {
             AddressOverrideCommands::List { token } => {
                 let authed = client.authed(get_token(token)?);
-                let response: DnsmasqStateResponse = authed.get("/dnsmasq/state").await?;
+                let response: DnsmasqStateResponse = authed.get("/dnsmasq").await?;
                 output_slice(
                     cli_json,
                     &response.address_overrides,
@@ -476,7 +471,7 @@ pub async fn handle_dnsmasq_command(
                     override_entry: ovr,
                 };
                 let response: SaveAddressOverrideResponse = client
-                    .post("/dnsmasq/address-overrides", &request, Some(&token))
+                    .post("/dnsmasq/overrides", &request, Some(&token))
                     .await?;
                 output(cli_json, &response, pretty::save_address_override);
                 if !response.success {
@@ -485,10 +480,9 @@ pub async fn handle_dnsmasq_command(
             }
 
             AddressOverrideCommands::Delete { token, id } => {
-                let token = get_token(token)?;
-                let request = DeleteAddressOverrideRequest { id };
-                let response: serde_json::Value = client
-                    .delete("/dnsmasq/address-overrides", &request, Some(&token))
+                let authed = client.authed(get_token(token)?);
+                let response: serde_json::Value = authed
+                    .delete(&format!("/dnsmasq/overrides/{id}", id = id))
                     .await?;
 
                 let success = response
@@ -517,7 +511,7 @@ pub async fn handle_dnsmasq_command(
 
         DnsmasqCommands::ActiveLeases { token } => {
             let authed = client.authed(get_token(token)?);
-            let response: DhcpLeasesResponse = authed.get("/dnsmasq/leases").await?;
+            let response: DhcpLeasesResponse = authed.get("/dnsmasq/active-leases").await?;
             output(cli_json, &response, pretty::active_leases);
         }
 

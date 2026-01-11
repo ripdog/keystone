@@ -293,7 +293,8 @@ async fn main() -> Result<()> {
             UsersCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
                 let request = DeleteUserRequest { id };
-                let response: DeleteUserResponse = authed.delete("/users", &request).await?;
+                let response: DeleteUserResponse =
+                    authed.delete_with_body("/users", &request).await?;
                 output(cli.json, &response, pretty::delete_user);
                 if !response.success {
                     std::process::exit(1);

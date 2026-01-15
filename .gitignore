@@ -24,3 +24,15 @@ web-ui/pkg/
 
 /logs
 session-*
+
+# Local USB build artifacts
+*.iso
+
+# Arch package build artifacts
+/pkg/pkg/
+/pkg/*.pkg.tar.*
+/pkg/*.src.tar.*
+/pkg/*.log
+/pkg/*.sig
+/pkg/*.tar.zst
+/pkg/*.tar.gz

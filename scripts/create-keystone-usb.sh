@@ -32,6 +32,8 @@ CLEANUP_WORKDIR=false
 SKIP_CONFIRM=false
 HOSTNAME="keystone-router"
 MODE="create"  # create|upgrade-keystone
+RUN_TESTS=false
+FORCE_BUILD=false
 
 # Print colored output
 info() { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -64,6 +66,10 @@ REQUIRED (Upgrade mode):
   -U, --upgrade-keystone       Upgrade Keystone on an existing drive
   -d, --device <device>        Target USB device (e.g. /dev/sdb)
   -k, --keystone <pkg>          Keystone package (.pkg.tar.zst)
+
+OPTIONAL (Upgrade mode):
+  --build                      Build Keystone from repo sources (implies tests)
+  --test                       Run tests before installing
 
 OPTIONS:
   -k, --keystone <pkg>          Use pre-built Keystone package
@@ -113,6 +119,15 @@ parse_args() {
             -h|--hostname)
                 HOSTNAME="$2"
                 shift 2
+                ;;
+            --test)
+                RUN_TESTS=true
+                shift
+                ;;
+            --build)
+                FORCE_BUILD=true
+                RUN_TESTS=true
+                shift
                 ;;
             -w|--workdir)
                 WORKDIR="$2"
@@ -274,8 +289,8 @@ validate_requirements() {
         exit 1
     fi
 
-    if [[ "$MODE" == "upgrade-keystone" && -z "$KEYSTONE_PKG" ]]; then
-        error "Upgrade mode requires --keystone <pkg>"
+    if [[ "$MODE" == "upgrade-keystone" && "$FORCE_BUILD" == "false" && -z "$KEYSTONE_PKG" ]]; then
+        error "Upgrade mode requires --keystone <pkg> (or use --build)"
         exit 1
     fi
 
@@ -647,7 +662,7 @@ install_bootloader() {
 
 # Build keystone package if needed
 build_keystone_package() {
-    if [[ -n "$KEYSTONE_PKG" ]]; then
+    if [[ "$FORCE_BUILD" == "false" && -n "$KEYSTONE_PKG" ]]; then
         info "Using pre-built package: $KEYSTONE_PKG"
         return 0
     fi
@@ -673,6 +688,14 @@ build_keystone_package() {
     rsync -a --exclude='target' --exclude='.git' --exclude='*.iso' \
         "$(pwd)/" "$src_dest/"
     
+    if [[ "$RUN_TESTS" == "true" ]]; then
+        info "Running tests in chroot..."
+        arch-chroot "$WORKDIR/rootfs" bash -c "
+            cd /tmp/keystone-src
+            cargo test --all
+        "
+    fi
+
     # Build the package
     arch-chroot "$WORKDIR/rootfs" bash -c "
         cd /tmp/keystone-src/pkg
@@ -838,6 +861,7 @@ main() {
 
     if [[ "$MODE" == "upgrade-keystone" ]]; then
         mount_filesystems
+        build_keystone_package
         install_keystone
 
         CLEANUP_WORKDIR=false

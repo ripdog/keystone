@@ -72,12 +72,6 @@ impl<'a> SettingsDb<'a> {
         Ok(())
     }
 
-    /// Get current wizard step
-    pub async fn get_wizard_step(&self) -> Result<WizardStep> {
-        let settings = self.get_global_settings().await?;
-        Ok(WizardStep::from_u8(settings.wizard_step))
-    }
-
     /// Update wizard step
     pub async fn set_wizard_step(&self, step: WizardStep) -> Result<()> {
         let is_complete = step.is_complete();

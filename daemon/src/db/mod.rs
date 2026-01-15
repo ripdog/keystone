@@ -382,11 +382,6 @@ impl Database {
         self.settings().mark_setup_complete().await
     }
 
-    /// Get current wizard step
-    pub async fn get_wizard_step(&self) -> Result<WizardStep> {
-        self.settings().get_wizard_step().await
-    }
-
     /// Set wizard step
     pub async fn set_wizard_step(&self, step: WizardStep) -> Result<()> {
         self.settings().set_wizard_step(step).await

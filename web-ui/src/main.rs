@@ -25,7 +25,7 @@ use tower_http::services::ServeDir;
 use tracing::{error, info};
 
 #[cfg(feature = "server")]
-const DAEMON_SOCKET: &str = "/run/keystone.sock";
+const DAEMON_SOCKET: &str = "/run/keystone/keystone.sock";
 #[cfg(feature = "server")]
 const LISTEN_ADDR: &str = "0.0.0.0:8080";
 

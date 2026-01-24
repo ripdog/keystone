@@ -1,0 +1,62 @@
+post_install() {
+    echo "==> Creating keystone system user and group..."
+    systemd-sysusers
+
+    echo "==> Creating runtime directories..."
+    systemd-tmpfiles --create keystone.conf
+
+    echo "==> Setting permissions on /var/lib/keystone..."
+    chown -R root:keystone /var/lib/keystone 2>/dev/null || true
+    chmod 750 /var/lib/keystone 2>/dev/null || true
+
+    echo ""
+    echo "==> Keystone has been installed!"
+    echo ""
+    echo "    IMPORTANT: Default credentials are admin/admin - change immediately!"
+    echo ""
+    echo "    To start the services:"
+    echo "      # systemctl enable --now keystone-daemon"
+    echo "      # systemctl enable --now keystone-web-ui"
+    echo ""
+    echo "    The web UI will be available at http://localhost:8080"
+    echo ""
+    echo "    Configuration: /etc/keystone/"
+    echo "    Database: /var/lib/keystone/keystone.db"
+    echo "    Socket: /run/keystone/keystone.sock"
+    echo ""
+}
+
+post_upgrade() {
+    echo "==> Reloading systemd..."
+    systemctl daemon-reload
+
+    echo ""
+    echo "==> Keystone has been upgraded!"
+    echo ""
+    echo "    You may want to restart the services:"
+    echo "      # systemctl restart keystone-daemon keystone-web-ui"
+    echo ""
+}
+
+pre_remove() {
+    echo "==> Stopping Keystone services..."
+    systemctl stop keystone-web-ui 2>/dev/null || true
+    systemctl stop keystone-daemon 2>/dev/null || true
+    systemctl disable keystone-web-ui 2>/dev/null || true
+    systemctl disable keystone-daemon 2>/dev/null || true
+}
+
+post_remove() {
+    echo "==> Reloading systemd..."
+    systemctl daemon-reload
+
+    echo ""
+    echo "==> Keystone has been removed."
+    echo ""
+    echo "    The following files have been preserved:"
+    echo "      - /var/lib/keystone/ (database)"
+    echo "      - /etc/keystone/ (configuration)"
+    echo ""
+    echo "    Remove them manually if no longer needed."
+    echo ""
+}

@@ -7,11 +7,10 @@ use anyhow::Result;
 use console::{Term, style};
 use inquire::{Confirm, MultiSelect, Password, PasswordDisplayMode, Select, Text};
 use keystone_core::{
-    DashboardResponse, InterfaceRole, LoginRequest, LoginResponse, SaveUserRequest,
-    SaveUserResponse, SystemState, SystemStatusResponse, WizardAdvanceRequest,
-    WizardAdvanceResponse, WizardInterfaceAssignment, WizardSaveInterfacesRequest,
-    WizardSaveInterfacesResponse, WizardSkipRequest, WizardSkipResponse, WizardState,
-    WizardStateResponse, WizardStep,
+    InterfaceRole, LoginRequest, LoginResponse, SaveUserRequest, SaveUserResponse, SystemState,
+    SystemStatusResponse, WizardAdvanceRequest, WizardAdvanceResponse, WizardInterfaceAssignment,
+    WizardSaveInterfacesRequest, WizardSaveInterfacesResponse, WizardSkipRequest,
+    WizardSkipResponse, WizardState, WizardStateResponse, WizardStep,
 };
 
 use crate::client::DaemonClient;

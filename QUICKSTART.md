@@ -73,7 +73,7 @@ sudo target/release/keystone-daemon
 ```
 
 The daemon will:
-- Create Unix socket at `/run/keystone.sock`
+- Create Unix socket at `/run/keystone/keystone.sock`
 - Set permissions to 0660
 - Listen for configuration requests
 - Log to stdout
@@ -93,7 +93,7 @@ Open your browser to: **http://localhost:8080**
 
 ## API Endpoints
 
-### Daemon (Unix Socket: /run/keystone.sock)
+### Daemon (Unix Socket: /run/keystone/keystone.sock)
 - `GET /health` - Health check
 - `GET /state` - Get current system configuration
 - `POST /apply` - Apply new configuration
@@ -196,7 +196,7 @@ trunk serve  # Dev server with hot reload
 
 ### "Permission denied" on socket
 - Ensure daemon is running as root
-- Check socket permissions: `ls -l /run/keystone.sock`
+- Check socket permissions: `ls -l /run/keystone/keystone.sock`
 - Verify user is in correct group
 
 ### "Address already in use" (port 8080)

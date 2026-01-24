@@ -1,6 +1,6 @@
 //! keystonectl - Command-line interface for Keystone
 //!
-//! Communicates with the keystone-daemon over Unix socket at /run/keystone.sock
+//! Communicates with the keystone-daemon over Unix socket at /run/keystone/keystone.sock
 
 // CLI argument enums naturally have variant size differences - this is expected
 #![allow(clippy::large_enum_variant)]
@@ -31,7 +31,7 @@ use crate::token::get_token;
 
 use std::path::Path;
 
-pub const SOCKET_PATH: &str = "/run/keystone.sock";
+pub const SOCKET_PATH: &str = "/run/keystone/keystone.sock";
 
 pub fn state(state: &SystemState) {
     println!("=== System State ===\n");

@@ -1,0 +1,9 @@
+# Keystone Configuration
+# This file is optional - default values are used if not present
+
+# Daemon runtime settings
+
+# [daemon]
+# socket_path = "/run/keystone/keystone.sock"
+# socket_group = "keystone"
+# socket_mode = 0o660

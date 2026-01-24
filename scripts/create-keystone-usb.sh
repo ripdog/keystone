@@ -698,12 +698,12 @@ build_keystone_package() {
 
     # Build the package
     arch-chroot "$WORKDIR/rootfs" bash -c "
-        cd /tmp/keystone-src/pkg
+        cd /tmp/keystone-src
         makepkg -sf --noconfirm
     "
     
     # Find the built package
-    KEYSTONE_PKG=$(find "$WORKDIR/rootfs/tmp/keystone-src/pkg" -name '*.pkg.tar.zst' | head -1)
+    KEYSTONE_PKG=$(find "$WORKDIR/rootfs/tmp/keystone-src" -maxdepth 1 -name '*.pkg.tar.zst' | head -1)
     
     if [[ -z "$KEYSTONE_PKG" || ! -f "$KEYSTONE_PKG" ]]; then
         error "Failed to build keystone package"

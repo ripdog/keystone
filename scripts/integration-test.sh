@@ -296,7 +296,7 @@ if ! router_ssh_check "pgrep -f keystone-daemon"; then
 fi
 
 # Wait for socket + health endpoint (daemon can be alive but not ready yet)
-wait_for "Daemon socket" "router_ssh_check 'test -S /run/keystone.sock'" 60 3
+wait_for "Daemon socket" "router_ssh_check 'test -S /run/keystone/keystone.sock'" 60 3
 wait_for "Daemon health endpoint" "router_ssh_check 'sudo $KEYSTONECTL health --json >/dev/null 2>&1'" 60 3
 
 log_success "Daemon started"

@@ -155,7 +155,7 @@ Critical types:
 ### Daemon (`keystone-daemon`)
 
 - **Must run as root**: Check with `nix::unistd::Uid::effective().is_root()`
-- **Unix Socket**: Bind to `/run/keystone.sock`, permissions 0660
+- **Unix Socket**: Bind to `/run/keystone/keystone.sock`, permissions 0660
 - **API Endpoints**:
   - `GET /health` - Health check
   - `GET /state` - Return current `SystemState`

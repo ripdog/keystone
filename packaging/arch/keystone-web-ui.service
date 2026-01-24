@@ -1,0 +1,44 @@
+[Unit]
+Description=Keystone Web UI
+Documentation=https://github.com/example/keystone
+After=keystone-daemon.service
+Requires=keystone-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/keystone-web-ui
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/usr/share/keystone
+
+# Run as unprivileged user (privilege separation)
+User=keystone
+Group=keystone
+
+# Environment
+Environment=KEYSTONE_DIST_DIR=/usr/share/keystone/dist
+Environment=KEYSTONE_LISTEN_ADDR=0.0.0.0:8080
+
+# Security hardening
+ProtectHome=yes
+ProtectSystem=strict
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+# Allow reading from socket
+ReadOnlyPaths=/run/keystone
+
+# Network
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=keystone-web-ui
+
+[Install]
+WantedBy=multi-user.target

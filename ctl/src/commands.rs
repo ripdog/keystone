@@ -11,7 +11,7 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub json: bool,
 
-    /// Path to Unix socket (default: /run/keystone.sock)
+    /// Path to Unix socket (default: /run/keystone/keystone.sock)
     #[arg(short, long, global = true, default_value = SOCKET_PATH)]
     pub socket: String,
 

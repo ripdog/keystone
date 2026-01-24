@@ -1,7 +1,7 @@
 //! Keystone Daemon
 //!
 //! The privileged backend service that runs as root and performs system mutations.
-//! Listens only on a Unix Domain Socket at /run/keystone.sock for security.
+//! Listens only on a Unix Domain Socket for security.
 
 mod apply;
 mod auth;
@@ -44,7 +44,6 @@ use tower::ServiceExt;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
-const SOCKET_PATH: &str = "/run/keystone.sock";
 const DEV_HTTP_ADDR: &str = "127.0.0.1:3000";
 
 #[derive(Clone)]
@@ -86,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("This daemon requires root privileges");
     }
 
+
     // Initialize database
     let db = Database::new().await?;
     info!("Database initialized");
@@ -97,34 +97,31 @@ async fn main() -> anyhow::Result<()> {
     let auth_manager = Arc::new(AuthManager::new(jwt_key));
     info!("Authentication system initialized");
 
-    // Migrate from old config file if needed
-    if let Ok(old_config) = Config::load() {
-        // Check if we have any users in the database
-        let users = db.get_users().await?;
-        if users.is_empty() {
-            info!("Migrating admin user from config file");
-            // Create default admin user with the password from config
-            db.create_user("admin", None, &old_config.admin_password_hash)
-                .await?;
-            info!("Created admin user from config file");
-        }
-    } else {
-        // No config file, check if we need to create default user
-        let users = db.get_users().await?;
-        if users.is_empty() {
-            info!("Creating default admin user");
-            let default_hash = AuthManager::hash_password("admin")?;
-            db.create_user("admin", None, &default_hash).await?;
-            warn!(
-                "⚠️  Created default admin user with password 'admin' - CHANGE THIS IMMEDIATELY!"
-            );
+    let config = Config::load().unwrap_or_else(|err| {
+        warn!("Failed to load config file, using defaults: {}", err);
+        Config::default()
+    });
+
+    // Check if we have any users in the database
+    let users = db.get_users().await?;
+    if users.is_empty() {
+        info!("Creating default admin user");
+        let default_hash = AuthManager::hash_password("admin")?;
+        db.create_user("admin", None, &default_hash).await?;
+        warn!("⚠️  Created default admin user with password 'admin' - CHANGE THIS IMMEDIATELY!");
+    }
+
+    let socket_path = config.daemon.socket_path.clone();
+    if let Some(parent) = Path::new(&socket_path).parent() {
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            warn!("Failed to ensure runtime directory {}: {}", parent.display(), err);
         }
     }
 
     // Remove old socket if it exists
-    if Path::new(SOCKET_PATH).exists() {
-        warn!("Removing existing socket at {}", SOCKET_PATH);
-        std::fs::remove_file(SOCKET_PATH)?;
+    if Path::new(&socket_path).exists() {
+        warn!("Removing existing socket at {}", socket_path);
+        std::fs::remove_file(&socket_path)?;
     }
 
     // Create the firewall apply manager
@@ -220,38 +217,47 @@ async fn main() -> anyhow::Result<()> {
         axum::serve(listener, app).await?;
     } else {
         // Production mode: Unix socket only
-        info!("Binding to Unix socket: {}", SOCKET_PATH);
-        let listener = UnixListener::bind(SOCKET_PATH)?;
+        info!("Binding to Unix socket: {}", socket_path);
+        let listener = UnixListener::bind(&socket_path)?;
 
         // Set socket permissions (0660 - owner and group can read/write)
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(SOCKET_PATH, fs::Permissions::from_mode(0o660))?;
+        fs::set_permissions(
+            &socket_path,
+            fs::Permissions::from_mode(config.daemon.socket_mode),
+        )?;
 
-        // Set socket group to 'wheel' so non-root users in wheel group can access it
+        // Set socket group so non-root users can access it
         use std::ffi::CString;
         use std::os::unix::fs::MetadataExt;
 
-        let metadata = fs::metadata(SOCKET_PATH)?;
+        let metadata = fs::metadata(&socket_path)?;
         let uid = metadata.uid();
 
-        // Try to set group to 'wheel'
-        match nix::unistd::Group::from_name("wheel") {
+        // Try to set group from config
+        match nix::unistd::Group::from_name(&config.daemon.socket_group) {
             Ok(Some(group)) => {
-                let path_cstr = CString::new(SOCKET_PATH)?;
+                let path_cstr = CString::new(socket_path.clone())?;
                 let result = unsafe { libc::chown(path_cstr.as_ptr(), uid, group.gid.as_raw()) };
                 if result != 0 {
-                    warn!("Failed to set socket group to wheel");
+                    warn!(
+                        "Failed to set socket group to {}",
+                        config.daemon.socket_group
+                    );
                 } else {
-                    info!("Socket group set to wheel");
+                    info!("Socket group set to {}", config.daemon.socket_group);
                 }
             }
             _ => {
-                warn!("Could not find 'wheel' group, socket will be root:root only");
+                warn!(
+                    "Could not find '{}' group, socket will be root:root only",
+                    config.daemon.socket_group
+                );
             }
         }
 
-        info!("Daemon listening on {}", SOCKET_PATH);
+        info!("Daemon listening on {}", socket_path);
 
         // Serve the application using tower
         loop {

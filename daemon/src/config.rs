@@ -1,6 +1,6 @@
 //! Configuration file handling
 //!
-//! Reads keystone.toml which contains the admin password hash.
+//! Reads keystone.toml for daemon settings.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -13,8 +13,55 @@ const DEFAULT_CONFIG_PATH: &str = "/etc/keystone/keystone.toml";
 /// Keystone daemon configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Admin password hash (Argon2)
-    pub admin_password_hash: String,
+    /// Daemon-specific settings
+    #[serde(default)]
+    pub daemon: DaemonConfig,
+}
+
+/// Daemon-specific configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonConfig {
+    /// Unix socket path to bind
+    #[serde(default = "default_socket_path")]
+    pub socket_path: String,
+
+    /// Group name for the socket (permissions are set to socket_mode)
+    #[serde(default = "default_socket_group")]
+    pub socket_group: String,
+
+    /// Socket permissions (octal, e.g. 0o660)
+    #[serde(default = "default_socket_mode")]
+    pub socket_mode: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            daemon: DaemonConfig::default(),
+        }
+    }
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            socket_path: default_socket_path(),
+            socket_group: default_socket_group(),
+            socket_mode: default_socket_mode(),
+        }
+    }
+}
+
+fn default_socket_path() -> String {
+    "/run/keystone/keystone.sock".to_string()
+}
+
+fn default_socket_group() -> String {
+    "keystone".to_string()
+}
+
+fn default_socket_mode() -> u32 {
+    0o660
 }
 
 impl Config {
@@ -41,26 +88,12 @@ impl Config {
         Ok(config)
     }
 
-    /// Create a default configuration file with a default password
+    /// Create a default configuration file
     fn create_default(path: &str) -> Result<Self> {
-        use argon2::{
-            Argon2,
-            password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
-        };
-
-        warn!("Creating default config with password 'admin' - CHANGE THIS IMMEDIATELY!");
-
-        // Hash the default password "admin"
-        let password = "admin";
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        let hash = argon2
-            .hash_password(password.as_bytes(), &salt)
-            .map_err(|e| anyhow::anyhow!("Failed to hash default password: {}", e))?
-            .to_string();
+        warn!("Creating default config");
 
         let config = Config {
-            admin_password_hash: hash,
+            daemon: DaemonConfig::default(),
         };
 
         // Create directory if it doesn't exist
@@ -102,7 +135,7 @@ mod tests {
 
         let config = Config::create_default(config_path_str).unwrap();
 
-        assert!(!config.admin_password_hash.is_empty());
+        assert_eq!(config.daemon.socket_path, default_socket_path());
         assert!(Path::new(config_path_str).exists());
 
         // Clean up
@@ -111,25 +144,11 @@ mod tests {
 
     #[test]
     fn test_load_config() {
-        use argon2::{
-            Argon2,
-            password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
-        };
-
         let temp_dir = env::temp_dir();
         let config_path = temp_dir.join("test_keystone_load.toml");
         let config_path_str = config_path.to_str().unwrap();
-        // Create a test config
-        let password = "test123";
-        let salt = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
-        let hash = argon2
-            .hash_password(password.as_bytes(), &salt)
-            .unwrap()
-            .to_string();
-
         let test_config = Config {
-            admin_password_hash: hash.clone(),
+            daemon: DaemonConfig::default(),
         };
 
         let toml_content = toml::to_string_pretty(&test_config).unwrap();
@@ -137,7 +156,7 @@ mod tests {
 
         // Load it back
         let loaded = Config::load_from(config_path_str).unwrap();
-        assert_eq!(loaded.admin_password_hash, hash);
+        assert_eq!(loaded.daemon.socket_path, default_socket_path());
 
         // Clean up
         fs::remove_file(config_path_str).unwrap();

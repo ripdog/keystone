@@ -69,11 +69,21 @@ pub fn perform_all_checks(setup_complete: bool) -> SystemStatusResponse {
 
 /// Check if a command exists in PATH
 fn command_exists(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    if cmd.is_empty() {
+        return false;
+    }
+
+    if cmd.contains('/') {
+        return Path::new(cmd).is_file();
+    }
+
+    std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(cmd))
+                .find(|candidate| candidate.is_file())
+        })
+        .is_some()
 }
 
 /// Check if a systemd service is enabled
@@ -582,6 +592,11 @@ mod tests {
         assert!(command_exists("ls"));
         // This should not exist
         assert!(!command_exists("nonexistent_command_12345"));
+    }
+
+    #[test]
+    fn test_command_exists_with_path() {
+        assert!(command_exists("/bin/ls") || command_exists("/usr/bin/ls"));
     }
 
     #[test]

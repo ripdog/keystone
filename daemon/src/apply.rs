@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use keystone_core::{ApplyComponentResults, ComponentResult};
 use tracing::{error, info, warn};
 
@@ -190,86 +190,15 @@ pub async fn apply_all(
     })
 }
 
-/// Apply networkd configuration (interfaces, VLANs, bridges)
+/// Apply networkd configuration (interfaces, VLANs, bridges).
 async fn apply_networkd_config(db: &Database) -> Result<String> {
-    // Get all interface configs from database
     let configs = db.get_interface_configs().await?;
-
-    // Get all VLAN configs from database
     let vlans = db.get_all_vlans().await?;
-
-    // Get all bridge configs from database
     let bridges = db.get_all_bridges().await?;
-
-    // Ensure networkd directory exists
-    networkd::ensure_networkd_dir()?;
-
-    // Write all enabled configs to disk
-    let mut written = Vec::new();
-    let mut vlan_written = Vec::new();
-    let mut bridge_written = Vec::new();
-    let mut errors = Vec::new();
-
-    for config in &configs {
-        if config.enabled {
-            match networkd::write_network_file(config) {
-                Ok(()) => {
-                    written.push(config.name.clone());
-                }
-                Err(e) => {
-                    errors.push(format!("{}: {}", config.name, e));
-                }
-            }
-        } else {
-            // Remove disabled interface configs
-            if let Err(e) = networkd::remove_network_file(&config.name) {
-                warn!(
-                    "Failed to remove network file for disabled interface {}: {}",
-                    config.name, e
-                );
-            }
-        }
-    }
-
-    // Write all VLAN .netdev files
-    for vlan in &vlans {
-        match networkd::write_vlan_netdev_file(vlan) {
-            Ok(()) => {
-                vlan_written.push(vlan.name.clone());
-            }
-            Err(e) => {
-                errors.push(format!("VLAN {}: {}", vlan.name, e));
-            }
-        }
-    }
-
-    // Write all bridge .netdev files and member .network files
-    for bridge in &bridges {
-        match networkd::write_bridge_netdev_file(bridge) {
-            Ok(()) => {
-                bridge_written.push(bridge.name.clone());
-            }
-            Err(e) => {
-                errors.push(format!("Bridge {}: {}", bridge.name, e));
-            }
-        }
-        // Write bridge member .network files
-        if let Err(e) = networkd::write_bridge_member_network_files(bridge) {
-            errors.push(format!("Bridge {} members: {}", bridge.name, e));
-        }
-    }
-
-    if !errors.is_empty() {
-        anyhow::bail!("Failed to write config files: {}", errors.join("; "));
-    }
-
-    // Reload networkd to apply changes
-    networkd::reload_networkd().context("Config files written but reload failed")?;
+    let summary = networkd::apply_configuration(&configs, &vlans, &bridges)?;
 
     Ok(format!(
         "Applied {} interfaces, {} VLANs, {} bridges",
-        written.len(),
-        vlan_written.len(),
-        bridge_written.len()
+        summary.interfaces, summary.vlans, summary.bridges
     ))
 }

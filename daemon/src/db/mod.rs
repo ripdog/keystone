@@ -57,6 +57,18 @@ impl Database {
         Ok(db)
     }
 
+    #[cfg(test)]
+    pub async fn new_in_memory() -> Result<Self> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .context("Failed to create in-memory database")?;
+        let db = Self { pool };
+        db.run_migrations().await?;
+        Ok(db)
+    }
+
     /// Get a reference to the database pool
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
@@ -238,6 +250,11 @@ impl Database {
         self.firewall().get_firewall_zone(id).await
     }
 
+    /// Get a firewall zone by name.
+    pub async fn get_firewall_zone_by_name(&self, name: &str) -> Result<Option<FirewallZone>> {
+        self.firewall().get_firewall_zone_by_name(name).await
+    }
+
     /// Save (insert or update) a firewall zone
     pub async fn save_firewall_zone(&self, zone: &FirewallZone) -> Result<i64> {
         self.firewall().save_firewall_zone(zone).await
@@ -338,10 +355,25 @@ impl Database {
             .await
     }
 
-    /// Save rollback state for safe apply
+    /// Save the last successfully confirmed firewall configuration.
+    pub async fn save_active_firewall_config(&self, config: &FirewallConfig) -> Result<()> {
+        self.firewall().save_active_firewall_config(config).await
+    }
+
+    /// Get the last successfully confirmed firewall configuration.
+    pub async fn get_active_firewall_config(&self) -> Result<Option<FirewallConfig>> {
+        self.firewall().get_active_firewall_config().await
+    }
+
+    /// Clear the confirmed firewall configuration snapshot.
+    pub async fn clear_active_firewall_config(&self) -> Result<()> {
+        self.firewall().clear_active_firewall_config().await
+    }
+
+    /// Save rollback state for safe apply.
     pub async fn save_rollback_state(
         &self,
-        config: &FirewallConfig,
+        config: Option<&FirewallConfig>,
         rollback_at: i64,
     ) -> Result<()> {
         self.firewall()
@@ -349,8 +381,8 @@ impl Database {
             .await
     }
 
-    /// Get pending rollback state
-    pub async fn get_rollback_state(&self) -> Result<Option<(FirewallConfig, i64)>> {
+    /// Get pending rollback state.
+    pub async fn get_rollback_state(&self) -> Result<Option<(Option<FirewallConfig>, i64)>> {
         self.firewall().get_rollback_state().await
     }
 

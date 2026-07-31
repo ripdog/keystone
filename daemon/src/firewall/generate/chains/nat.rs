@@ -8,7 +8,7 @@ use crate::firewall::generate::statements::{
     create_daddr_match, create_dport_match, create_iif_match, create_protocol_match,
     create_saddr_match,
 };
-use crate::firewall::generate::{NAT_TABLE, find_wan_zones};
+use crate::firewall::generate::{NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones};
 use keystone_core::{FirewallConfig, PortForward, RuleProtocol};
 use nftables::{
     batch::Batch,
@@ -223,9 +223,9 @@ pub fn generate_postrouting_chain(
         ..Default::default()
     }));
 
-    // Find WAN zones for masquerading
     let wan_zones = find_wan_zones(&config.zones);
     let wan_zone_names: Vec<&str> = wan_zones.iter().map(|z| z.name.as_str()).collect();
+    let masquerade_zones = find_ipv4_masquerade_zones(&config.zones);
 
     // Collect LAN interfaces for hairpin NAT
     let mut lan_interfaces: Vec<String> = Vec::new();
@@ -266,8 +266,8 @@ pub fn generate_postrouting_chain(
         }
     }
 
-    // WAN masquerade rules
-    for zone in wan_zones {
+    // Explicit IPv4 egress masquerade rules.
+    for zone in masquerade_zones {
         for iface in &zone.interfaces {
             // TODO: MSS clamping is disabled due to nftables JSON generation issues
             // The nftables crate doesn't properly support tcp option maxseg mangling
@@ -335,6 +335,13 @@ fn create_masquerade_rule(interface: &str) -> Rule<'static> {
         table: Cow::Borrowed(NAT_TABLE),
         chain: Cow::Borrowed("postrouting"),
         expr: vec![
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                    key: MetaKey::Nfproto,
+                })),
+                right: Expression::String(Cow::Borrowed("ipv4")),
+                op: Operator::EQ,
+            }),
             Statement::Match(Match {
                 left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
                     key: MetaKey::Oifname,

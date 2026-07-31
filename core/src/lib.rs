@@ -392,7 +392,10 @@ pub struct Dhcpv6ClientConfig {
     pub use_ntp: bool,
     /// Use domains provided by DHCPv6 (yes/no/route)
     pub use_domains: String,
-    /// Request specific prefix for prefix delegation (CIDR notation, e.g., "::1/64")
+    /// Request delegated prefixes from the DHCPv6 server
+    #[serde(default = "default_true")]
+    pub use_delegated_prefix: bool,
+    /// Request specific prefix for prefix delegation (CIDR notation, e.g., "::/56")
     pub prefix_delegation_hint: Option<String>,
     /// Use DHCPv6 rapid commit (2-message exchange instead of 4)
     pub rapid_commit: bool,
@@ -407,6 +410,7 @@ impl Default for Dhcpv6ClientConfig {
             use_dns: true,
             use_ntp: true,
             use_domains: "yes".to_string(),
+            use_delegated_prefix: true,
             prefix_delegation_hint: None,
             rapid_commit: true,
             without_ra: "no".to_string(),
@@ -435,6 +439,28 @@ impl Default for Ipv6AcceptRaConfig {
             use_gateway: true,
             use_route_prefix: true,
             use_autonomous_prefix: true,
+        }
+    }
+}
+
+/// Assign a subnet from a delegated DHCPv6 prefix to this downstream interface.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DhcpPrefixDelegationConfig {
+    /// Interface that acquired the delegated prefix. `None` lets networkd auto-select.
+    pub uplink_interface: Option<String>,
+    /// Stable subnet identifier selected from the delegated prefix.
+    pub subnet_id: Option<u64>,
+    /// Advertise the delegated subnet through Router Advertisements.
+    #[serde(default = "default_true")]
+    pub announce: bool,
+}
+
+impl Default for DhcpPrefixDelegationConfig {
+    fn default() -> Self {
+        Self {
+            uplink_interface: None,
+            subnet_id: None,
+            announce: true,
         }
     }
 }
@@ -1312,8 +1338,14 @@ pub struct InterfaceConfig {
     /// IPv6 Accept RA client configuration (controls what to accept from RAs)
     #[serde(default)]
     pub ipv6_accept_ra_config: Option<Ipv6AcceptRaConfig>,
+    /// Send IPv6 Router Advertisements on this link.
+    #[serde(default)]
+    pub ipv6_send_ra: bool,
+    /// Assign and announce a subnet from an upstream delegated prefix.
+    #[serde(default)]
+    pub dhcp_prefix_delegation: Option<DhcpPrefixDelegationConfig>,
 
-    // Forwarding & NAT (typically for WAN interfaces)
+    // Forwarding & NAT (typically for router interfaces)
     /// IP forwarding mode
     pub ip_forward: IpForwardMode,
     /// IP masquerading (NAT) mode
@@ -1357,6 +1389,8 @@ impl Default for InterfaceConfig {
             dhcpv6_client: None,
             ipv6_accept_ra: true,
             ipv6_accept_ra_config: None,
+            ipv6_send_ra: false,
+            dhcp_prefix_delegation: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
             mtu: None,
@@ -1638,6 +1672,12 @@ pub struct FirewallZone {
     pub description: Option<String>,
     /// Interfaces belonging to this zone
     pub interfaces: Vec<String>,
+    /// Whether this is an Internet-facing zone.
+    #[serde(default)]
+    pub is_wan: bool,
+    /// Apply IPv4 source NAT to traffic leaving this zone.
+    #[serde(default)]
+    pub masquerade_ipv4: bool,
     /// Default policy for incoming traffic to the router
     pub default_input_policy: FirewallPolicy,
     /// Default policy for forwarded traffic from this zone
@@ -1651,6 +1691,8 @@ impl Default for FirewallZone {
             name: String::new(),
             description: None,
             interfaces: Vec::new(),
+            is_wan: false,
+            masquerade_ipv4: false,
             default_input_policy: FirewallPolicy::Drop,
             default_forward_policy: FirewallPolicy::Drop,
         }
@@ -2872,6 +2914,8 @@ pub struct WizardSaveInterfacesRequest {
 pub struct WizardSaveInterfacesResponse {
     pub success: bool,
     pub message: String,
+    /// Result of activating the generated router profile.
+    pub apply_result: Option<ApplyAllResponse>,
 }
 
 #[cfg(test)]
@@ -2901,6 +2945,8 @@ mod tests {
             name: "lan".to_string(),
             description: Some("Local network".to_string()),
             interfaces: vec!["eth1".to_string(), "eth2".to_string()],
+            is_wan: false,
+            masquerade_ipv4: false,
             default_input_policy: FirewallPolicy::Accept,
             default_forward_policy: FirewallPolicy::Accept,
         };
@@ -3046,12 +3092,15 @@ mod tests {
                 use_dns: true,
                 use_ntp: true,
                 use_domains: "yes".to_string(),
+                use_delegated_prefix: true,
                 prefix_delegation_hint: Some("::1/64".to_string()),
                 rapid_commit: true,
                 without_ra: "no".to_string(),
             }),
             ipv6_accept_ra: true,
             ipv6_accept_ra_config: None,
+            ipv6_send_ra: false,
+            dhcp_prefix_delegation: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::Ipv4,
             mtu: Some(1492),

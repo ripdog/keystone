@@ -27,6 +27,7 @@ serde_json.workspace = true
 
 # Error handling
 anyhow.workspace = true
+ipnet.workspace = true
 
 # Logging
 tracing.workspace = true

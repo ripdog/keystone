@@ -11,7 +11,7 @@ use tracing::{info, warn};
 const DEFAULT_CONFIG_PATH: &str = "/etc/keystone/keystone.toml";
 
 /// Keystone daemon configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     /// Daemon-specific settings
     #[serde(default)]
@@ -32,14 +32,6 @@ pub struct DaemonConfig {
     /// Socket permissions (octal, e.g. 0o660)
     #[serde(default = "default_socket_mode")]
     pub socket_mode: u32,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            daemon: DaemonConfig::default(),
-        }
-    }
 }
 
 impl Default for DaemonConfig {

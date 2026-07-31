@@ -367,7 +367,7 @@ if [[ -z "$WAN_ZONE_ID" || -z "$LAN_ZONE_ID" ]]; then
     exit 1
 fi
 
-router_ssh_sudo "$KEYSTONECTL firewall zones add --id $WAN_ZONE_ID --name wan --interfaces eth0 --input-policy drop --forward-policy drop" >/dev/null
+router_ssh_sudo "$KEYSTONECTL firewall zones add --id $WAN_ZONE_ID --name wan --interfaces eth0 --input-policy drop --forward-policy drop --wan --masquerade-ipv4" >/dev/null
 router_ssh_sudo "$KEYSTONECTL firewall zones add --id $LAN_ZONE_ID --name lan --interfaces eth1 --input-policy accept --forward-policy accept" >/dev/null
 
 # Ensure LAN -> WAN forwarding exists (idempotent-ish).

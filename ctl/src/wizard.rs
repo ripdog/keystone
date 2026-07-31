@@ -7,10 +7,11 @@ use anyhow::Result;
 use console::{Term, style};
 use inquire::{Confirm, MultiSelect, Password, PasswordDisplayMode, Select, Text};
 use keystone_core::{
-    InterfaceRole, LoginRequest, LoginResponse, SaveUserRequest, SaveUserResponse, SystemState,
-    SystemStatusResponse, WizardAdvanceRequest, WizardAdvanceResponse, WizardInterfaceAssignment,
-    WizardSaveInterfacesRequest, WizardSaveInterfacesResponse, WizardSkipRequest,
-    WizardSkipResponse, WizardState, WizardStateResponse, WizardStep,
+    FirewallConfirmRequest, FirewallConfirmResponse, InterfaceRole, LoginRequest, LoginResponse,
+    SaveUserRequest, SaveUserResponse, SystemState, SystemStatusResponse, WizardAdvanceRequest,
+    WizardAdvanceResponse, WizardInterfaceAssignment, WizardSaveInterfacesRequest,
+    WizardSaveInterfacesResponse, WizardSkipRequest, WizardSkipResponse, WizardState,
+    WizardStateResponse, WizardStep,
 };
 
 use crate::client::DaemonClient;
@@ -433,19 +434,10 @@ async fn interface_assignment_step(client: &DaemonClient, token: &str) -> Result
 
     println!();
 
-    // WAN IP configuration
-    let wan_use_dhcp = Confirm::new("Use DHCP for WAN interface?")
-        .with_default(true)
-        .with_help_message("Most home connections use DHCP")
-        .prompt()?;
-
-    let wan_static_ip = if !wan_use_dhcp {
-        let ip = Text::new("Enter static IP (CIDR format, e.g., 192.168.1.2/24):").prompt()?;
-        Some(ip)
-    } else {
-        None
-    };
-
+    println!(
+        "{}",
+        style("WAN will use IPv4 DHCP and DHCPv6 prefix delegation.").dim()
+    );
     println!();
 
     // Select LAN interface(s)
@@ -478,27 +470,27 @@ async fn interface_assignment_step(client: &DaemonClient, token: &str) -> Result
 
     println!();
 
-    // LAN IP configuration
-    let default_lan_ip = "192.168.1.1/24".to_string();
-    let lan_ip = Text::new("Enter LAN IP address (CIDR format):")
-        .with_default(&default_lan_ip)
-        .with_help_message("This will be the router's IP on the local network")
-        .prompt()?;
-
     // Build assignments
     let mut assignments = vec![WizardInterfaceAssignment {
         name: wan_selection.to_string(),
         role: InterfaceRole::WAN,
-        use_dhcp: wan_use_dhcp,
-        static_ip: wan_static_ip,
+        use_dhcp: true,
+        static_ip: None,
     }];
 
-    for lan_iface in lan_selections {
+    for (index, lan_iface) in lan_selections.into_iter().enumerate() {
+        let default_lan_ip = format!("192.168.{}.1/24", index + 1);
+        let prompt = format!("Enter LAN IP for {} (CIDR format):", lan_iface);
+        let lan_ip = Text::new(&prompt)
+            .with_default(&default_lan_ip)
+            .with_help_message("This will be the router's address on this LAN")
+            .prompt()?;
+
         assignments.push(WizardInterfaceAssignment {
             name: lan_iface.to_string(),
             role: InterfaceRole::LAN,
             use_dhcp: false,
-            static_ip: Some(lan_ip.clone()),
+            static_ip: Some(lan_ip),
         });
     }
 
@@ -512,7 +504,23 @@ async fn interface_assignment_step(client: &DaemonClient, token: &str) -> Result
         .await?;
 
     if !response.success {
-        anyhow::bail!("Failed to save interfaces: {}", response.message);
+        anyhow::bail!("Failed to activate router profile: {}", response.message);
+    }
+
+    let apply_result = response
+        .apply_result
+        .ok_or_else(|| anyhow::anyhow!("Daemon did not return an apply result"))?;
+    if apply_result.firewall_pending_confirmation {
+        let session_id = apply_result
+            .firewall_session_id
+            .ok_or_else(|| anyhow::anyhow!("Firewall confirmation session is missing"))?;
+        let confirm_request = FirewallConfirmRequest { session_id };
+        let confirm_response: FirewallConfirmResponse = client
+            .post("/firewall/confirm", &confirm_request, Some(token))
+            .await?;
+        if !confirm_response.success {
+            anyhow::bail!("Failed to confirm firewall: {}", confirm_response.message);
+        }
     }
 
     println!("{} {}", style("✓").green(), response.message);

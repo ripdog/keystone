@@ -31,6 +31,8 @@ pub async fn handle_firewall_command(
                 interfaces,
                 input_policy,
                 forward_policy,
+                wan,
+                masquerade_ipv4,
             } => {
                 let authed = client.authed(get_token(token)?);
                 let interfaces_vec: Vec<String> = interfaces
@@ -49,6 +51,8 @@ pub async fn handle_firewall_command(
                     name,
                     description,
                     interfaces: interfaces_vec,
+                    is_wan: wan,
+                    masquerade_ipv4,
                     default_input_policy: input_policy,
                     default_forward_policy: forward_policy,
                 };

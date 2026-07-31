@@ -655,7 +655,7 @@ fn SystemChecksStep(
         set_error.set(None);
 
         spawn_local(async move {
-            match api::advance_wizard(&token, WizardStep::PasswordChanged).await {
+            match api::advance_wizard(&token, WizardStep::SystemChecksCompleted).await {
                 Ok(response) => {
                     if response.success {
                         on_advance.run(());
@@ -833,9 +833,9 @@ fn InterfacesStep(
     // Load interfaces
     Effect::new(move || {
         spawn_local(async move {
-            match api::fetch_dashboard(&auth_token.get().unwrap_or_default()).await {
-                Ok(dashboard) => {
-                    let ifaces = dashboard.state.interfaces.clone();
+            match api::fetch_system_state(&auth_token.get().unwrap_or_default()).await {
+                Ok(system_state) => {
+                    let ifaces = system_state.interfaces;
                     // Initialize assignments with default values
                     let initial: Vec<_> = ifaces
                         .iter()
@@ -872,21 +872,13 @@ fn InterfacesStep(
             .count()
     };
 
-    let can_continue = move || wan_count() >= 1 && lan_count() >= 1;
+    let can_continue = move || wan_count() == 1 && lan_count() >= 1;
 
     // Update assignment
     let update_role = move |name: String, role: Option<InterfaceRole>| {
         set_assignments.update(|a| {
             if let Some(entry) = a.iter_mut().find(|(n, _, _, _)| n == &name) {
                 entry.1 = role;
-            }
-        });
-    };
-
-    let update_dhcp = move |name: String, use_dhcp: bool| {
-        set_assignments.update(|a| {
-            if let Some(entry) = a.iter_mut().find(|(n, _, _, _)| n == &name) {
-                entry.2 = use_dhcp;
             }
         });
     };
@@ -912,11 +904,11 @@ fn InterfacesStep(
         let current_assignments = assignments.get();
         let wizard_assignments: Vec<WizardInterfaceAssignment> = current_assignments
             .iter()
-            .filter_map(|(name, role, use_dhcp, static_ip)| {
+            .filter_map(|(name, role, _use_dhcp, static_ip)| {
                 role.map(|r| WizardInterfaceAssignment {
                     name: name.clone(),
                     role: r,
-                    use_dhcp: *use_dhcp,
+                    use_dhcp: r == InterfaceRole::WAN,
                     static_ip: if static_ip.is_empty() {
                         None
                     } else {
@@ -937,15 +929,34 @@ fn InterfacesStep(
 
             match api::save_wizard_interfaces(&token, request).await {
                 Ok(response) => {
-                    if response.success {
-                        // Now advance the wizard
-                        match api::advance_wizard(&token, WizardStep::SystemChecksCompleted).await {
-                            Ok(advance_response) => {
-                                if advance_response.success {
-                                    on_advance.run(());
-                                } else {
-                                    set_error.set(Some(advance_response.message));
-                                }
+                    if !response.success {
+                        set_error.set(Some(response.message));
+                        set_saving.set(false);
+                        return;
+                    }
+
+                    let Some(apply_result) = response.apply_result else {
+                        set_error.set(Some("Router profile was not applied".to_string()));
+                        set_saving.set(false);
+                        return;
+                    };
+
+                    if apply_result.firewall_pending_confirmation {
+                        let Some(session_id) = apply_result.firewall_session_id else {
+                            set_error.set(Some(
+                                "Firewall apply is pending but has no confirmation session"
+                                    .to_string(),
+                            ));
+                            set_saving.set(false);
+                            return;
+                        };
+
+                        match api::confirm_firewall(&token, &session_id).await {
+                            Ok(confirm_response) if confirm_response.success => {}
+                            Ok(confirm_response) => {
+                                set_error.set(Some(confirm_response.message));
+                                set_saving.set(false);
+                                return;
                             }
                             Err(e) => {
                                 if e.contains("Unauthorized") {
@@ -953,10 +964,27 @@ fn InterfacesStep(
                                 } else {
                                     set_error.set(Some(e));
                                 }
+                                set_saving.set(false);
+                                return;
                             }
                         }
-                    } else {
-                        set_error.set(Some(response.message));
+                    }
+
+                    match api::advance_wizard(&token, WizardStep::InterfacesAssigned).await {
+                        Ok(advance_response) => {
+                            if advance_response.success {
+                                on_advance.run(());
+                            } else {
+                                set_error.set(Some(advance_response.message));
+                            }
+                        }
+                        Err(e) => {
+                            if e.contains("Unauthorized") {
+                                on_unauthorized.run(());
+                            } else {
+                                set_error.set(Some(e));
+                            }
+                        }
                     }
                 }
                 Err(e) => {
@@ -1015,16 +1043,11 @@ fn InterfacesStep(
                             ifaces.into_iter().zip(assigns.into_iter()).collect::<Vec<_>>()
                         }
                         key=|(iface, _)| iface.name.clone()
-                        children=move |(iface, (name, role, use_dhcp, static_ip))| {
+                        children=move |(iface, (name, role, _use_dhcp, static_ip))| {
                             let name1 = name.clone();
-                            let name2 = name.clone();
-                            let name3 = name.clone();
-                            let name4 = name.clone();
-                            let name5 = name.clone();
                             let name6 = name.clone();
                             let address = iface.address.clone().unwrap_or_else(|| "No IP".to_string());
                             let current_role = role;
-                            let current_dhcp = use_dhcp;
                             let current_ip = static_ip.clone();
 
                             view! {
@@ -1058,38 +1081,10 @@ fn InterfacesStep(
                                         </select>
                                     </div>
 
-                                    // Show IP configuration if WAN
                                     <Show when=move || current_role == Some(InterfaceRole::WAN)>
-                                        {
-                                            let name3_inner = name3.clone();
-                                            let name5_inner = name5.clone();
-                                            view! {
-                                                <div class="border-t border-gray-600 pt-3 mt-3">
-                                                    <div class="flex items-center gap-4">
-                                                        <label class="flex items-center gap-2 text-gray-300">
-                                                            <input
-                                                                type="radio"
-                                                                name=format!("{}-ip-mode", name2)
-                                                                checked=move || current_dhcp
-                                                                on:change=move |_| update_dhcp(name3_inner.clone(), true)
-                                                                class="text-blue-500"
-                                                            />
-                                                            "DHCP"
-                                                        </label>
-                                                        <label class="flex items-center gap-2 text-gray-300">
-                                                            <input
-                                                                type="radio"
-                                                                name=format!("{}-ip-mode", name4)
-                                                                checked=move || !current_dhcp
-                                                                on:change=move |_| update_dhcp(name5_inner.clone(), false)
-                                                                class="text-blue-500"
-                                                            />
-                                                            "Static IP"
-                                                        </label>
-                                                    </div>
-                                                </div>
-                                            }
-                                        }
+                                        <div class="border-t border-gray-600 pt-3 mt-3 text-sm text-gray-300">
+                                            "IPv4 DHCP and DHCPv6 prefix delegation will be enabled."
+                                        </div>
                                     </Show>
 
                                     // Show static IP input for LAN
@@ -1138,7 +1133,7 @@ fn InterfacesStep(
 
             <Show when=move || !can_continue()>
                 <p class="text-yellow-400 text-sm mt-2 text-right">
-                    "Select at least one WAN and one LAN interface"
+                    "Select exactly one WAN and at least one LAN interface"
                 </p>
             </Show>
         </div>

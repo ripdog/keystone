@@ -4,9 +4,19 @@ use keystone_core::{
     ApplyConfigResponse, InterfaceConfig, InterfaceConfigResponse, ManagedInterface,
     ManagedInterfacesResponse, NetworkdPreviewResponse, SaveInterfaceConfigRequest,
     SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
+    SystemState,
 };
 
 use super::client::{get, post, post_empty};
+
+// ============================================================================
+// Runtime interface discovery
+// ============================================================================
+
+/// Fetch basic system state, including discovered network interfaces.
+pub async fn fetch_system_state(token: &str) -> Result<SystemState, String> {
+    get("/api/state", token).await
+}
 
 // ============================================================================
 // Managed Interfaces

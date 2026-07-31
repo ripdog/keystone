@@ -164,7 +164,7 @@ pub fn expand_protocol(protocol: &RuleProtocol) -> Vec<Option<&'static str>> {
         RuleProtocol::Udp => vec![Some("udp")],
         RuleProtocol::TcpUdp => vec![Some("tcp"), Some("udp")],
         RuleProtocol::Icmp => vec![Some("icmp")],
-        RuleProtocol::Icmpv6 => vec![Some("icmpv6")],
+        RuleProtocol::Icmpv6 => vec![Some("ipv6-icmp")],
     }
 }
 

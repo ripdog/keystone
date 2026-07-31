@@ -26,16 +26,20 @@ impl<'a> FirewallDb<'a> {
     /// Get all firewall zones
     pub async fn get_firewall_zones(&self) -> Result<Vec<FirewallZone>> {
         // First get all zones
-        let zone_rows = sqlx::query_as::<_, (i64, String, Option<String>, String, String)>(
-            r#"SELECT id, name, description, default_input_policy, default_forward_policy
+        let zone_rows =
+            sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String, String)>(
+                r#"SELECT id, name, description, is_wan, masquerade_ipv4,
+                      default_input_policy, default_forward_policy
                FROM firewall_zones ORDER BY name"#,
-        )
-        .fetch_all(self.pool)
-        .await
-        .context("Failed to fetch firewall zones")?;
+            )
+            .fetch_all(self.pool)
+            .await
+            .context("Failed to fetch firewall zones")?;
 
         let mut zones = Vec::with_capacity(zone_rows.len());
-        for (id, name, description, input_policy, forward_policy) in zone_rows {
+        for (id, name, description, is_wan, masquerade_ipv4, input_policy, forward_policy) in
+            zone_rows
+        {
             // Get interfaces for this zone
             let interface_rows = sqlx::query_as::<_, (String,)>(
                 "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
@@ -52,6 +56,8 @@ impl<'a> FirewallDb<'a> {
                 name,
                 description,
                 interfaces,
+                is_wan,
+                masquerade_ipv4,
                 default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
                 default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
             });
@@ -62,8 +68,9 @@ impl<'a> FirewallDb<'a> {
 
     /// Get a single firewall zone by ID
     pub async fn get_firewall_zone(&self, id: i64) -> Result<Option<FirewallZone>> {
-        let row = sqlx::query_as::<_, (i64, String, Option<String>, String, String)>(
-            r#"SELECT id, name, description, default_input_policy, default_forward_policy
+        let row = sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String, String)>(
+            r#"SELECT id, name, description, is_wan, masquerade_ipv4,
+                      default_input_policy, default_forward_policy
                FROM firewall_zones WHERE id = ?"#,
         )
         .bind(id)
@@ -72,7 +79,15 @@ impl<'a> FirewallDb<'a> {
         .context("Failed to fetch firewall zone")?;
 
         match row {
-            Some((id, name, description, input_policy, forward_policy)) => {
+            Some((
+                id,
+                name,
+                description,
+                is_wan,
+                masquerade_ipv4,
+                input_policy,
+                forward_policy,
+            )) => {
                 let interface_rows = sqlx::query_as::<_, (String,)>(
                     "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
                 )
@@ -89,6 +104,8 @@ impl<'a> FirewallDb<'a> {
                     name,
                     description,
                     interfaces,
+                    is_wan,
+                    masquerade_ipv4,
                     default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
                     default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
                 }))
@@ -99,8 +116,9 @@ impl<'a> FirewallDb<'a> {
 
     /// Get a firewall zone by name
     pub async fn get_firewall_zone_by_name(&self, name: &str) -> Result<Option<FirewallZone>> {
-        let row = sqlx::query_as::<_, (i64, String, Option<String>, String, String)>(
-            r#"SELECT id, name, description, default_input_policy, default_forward_policy
+        let row = sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String, String)>(
+            r#"SELECT id, name, description, is_wan, masquerade_ipv4,
+                      default_input_policy, default_forward_policy
                FROM firewall_zones WHERE name = ?"#,
         )
         .bind(name)
@@ -109,7 +127,15 @@ impl<'a> FirewallDb<'a> {
         .context("Failed to fetch firewall zone by name")?;
 
         match row {
-            Some((id, name, description, input_policy, forward_policy)) => {
+            Some((
+                id,
+                name,
+                description,
+                is_wan,
+                masquerade_ipv4,
+                input_policy,
+                forward_policy,
+            )) => {
                 let interface_rows = sqlx::query_as::<_, (String,)>(
                     "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
                 )
@@ -126,6 +152,8 @@ impl<'a> FirewallDb<'a> {
                     name,
                     description,
                     interfaces,
+                    is_wan,
+                    masquerade_ipv4,
                     default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
                     default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
                 }))
@@ -145,13 +173,16 @@ impl<'a> FirewallDb<'a> {
         let id = if let Some(id) = zone.id {
             // Update existing zone
             sqlx::query(
-                r#"UPDATE firewall_zones SET 
-                   name = ?, description = ?, default_input_policy = ?, 
-                   default_forward_policy = ?, updated_at = strftime('%s', 'now')
+                r#"UPDATE firewall_zones SET
+                   name = ?, description = ?, is_wan = ?, masquerade_ipv4 = ?,
+                   default_input_policy = ?, default_forward_policy = ?,
+                   updated_at = strftime('%s', 'now')
                    WHERE id = ?"#,
             )
             .bind(&zone.name)
             .bind(&zone.description)
+            .bind(zone.is_wan)
+            .bind(zone.masquerade_ipv4)
             .bind(zone.default_input_policy.to_string())
             .bind(zone.default_forward_policy.to_string())
             .bind(id)
@@ -170,12 +201,15 @@ impl<'a> FirewallDb<'a> {
         } else {
             // Insert new zone
             let result = sqlx::query(
-                r#"INSERT INTO firewall_zones 
-                   (name, description, default_input_policy, default_forward_policy, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+                r#"INSERT INTO firewall_zones
+                   (name, description, is_wan, masquerade_ipv4, default_input_policy,
+                    default_forward_policy, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
             )
             .bind(&zone.name)
             .bind(&zone.description)
+            .bind(zone.is_wan)
+            .bind(zone.masquerade_ipv4)
             .bind(zone.default_input_policy.to_string())
             .bind(zone.default_forward_policy.to_string())
             .execute(&mut *tx)
@@ -1096,25 +1130,73 @@ impl<'a> FirewallDb<'a> {
     }
 
     // ========================================================================
-    // Rollback State Operations
+    // Active and Rollback State Operations
     // ========================================================================
 
-    /// Save rollback state for safe apply
-    pub async fn save_rollback_state(
-        &self,
-        config: &FirewallConfig,
-        rollback_at: i64,
-    ) -> Result<()> {
+    /// Save the last successfully confirmed firewall configuration.
+    pub async fn save_active_firewall_config(&self, config: &FirewallConfig) -> Result<()> {
         let config_json =
-            serde_json::to_string(config).context("Failed to serialize firewall config")?;
+            serde_json::to_string(config).context("Failed to serialize active firewall config")?;
 
         sqlx::query(
-            r#"INSERT OR REPLACE INTO firewall_rollback_state 
-               (id, previous_config, rollback_at, created_at)
-               VALUES (1, ?, ?, strftime('%s', 'now'))"#,
+            r#"INSERT OR REPLACE INTO firewall_active_config (id, config_json, updated_at)
+               VALUES (1, ?, strftime('%s', 'now'))"#,
         )
-        .bind(&config_json)
+        .bind(config_json)
+        .execute(self.pool)
+        .await
+        .context("Failed to save active firewall config")?;
+
+        info!("Saved confirmed firewall configuration snapshot");
+        Ok(())
+    }
+
+    /// Get the last successfully confirmed firewall configuration.
+    pub async fn get_active_firewall_config(&self) -> Result<Option<FirewallConfig>> {
+        let row = sqlx::query_as::<_, (String,)>(
+            "SELECT config_json FROM firewall_active_config WHERE id = 1",
+        )
+        .fetch_optional(self.pool)
+        .await
+        .context("Failed to fetch active firewall config")?;
+
+        row.map(|(config_json,)| {
+            serde_json::from_str(&config_json)
+                .context("Failed to deserialize active firewall config")
+        })
+        .transpose()
+    }
+
+    /// Clear the active snapshot when rollback restores a system with no
+    /// Keystone-owned nftables tables.
+    pub async fn clear_active_firewall_config(&self) -> Result<()> {
+        sqlx::query("DELETE FROM firewall_active_config WHERE id = 1")
+            .execute(self.pool)
+            .await
+            .context("Failed to clear active firewall config")?;
+        info!("Cleared confirmed firewall configuration snapshot");
+        Ok(())
+    }
+
+    /// Save rollback state for safe apply. `None` means Keystone previously
+    /// owned no nftables tables and rollback should remove them.
+    pub async fn save_rollback_state(
+        &self,
+        config: Option<&FirewallConfig>,
+        rollback_at: i64,
+    ) -> Result<()> {
+        let previous_present = config.is_some();
+        let config_json = serde_json::to_string(config.unwrap_or(&FirewallConfig::default()))
+            .context("Failed to serialize firewall rollback config")?;
+
+        sqlx::query(
+            r#"INSERT OR REPLACE INTO firewall_rollback_state
+               (id, previous_config, rollback_at, created_at, previous_present)
+               VALUES (1, ?, ?, strftime('%s', 'now'), ?)"#,
+        )
+        .bind(config_json)
         .bind(rollback_at)
+        .bind(previous_present)
         .execute(self.pool)
         .await
         .context("Failed to save rollback state")?;
@@ -1123,19 +1205,26 @@ impl<'a> FirewallDb<'a> {
         Ok(())
     }
 
-    /// Get pending rollback state
-    pub async fn get_rollback_state(&self) -> Result<Option<(FirewallConfig, i64)>> {
-        let row = sqlx::query_as::<_, (String, i64)>(
-            "SELECT previous_config, rollback_at FROM firewall_rollback_state WHERE id = 1",
+    /// Get pending rollback state.
+    pub async fn get_rollback_state(&self) -> Result<Option<(Option<FirewallConfig>, i64)>> {
+        let row = sqlx::query_as::<_, (String, i64, bool)>(
+            r#"SELECT previous_config, rollback_at, previous_present
+               FROM firewall_rollback_state WHERE id = 1"#,
         )
         .fetch_optional(self.pool)
         .await
         .context("Failed to fetch rollback state")?;
 
         match row {
-            Some((config_json, rollback_at)) => {
-                let config: FirewallConfig = serde_json::from_str(&config_json)
-                    .context("Failed to deserialize rollback config")?;
+            Some((config_json, rollback_at, previous_present)) => {
+                let config = if previous_present {
+                    Some(
+                        serde_json::from_str(&config_json)
+                            .context("Failed to deserialize rollback config")?,
+                    )
+                } else {
+                    None
+                };
                 Ok(Some((config, rollback_at)))
             }
             None => Ok(None),

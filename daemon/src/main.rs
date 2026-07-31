@@ -11,6 +11,7 @@ mod db;
 mod dnsmasq;
 mod firewall;
 mod networkd;
+mod soho;
 mod status;
 mod systemd;
 mod wizard;
@@ -85,7 +86,6 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("This daemon requires root privileges");
     }
 
-
     // Initialize database
     let db = Database::new().await?;
     info!("Database initialized");
@@ -112,10 +112,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let socket_path = config.daemon.socket_path.clone();
-    if let Some(parent) = Path::new(&socket_path).parent() {
-        if let Err(err) = std::fs::create_dir_all(parent) {
-            warn!("Failed to ensure runtime directory {}: {}", parent.display(), err);
-        }
+    if let Some(parent) = Path::new(&socket_path).parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        warn!(
+            "Failed to ensure runtime directory {}: {}",
+            parent.display(),
+            err
+        );
     }
 
     // Remove old socket if it exists
@@ -187,7 +191,7 @@ async fn main() -> anyhow::Result<()> {
         // Merge systemd routes
         .merge(systemd::routes::systemd_routes())
         // Merge wizard routes
-        .merge(wizard::wizard_routes(db.clone()))
+        .merge(wizard::wizard_routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -379,6 +383,23 @@ async fn login(
 }
 
 /// Authentication middleware - validates JWT token in Authorization header
+fn is_blocked_before_setup(path: &str) -> bool {
+    let firewall_recovery_endpoint = matches!(
+        path,
+        "/firewall/confirm" | "/firewall/rollback" | "/firewall/status"
+    );
+
+    path == "/dashboard"
+        || path == "/apply"
+        || path == "/apply-networkd"
+        || path == "/apply-all"
+        || path == "/networkd-preview"
+        || (path.starts_with("/firewall/") && !firewall_recovery_endpoint)
+        || path.starts_with("/dnsmasq/")
+        || path.starts_with("/caddy/")
+        || path.starts_with("/systemd/")
+}
+
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     request: Request<axum::body::Body>,
@@ -399,22 +420,10 @@ async fn auth_middleware(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    if !settings.setup_complete {
-        let blocked_pre_setup = path == "/dashboard"
-            || path == "/apply"
-            || path == "/apply-networkd"
-            || path == "/apply-all"
-            || path == "/networkd-preview"
-            || path.starts_with("/firewall/")
-            || path.starts_with("/dnsmasq/")
-            || path.starts_with("/caddy/")
-            || path.starts_with("/systemd/");
-
-        if blocked_pre_setup {
-            warn!("Rejected request before setup complete: {}", path);
-            // Use a status code that indicates "setup required".
-            return Err(StatusCode::PRECONDITION_REQUIRED);
-        }
+    if !settings.setup_complete && is_blocked_before_setup(path) {
+        warn!("Rejected request before setup complete: {}", path);
+        // Use a status code that indicates "setup required".
+        return Err(StatusCode::PRECONDITION_REQUIRED);
     }
     let auth_header = request
         .headers()
@@ -562,9 +571,15 @@ fn read_system_state() -> anyhow::Result<SystemState> {
         })
         .unwrap_or_default();
 
+    let physical_interfaces = status::get_physical_interfaces()
+        .into_iter()
+        .collect::<HashSet<_>>();
     let mut interfaces = Vec::new();
     for entry in fs::read_dir("/sys/class/net")?.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
+        if !physical_interfaces.contains(&name) {
+            continue;
+        }
 
         let operstate = fs::read_to_string(entry.path().join("operstate"))
             .unwrap_or_else(|_| "unknown".to_string());
@@ -992,100 +1007,25 @@ async fn apply_networkd(
         }));
     }
 
-    // Get all interface configs from database
     let configs = state.db.get_interface_configs().await?;
-
-    // Get all VLAN configs from database
     let vlans = state.db.get_all_vlans().await?;
-
-    // Get all bridge configs from database
     let bridges = state.db.get_all_bridges().await?;
 
-    // Ensure networkd directory exists
-    networkd::ensure_networkd_dir()?;
-
-    // Write all enabled configs to disk
-    let mut written = Vec::new();
-    let mut vlan_written = Vec::new();
-    let mut bridge_written = Vec::new();
-    let mut errors = Vec::new();
-
-    for config in &configs {
-        if config.enabled {
-            match networkd::write_network_file(config) {
-                Ok(()) => {
-                    written.push(config.name.clone());
-                }
-                Err(e) => {
-                    errors.push(format!("{}: {}", config.name, e));
-                }
-            }
-        } else {
-            // Remove disabled interface configs
-            if let Err(e) = networkd::remove_network_file(&config.name) {
-                warn!(
-                    "Failed to remove network file for disabled interface {}: {}",
-                    config.name, e
-                );
-            }
-        }
-    }
-
-    // Write all VLAN .netdev files
-    for vlan in &vlans {
-        match networkd::write_vlan_netdev_file(vlan) {
-            Ok(()) => {
-                vlan_written.push(vlan.name.clone());
-            }
-            Err(e) => {
-                errors.push(format!("VLAN {}: {}", vlan.name, e));
-            }
-        }
-    }
-
-    // Write all bridge .netdev files and member .network files
-    for bridge in &bridges {
-        match networkd::write_bridge_netdev_file(bridge) {
-            Ok(()) => {
-                bridge_written.push(bridge.name.clone());
-            }
-            Err(e) => {
-                errors.push(format!("Bridge {}: {}", bridge.name, e));
-            }
-        }
-        // Write bridge member .network files
-        if let Err(e) = networkd::write_bridge_member_network_files(bridge) {
-            errors.push(format!("Bridge {} members: {}", bridge.name, e));
-        }
-    }
-
-    if !errors.is_empty() {
-        return Ok(Json(ApplyConfigResponse {
+    match networkd::apply_configuration(&configs, &vlans, &bridges) {
+        Ok(summary) => Ok(Json(ApplyConfigResponse {
+            success: true,
+            message: format!(
+                "Applied networkd config for {} interfaces, {} VLANs, and {} bridges",
+                summary.interfaces, summary.vlans, summary.bridges
+            ),
+            errors: Vec::new(),
+        })),
+        Err(error) => Ok(Json(ApplyConfigResponse {
             success: false,
-            message: "Failed to write some config files".to_string(),
-            errors,
-        }));
+            message: error.to_string(),
+            errors: vec![error.to_string()],
+        })),
     }
-
-    // Reload networkd to apply changes
-    if let Err(e) = networkd::reload_networkd() {
-        return Ok(Json(ApplyConfigResponse {
-            success: false,
-            message: format!("Config files written but reload failed: {}", e),
-            errors: vec![e.to_string()],
-        }));
-    }
-
-    Ok(Json(ApplyConfigResponse {
-        success: true,
-        message: format!(
-            "Applied networkd config for {} interfaces, {} VLANs, and {} bridges",
-            written.len(),
-            vlan_written.len(),
-            bridge_written.len()
-        ),
-        errors: Vec::new(),
-    }))
 }
 
 /// POST /apply-all - Apply all configuration (networkd, firewall, dnsmasq, caddy)
@@ -1295,5 +1235,28 @@ where
 {
     fn from(err: E) -> Self {
         Self(err.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_blocked_before_setup;
+
+    #[test]
+    fn pre_setup_allows_firewall_recovery_but_not_mutation() {
+        assert!(!is_blocked_before_setup("/firewall/confirm"));
+        assert!(!is_blocked_before_setup("/firewall/rollback"));
+        assert!(!is_blocked_before_setup("/firewall/status"));
+        assert!(is_blocked_before_setup("/firewall/apply"));
+        assert!(is_blocked_before_setup("/firewall/zones"));
+    }
+
+    #[test]
+    fn pre_setup_allows_wizard_and_completion_endpoints() {
+        assert!(!is_blocked_before_setup("/wizard/interfaces"));
+        assert!(!is_blocked_before_setup("/complete-setup"));
+        assert!(!is_blocked_before_setup("/state"));
+        assert!(is_blocked_before_setup("/dashboard"));
+        assert!(is_blocked_before_setup("/apply-all"));
     }
 }

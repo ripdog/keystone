@@ -376,6 +376,8 @@ fn ZonesTab(
                             name: String::new(),
                             description: None,
                             interfaces: Vec::new(),
+                            is_wan: false,
+                            masquerade_ipv4: false,
                             default_input_policy: FirewallPolicy::Drop,
                             default_forward_policy: FirewallPolicy::Drop,
                         }));
@@ -447,6 +449,8 @@ fn ZonesTab(
                                                         } else {
                                                             zone.interfaces.join(", ")
                                                         }}
+                                                        {if zone.is_wan { " | WAN" } else { "" }}
+                                                        {if zone.masquerade_ipv4 { " | IPv4 NAT" } else { "" }}
                                                         " | Input: "
                                                         <span class=if zone.default_input_policy == FirewallPolicy::Accept { "text-green-400" } else { "text-red-400" }>
                                                             {format!("{:?}", zone.default_input_policy)}
@@ -518,6 +522,8 @@ fn ZoneEditor(
     let name = RwSignal::new(zone.name.clone());
     let description = RwSignal::new(zone.description.clone().unwrap_or_default());
     let selected_interfaces = RwSignal::new(zone.interfaces.clone());
+    let is_wan = RwSignal::new(zone.is_wan);
+    let masquerade_ipv4 = RwSignal::new(zone.masquerade_ipv4);
     let input_policy = RwSignal::new(zone.default_input_policy);
     let forward_policy = RwSignal::new(zone.default_forward_policy);
     let saving = RwSignal::new(false);
@@ -553,6 +559,8 @@ fn ZoneEditor(
                 Some(description.get())
             },
             interfaces: selected_interfaces.get(),
+            is_wan: is_wan.get(),
+            masquerade_ipv4: masquerade_ipv4.get(),
             default_input_policy: input_policy.get(),
             default_forward_policy: forward_policy.get(),
         };
@@ -634,6 +642,27 @@ fn ZoneEditor(
                     })
                 }}
             </Suspense>
+
+            <div class="grid grid-cols-2 gap-4">
+                <label class="flex items-center gap-2 cursor-pointer p-3 bg-gray-600/50 rounded">
+                    <input
+                        type="checkbox"
+                        checked=move || is_wan.get()
+                        on:change=move |ev| is_wan.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-gray-200">"Internet-facing zone"</span>
+                </label>
+                <label class="flex items-center gap-2 cursor-pointer p-3 bg-gray-600/50 rounded">
+                    <input
+                        type="checkbox"
+                        checked=move || masquerade_ipv4.get()
+                        on:change=move |ev| masquerade_ipv4.set(event_target_checked(&ev))
+                        class="w-4 h-4 rounded"
+                    />
+                    <span class="text-gray-200">"IPv4 masquerading"</span>
+                </label>
+            </div>
 
             <div class="grid grid-cols-2 gap-4">
                 <div>

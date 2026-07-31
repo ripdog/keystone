@@ -207,7 +207,11 @@ fn generate_icmp_input_rules(
                 {
                     batch.add(NfListObject::Rule(create_icmp_ping_accept_rule(
                         interfaces,
-                        &format!("Allow ping from {} (LAN)", zone.name),
+                        &format!("Allow IPv4 ping from {} (LAN)", zone.name),
+                    )));
+                    batch.add(NfListObject::Rule(create_icmpv6_ping_accept_rule(
+                        interfaces,
+                        &format!("Allow IPv6 ping from {} (LAN)", zone.name),
                     )));
                 }
             }
@@ -222,7 +226,11 @@ fn generate_icmp_input_rules(
             {
                 batch.add(NfListObject::Rule(create_icmp_ping_accept_rule(
                     interfaces,
-                    &format!("Allow ping from {} (WAN)", zone.name),
+                    &format!("Allow IPv4 ping from {} (WAN)", zone.name),
+                )));
+                batch.add(NfListObject::Rule(create_icmpv6_ping_accept_rule(
+                    interfaces,
+                    &format!("Allow IPv6 ping from {} (WAN)", zone.name),
                 )));
             }
         }
@@ -233,6 +241,9 @@ fn generate_icmp_input_rules(
     // - Time Exceeded (type 11) - needed for traceroute
     // - Parameter Problem (type 12) - needed for proper error reporting
     for rule in create_icmp_essential_accept_rules() {
+        batch.add(NfListObject::Rule(rule));
+    }
+    for rule in create_icmpv6_essential_accept_rules() {
         batch.add(NfListObject::Rule(rule));
     }
 }
@@ -326,6 +337,40 @@ fn create_icmp_ping_accept_rule(interfaces: &[String], comment: &str) -> Rule<'s
     }
 }
 
+/// Create a rule to accept ICMPv6 echo requests from specific interfaces.
+fn create_icmpv6_ping_accept_rule(interfaces: &[String], comment: &str) -> Rule<'static> {
+    Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(FILTER_TABLE),
+        chain: Cow::Borrowed("input"),
+        expr: vec![
+            create_iif_match(interfaces),
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                    key: MetaKey::L4proto,
+                })),
+                right: Expression::String(Cow::Borrowed("ipv6-icmp")),
+                op: Operator::EQ,
+            }),
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Payload(
+                    Payload::PayloadField(PayloadField {
+                        protocol: Cow::Borrowed("icmpv6"),
+                        field: Cow::Borrowed("type"),
+                    }),
+                )),
+                right: Expression::Number(128),
+                op: Operator::EQ,
+            }),
+            Statement::Counter(Counter::Anonymous(None)),
+            Statement::Accept(None),
+        ]
+        .into(),
+        comment: Some(Cow::Owned(comment.to_string())),
+        ..Default::default()
+    }
+}
+
 /// Create rules to accept essential ICMP types for proper network operation
 /// Returns 3 separate rules for dest-unreachable, time-exceeded, parameter-problem
 fn create_icmp_essential_accept_rules() -> Vec<Rule<'static>> {
@@ -356,6 +401,60 @@ fn create_icmp_type_accept_rule(icmp_type: u8, comment: &str) -> Rule<'static> {
                 left: Expression::Named(nftables::expr::NamedExpression::Payload(
                     Payload::PayloadField(PayloadField {
                         protocol: Cow::Borrowed("icmp"),
+                        field: Cow::Borrowed("type"),
+                    }),
+                )),
+                right: Expression::Number(icmp_type as u32),
+                op: Operator::EQ,
+            }),
+            Statement::Counter(Counter::Anonymous(None)),
+            Statement::Accept(None),
+        ]
+        .into(),
+        comment: Some(Cow::Owned(comment.to_string())),
+        ..Default::default()
+    }
+}
+
+/// ICMPv6 messages required for error handling, neighbour discovery, router
+/// discovery, and multicast listener discovery. Blocking these breaks IPv6.
+fn create_icmpv6_essential_accept_rules() -> Vec<Rule<'static>> {
+    [
+        (1, "Accept ICMPv6 destination-unreachable"),
+        (2, "Accept ICMPv6 packet-too-big"),
+        (3, "Accept ICMPv6 time-exceeded"),
+        (4, "Accept ICMPv6 parameter-problem"),
+        (130, "Accept ICMPv6 MLD query"),
+        (131, "Accept ICMPv6 MLD report"),
+        (132, "Accept ICMPv6 MLD done"),
+        (133, "Accept ICMPv6 router-solicitation"),
+        (134, "Accept ICMPv6 router-advertisement"),
+        (135, "Accept ICMPv6 neighbour-solicitation"),
+        (136, "Accept ICMPv6 neighbour-advertisement"),
+        (143, "Accept ICMPv6 MLDv2 report"),
+    ]
+    .into_iter()
+    .map(|(icmp_type, comment)| create_icmpv6_type_accept_rule(icmp_type, comment))
+    .collect()
+}
+
+fn create_icmpv6_type_accept_rule(icmp_type: u8, comment: &str) -> Rule<'static> {
+    Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(FILTER_TABLE),
+        chain: Cow::Borrowed("input"),
+        expr: vec![
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                    key: MetaKey::L4proto,
+                })),
+                right: Expression::String(Cow::Borrowed("ipv6-icmp")),
+                op: Operator::EQ,
+            }),
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Payload(
+                    Payload::PayloadField(PayloadField {
+                        protocol: Cow::Borrowed("icmpv6"),
                         field: Cow::Borrowed("type"),
                     }),
                 )),

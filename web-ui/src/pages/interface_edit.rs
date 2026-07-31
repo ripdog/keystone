@@ -1,9 +1,9 @@
 //! Interface edit page for configuring individual interface settings
 
 use keystone_core::{
-    ActivationPolicy, AddressScope, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
-    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, Ipv6AcceptRaConfig,
-    LinkLocalMode, RouteType, StaticAddress, StaticRoute,
+    ActivationPolicy, AddressScope, DhcpMode, DhcpPrefixDelegationConfig, Dhcpv4ClientConfig,
+    Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
+    Ipv6AcceptRaConfig, LinkLocalMode, RouteType, StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -49,8 +49,12 @@ pub fn InterfaceEditPage(
     let (ipv6_ra_use_gateway, set_ipv6_ra_use_gateway) = signal(true);
     let (ipv6_ra_use_route_prefix, set_ipv6_ra_use_route_prefix) = signal(true);
     let (ipv6_ra_use_autonomous, set_ipv6_ra_use_autonomous) = signal(true);
+    let (ipv6_send_ra, set_ipv6_send_ra) = signal(false);
+    let (pd_enabled, set_pd_enabled) = signal(false);
+    let (pd_uplink, set_pd_uplink) = signal(String::new());
+    let (pd_subnet_id, set_pd_subnet_id) = signal(String::new());
+    let (pd_announce, set_pd_announce) = signal(true);
     let (ip_forward, set_ip_forward) = signal(IpForwardMode::No);
-    let (ip_masquerade, set_ip_masquerade) = signal(IpMasqueradeMode::No);
     let (link_mtu, set_link_mtu) = signal(String::new());
 
     // DHCPv4 client settings
@@ -65,6 +69,7 @@ pub fn InterfaceEditPage(
     // DHCPv6 client settings
     let (dhcp6_use_dns, set_dhcp6_use_dns) = signal(true);
     let (dhcp6_use_ntp, set_dhcp6_use_ntp) = signal(true);
+    let (dhcp6_use_delegated_prefix, set_dhcp6_use_delegated_prefix) = signal(true);
     let (dhcp6_rapid_commit, set_dhcp6_rapid_commit) = signal(true);
     let (dhcp6_prefix_hint, set_dhcp6_prefix_hint) = signal(String::new());
 
@@ -103,8 +108,19 @@ pub fn InterfaceEditPage(
                             set_ipv6_ra_use_route_prefix.set(ra_cfg.use_route_prefix);
                             set_ipv6_ra_use_autonomous.set(ra_cfg.use_autonomous_prefix);
                         }
+                        set_ipv6_send_ra.set(cfg.ipv6_send_ra);
+                        if let Some(pd_cfg) = &cfg.dhcp_prefix_delegation {
+                            set_pd_enabled.set(true);
+                            set_pd_uplink.set(pd_cfg.uplink_interface.clone().unwrap_or_default());
+                            set_pd_subnet_id.set(
+                                pd_cfg
+                                    .subnet_id
+                                    .map(|id| id.to_string())
+                                    .unwrap_or_default(),
+                            );
+                            set_pd_announce.set(pd_cfg.announce);
+                        }
                         set_ip_forward.set(cfg.ip_forward);
-                        set_ip_masquerade.set(cfg.ip_masquerade);
                         set_link_mtu.set(cfg.mtu.map(|v| v.to_string()).unwrap_or_default());
 
                         // DHCPv4 client settings
@@ -127,6 +143,7 @@ pub fn InterfaceEditPage(
                         if let Some(dhcp6_cfg) = &cfg.dhcpv6_client {
                             set_dhcp6_use_dns.set(dhcp6_cfg.use_dns);
                             set_dhcp6_use_ntp.set(dhcp6_cfg.use_ntp);
+                            set_dhcp6_use_delegated_prefix.set(dhcp6_cfg.use_delegated_prefix);
                             set_dhcp6_rapid_commit.set(dhcp6_cfg.rapid_commit);
                             set_dhcp6_prefix_hint
                                 .set(dhcp6_cfg.prefix_delegation_hint.clone().unwrap_or_default());
@@ -161,6 +178,8 @@ pub fn InterfaceEditPage(
                             dhcpv6_client: None,
                             ipv6_accept_ra: true,
                             ipv6_accept_ra_config: None,
+                            ipv6_send_ra: false,
+                            dhcp_prefix_delegation: None,
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
                             mtu: None,
@@ -319,6 +338,7 @@ pub fn InterfaceEditPage(
                             use_dns: dhcp6_use_dns.get(),
                             use_ntp: dhcp6_use_ntp.get(),
                             use_domains: "yes".to_string(),
+                            use_delegated_prefix: dhcp6_use_delegated_prefix.get(),
                             prefix_delegation_hint: if hint.is_empty() { None } else { Some(hint) },
                             rapid_commit: dhcp6_rapid_commit.get(),
                             without_ra: "no".to_string(),
@@ -355,8 +375,23 @@ pub fn InterfaceEditPage(
                     } else {
                         None
                     },
+                    ipv6_send_ra: ipv6_send_ra.get(),
+                    dhcp_prefix_delegation: if pd_enabled.get() {
+                        let uplink = pd_uplink.get();
+                        Some(DhcpPrefixDelegationConfig {
+                            uplink_interface: if uplink.is_empty() {
+                                None
+                            } else {
+                                Some(uplink)
+                            },
+                            subnet_id: pd_subnet_id.get().parse::<u64>().ok(),
+                            announce: pd_announce.get(),
+                        })
+                    } else {
+                        None
+                    },
                     ip_forward: ip_forward.get(),
-                    ip_masquerade: ip_masquerade.get(),
+                    ip_masquerade: current.ip_masquerade,
                     mtu: link_mtu.get().parse().ok(),
                     vlans: current.vlans.clone(),
                 };
@@ -600,6 +635,15 @@ pub fn InterfaceEditPage(
                                 <label class="flex items-center gap-2 cursor-pointer">
                                     <input
                                         type="checkbox"
+                                        checked=move || dhcp6_use_delegated_prefix.get()
+                                        on:change=move |ev| set_dhcp6_use_delegated_prefix.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Request delegated prefix"</span>
+                                </label>
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
                                         checked=move || dhcp6_rapid_commit.get()
                                         on:change=move |ev| set_dhcp6_rapid_commit.set(event_target_checked(&ev))
                                         class="w-4 h-4 rounded"
@@ -775,6 +819,61 @@ pub fn InterfaceEditPage(
                         </Show>
                     </div>
 
+                    // IPv6 Router Advertisement and delegated-prefix distribution
+                    <div class="bg-gray-700/50 rounded-lg p-4 space-y-3">
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked=move || ipv6_send_ra.get()
+                                on:change=move |ev| set_ipv6_send_ra.set(event_target_checked(&ev))
+                                class="w-5 h-5 rounded"
+                            />
+                            <span class="text-gray-200">"Send IPv6 Router Advertisements"</span>
+                        </label>
+                        <label class="flex items-center gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked=move || pd_enabled.get()
+                                on:change=move |ev| set_pd_enabled.set(event_target_checked(&ev))
+                                class="w-5 h-5 rounded"
+                            />
+                            <span class="text-gray-200">"Use an upstream delegated prefix"</span>
+                        </label>
+                        <Show when=move || pd_enabled.get()>
+                            <div class="grid grid-cols-2 gap-4 ml-8">
+                                <div>
+                                    <label class="block text-gray-400 text-sm mb-1">"Uplink Interface"</label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g., enp1s0"
+                                        prop:value=move || pd_uplink.get()
+                                        on:input=move |ev| set_pd_uplink.set(event_target_value(&ev))
+                                        class="w-full bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="block text-gray-400 text-sm mb-1">"Subnet ID (optional)"</label>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g., 0"
+                                        prop:value=move || pd_subnet_id.get()
+                                        on:input=move |ev| set_pd_subnet_id.set(event_target_value(&ev))
+                                        class="w-full bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
+                                    />
+                                </div>
+                                <label class="flex items-center gap-2 cursor-pointer col-span-2">
+                                    <input
+                                        type="checkbox"
+                                        checked=move || pd_announce.get()
+                                        on:change=move |ev| set_pd_announce.set(event_target_checked(&ev))
+                                        class="w-4 h-4 rounded"
+                                    />
+                                    <span class="text-gray-300">"Announce the delegated subnet"</span>
+                                </label>
+                            </div>
+                        </Show>
+                    </div>
+
                     // IP Forwarding
                     <div>
                         <label class="block text-gray-300 mb-2 font-medium">"IP Forwarding"</label>
@@ -796,25 +895,8 @@ pub fn InterfaceEditPage(
                         </select>
                     </div>
 
-                    // IP Masquerade (NAT)
-                    <div>
-                        <label class="block text-gray-300 mb-2 font-medium">"IP Masquerade (NAT)"</label>
-                        <select
-                            class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
-                            on:change=move |ev| {
-                                set_ip_masquerade.set(match event_target_value(&ev).as_str() {
-                                    "both" => IpMasqueradeMode::Both,
-                                    "ipv4" => IpMasqueradeMode::Ipv4,
-                                    "ipv6" => IpMasqueradeMode::Ipv6,
-                                    _ => IpMasqueradeMode::No,
-                                });
-                            }
-                        >
-                            <option value="no" selected=move || ip_masquerade.get() == IpMasqueradeMode::No>"Disabled"</option>
-                            <option value="ipv4" selected=move || ip_masquerade.get() == IpMasqueradeMode::Ipv4>"IPv4 Only"</option>
-                            <option value="ipv6" selected=move || ip_masquerade.get() == IpMasqueradeMode::Ipv6>"IPv6 Only"</option>
-                            <option value="both" selected=move || ip_masquerade.get() == IpMasqueradeMode::Both>"IPv4 + IPv6"</option>
-                        </select>
+                    <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 text-sm text-blue-200">
+                        "Source NAT is configured explicitly on firewall zones."
                     </div>
 
                     // Interface State Settings (collapsible advanced section)

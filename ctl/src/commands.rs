@@ -306,6 +306,14 @@ pub enum ZonesCommands {
         /// Default forward policy (accept or drop)
         #[arg(long, default_value = "drop")]
         forward_policy: String,
+
+        /// Mark this as an Internet-facing zone
+        #[arg(long, default_value_t = false)]
+        wan: bool,
+
+        /// Apply IPv4 masquerading to traffic leaving this zone
+        #[arg(long, default_value_t = false)]
+        masquerade_ipv4: bool,
     },
 
     /// Delete a firewall zone

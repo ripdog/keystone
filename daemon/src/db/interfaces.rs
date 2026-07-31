@@ -2,9 +2,9 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    ActivationPolicy, AddressScope, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
-    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, Ipv6AcceptRaConfig,
-    LinkLocalMode, ManagedInterface, RouteType, StaticAddress, StaticRoute,
+    ActivationPolicy, AddressScope, DhcpMode, DhcpPrefixDelegationConfig, Dhcpv4ClientConfig,
+    Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
+    Ipv6AcceptRaConfig, LinkLocalMode, ManagedInterface, RouteType, StaticAddress, StaticRoute,
 };
 use sqlx::SqlitePool;
 use tracing::info;
@@ -84,8 +84,29 @@ impl<'a> InterfacesDb<'a> {
 
     /// Get all interface configurations
     pub async fn get_interface_configs(&self) -> Result<Vec<InterfaceConfig>> {
-        let rows = sqlx::query_as::<_, (i64, String, String, bool, Option<String>, String, Option<String>, bool, String, String, String, bool, String, Option<i64>)>(
-            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy, mtu
+        let rows = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                String,
+                bool,
+                Option<String>,
+                String,
+                Option<String>,
+                bool,
+                bool,
+                String,
+                String,
+                String,
+                bool,
+                String,
+                Option<i64>,
+            ),
+        >(
+            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway,
+                      ipv6_accept_ra, ipv6_send_ra, ip_forward, ip_masquerade,
+                      link_local, required_for_online, activation_policy, mtu
                FROM interface_config ORDER BY interface_name"#,
         )
         .fetch_all(self.pool)
@@ -102,6 +123,7 @@ impl<'a> InterfacesDb<'a> {
             dhcp_mode,
             gateway,
             ipv6_accept_ra,
+            ipv6_send_ra,
             ip_forward,
             ip_masquerade,
             link_local,
@@ -117,6 +139,7 @@ impl<'a> InterfacesDb<'a> {
             let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
             let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
             let ipv6_accept_ra_config = self.get_ipv6_accept_ra_config(id).await?;
+            let dhcp_prefix_delegation = self.get_dhcp_prefix_delegation_config(id).await?;
             let vlans = self.get_vlan_names_for_interface(&name).await?;
 
             configs.push(InterfaceConfig {
@@ -140,6 +163,8 @@ impl<'a> InterfacesDb<'a> {
                 dhcpv6_client,
                 ipv6_accept_ra,
                 ipv6_accept_ra_config,
+                ipv6_send_ra,
+                dhcp_prefix_delegation,
                 ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                 ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
                 mtu: mtu.map(|v| v as u32),
@@ -152,8 +177,29 @@ impl<'a> InterfacesDb<'a> {
 
     /// Get a single interface configuration by name
     pub async fn get_interface_config(&self, name: &str) -> Result<Option<InterfaceConfig>> {
-        let row = sqlx::query_as::<_, (i64, String, String, bool, Option<String>, String, Option<String>, bool, String, String, String, bool, String, Option<i64>)>(
-            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy, mtu
+        let row = sqlx::query_as::<
+            _,
+            (
+                i64,
+                String,
+                String,
+                bool,
+                Option<String>,
+                String,
+                Option<String>,
+                bool,
+                bool,
+                String,
+                String,
+                String,
+                bool,
+                String,
+                Option<i64>,
+            ),
+        >(
+            r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway,
+                      ipv6_accept_ra, ipv6_send_ra, ip_forward, ip_masquerade,
+                      link_local, required_for_online, activation_policy, mtu
                FROM interface_config WHERE interface_name = ?"#,
         )
         .bind(name)
@@ -171,6 +217,7 @@ impl<'a> InterfacesDb<'a> {
                 dhcp_mode,
                 gateway,
                 ipv6_accept_ra,
+                ipv6_send_ra,
                 ip_forward,
                 ip_masquerade,
                 link_local,
@@ -185,6 +232,7 @@ impl<'a> InterfacesDb<'a> {
                 let dhcpv4_client = self.get_dhcpv4_client_config(id).await?;
                 let dhcpv6_client = self.get_dhcpv6_client_config(id).await?;
                 let ipv6_accept_ra_config = self.get_ipv6_accept_ra_config(id).await?;
+                let dhcp_prefix_delegation = self.get_dhcp_prefix_delegation_config(id).await?;
                 let vlans = self.get_vlan_names_for_interface(&name).await?;
 
                 Ok(Some(InterfaceConfig {
@@ -208,6 +256,8 @@ impl<'a> InterfacesDb<'a> {
                     dhcpv6_client,
                     ipv6_accept_ra,
                     ipv6_accept_ra_config,
+                    ipv6_send_ra,
+                    dhcp_prefix_delegation,
                     ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                     ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
                     mtu: mtu.map(|v| v as u32),
@@ -225,14 +275,18 @@ impl<'a> InterfacesDb<'a> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
+        let prefix_delegation = config.dhcp_prefix_delegation.as_ref();
 
         let config_id: i64 = if let Some(id) = config.id {
             // Update existing
             sqlx::query(
                 r#"UPDATE interface_config SET
                    role = ?, enabled = ?, description = ?, dhcp_mode = ?, gateway = ?,
-                   ipv6_accept_ra = ?, ip_forward = ?, ip_masquerade = ?,
-                   link_local = ?, required_for_online = ?, activation_policy = ?, mtu = ?, updated_at = ?
+                   ipv6_accept_ra = ?, ipv6_send_ra = ?,
+                   dhcp_prefix_delegation_enabled = ?, dhcp_prefix_delegation_uplink = ?,
+                   dhcp_prefix_delegation_subnet_id = ?, dhcp_prefix_delegation_announce = ?,
+                   ip_forward = ?, ip_masquerade = ?, link_local = ?, required_for_online = ?,
+                   activation_policy = ?, mtu = ?, updated_at = ?
                    WHERE id = ?"#,
             )
             .bind(config.role.to_string())
@@ -241,6 +295,15 @@ impl<'a> InterfacesDb<'a> {
             .bind(config.dhcp_mode.to_string())
             .bind(&config.gateway)
             .bind(config.ipv6_accept_ra)
+            .bind(config.ipv6_send_ra)
+            .bind(prefix_delegation.is_some())
+            .bind(prefix_delegation.and_then(|pd| pd.uplink_interface.as_ref()))
+            .bind(
+                prefix_delegation
+                    .and_then(|pd| pd.subnet_id)
+                    .map(|id| id as i64),
+            )
+            .bind(prefix_delegation.is_some_and(|pd| pd.announce))
             .bind(config.ip_forward.to_string())
             .bind(config.ip_masquerade.to_string())
             .bind(config.link_local.to_string())
@@ -261,8 +324,12 @@ impl<'a> InterfacesDb<'a> {
             // upsert keyed on `interface_name`.
             let _result = sqlx::query(
                 r#"INSERT INTO interface_config
-                   (interface_name, role, enabled, description, dhcp_mode, gateway, ipv6_accept_ra, ip_forward, ip_masquerade, link_local, required_for_online, activation_policy, mtu, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   (interface_name, role, enabled, description, dhcp_mode, gateway,
+                    ipv6_accept_ra, ipv6_send_ra, dhcp_prefix_delegation_enabled,
+                    dhcp_prefix_delegation_uplink, dhcp_prefix_delegation_subnet_id,
+                    dhcp_prefix_delegation_announce, ip_forward, ip_masquerade, link_local,
+                    required_for_online, activation_policy, mtu, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(interface_name) DO UPDATE SET
                      role = excluded.role,
                      enabled = excluded.enabled,
@@ -270,6 +337,11 @@ impl<'a> InterfacesDb<'a> {
                      dhcp_mode = excluded.dhcp_mode,
                      gateway = excluded.gateway,
                      ipv6_accept_ra = excluded.ipv6_accept_ra,
+                     ipv6_send_ra = excluded.ipv6_send_ra,
+                     dhcp_prefix_delegation_enabled = excluded.dhcp_prefix_delegation_enabled,
+                     dhcp_prefix_delegation_uplink = excluded.dhcp_prefix_delegation_uplink,
+                     dhcp_prefix_delegation_subnet_id = excluded.dhcp_prefix_delegation_subnet_id,
+                     dhcp_prefix_delegation_announce = excluded.dhcp_prefix_delegation_announce,
                      ip_forward = excluded.ip_forward,
                      ip_masquerade = excluded.ip_masquerade,
                      link_local = excluded.link_local,
@@ -285,6 +357,15 @@ impl<'a> InterfacesDb<'a> {
             .bind(config.dhcp_mode.to_string())
             .bind(&config.gateway)
             .bind(config.ipv6_accept_ra)
+            .bind(config.ipv6_send_ra)
+            .bind(prefix_delegation.is_some())
+            .bind(prefix_delegation.and_then(|pd| pd.uplink_interface.as_ref()))
+            .bind(
+                prefix_delegation
+                    .and_then(|pd| pd.subnet_id)
+                    .map(|id| id as i64),
+            )
+            .bind(prefix_delegation.is_some_and(|pd| pd.announce))
             .bind(config.ip_forward.to_string())
             .bind(config.ip_masquerade.to_string())
             .bind(config.link_local.to_string())
@@ -396,14 +477,16 @@ impl<'a> InterfacesDb<'a> {
             .await?;
         if let Some(dhcp_config) = &config.dhcpv6_client {
             sqlx::query(
-                r#"INSERT INTO dhcpv6_client_config 
-                   (interface_config_id, use_dns, use_ntp, use_domains, prefix_delegation_hint, rapid_commit, without_ra)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)"#
+                r#"INSERT INTO dhcpv6_client_config
+                   (interface_config_id, use_dns, use_ntp, use_domains, use_delegated_prefix,
+                    prefix_delegation_hint, rapid_commit, without_ra)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
             )
             .bind(config_id)
             .bind(dhcp_config.use_dns)
             .bind(dhcp_config.use_ntp)
             .bind(&dhcp_config.use_domains)
+            .bind(dhcp_config.use_delegated_prefix)
             .bind(&dhcp_config.prefix_delegation_hint)
             .bind(dhcp_config.rapid_commit)
             .bind(&dhcp_config.without_ra)
@@ -538,9 +621,10 @@ impl<'a> InterfacesDb<'a> {
     }
 
     async fn get_dhcpv6_client_config(&self, config_id: i64) -> Result<Option<Dhcpv6ClientConfig>> {
-        let row = sqlx::query_as::<_, (bool, bool, String, Option<String>, bool, String)>(
-            r#"SELECT use_dns, use_ntp, use_domains, prefix_delegation_hint, rapid_commit, without_ra
-               FROM dhcpv6_client_config WHERE interface_config_id = ?"#
+        let row = sqlx::query_as::<_, (bool, bool, String, bool, Option<String>, bool, String)>(
+            r#"SELECT use_dns, use_ntp, use_domains, use_delegated_prefix,
+                      prefix_delegation_hint, rapid_commit, without_ra
+               FROM dhcpv6_client_config WHERE interface_config_id = ?"#,
         )
         .bind(config_id)
         .fetch_optional(self.pool)
@@ -548,15 +632,22 @@ impl<'a> InterfacesDb<'a> {
         .context("Failed to fetch DHCPv6 client config")?;
 
         Ok(row.map(
-            |(use_dns, use_ntp, use_domains, prefix_delegation_hint, rapid_commit, without_ra)| {
-                Dhcpv6ClientConfig {
-                    use_dns,
-                    use_ntp,
-                    use_domains,
-                    prefix_delegation_hint,
-                    rapid_commit,
-                    without_ra,
-                }
+            |(
+                use_dns,
+                use_ntp,
+                use_domains,
+                use_delegated_prefix,
+                prefix_delegation_hint,
+                rapid_commit,
+                without_ra,
+            )| Dhcpv6ClientConfig {
+                use_dns,
+                use_ntp,
+                use_domains,
+                use_delegated_prefix,
+                prefix_delegation_hint,
+                rapid_commit,
+                without_ra,
             },
         ))
     }
@@ -584,6 +675,31 @@ impl<'a> InterfacesDb<'a> {
             }
             None => Ok(None),
         }
+    }
+
+    async fn get_dhcp_prefix_delegation_config(
+        &self,
+        config_id: i64,
+    ) -> Result<Option<DhcpPrefixDelegationConfig>> {
+        let row = sqlx::query_as::<_, (bool, Option<String>, Option<i64>, bool)>(
+            r#"SELECT dhcp_prefix_delegation_enabled, dhcp_prefix_delegation_uplink,
+                      dhcp_prefix_delegation_subnet_id, dhcp_prefix_delegation_announce
+               FROM interface_config WHERE id = ?"#,
+        )
+        .bind(config_id)
+        .fetch_optional(self.pool)
+        .await
+        .context("Failed to fetch DHCP prefix delegation config")?;
+
+        Ok(
+            row.and_then(|(enabled, uplink_interface, subnet_id, announce)| {
+                enabled.then_some(DhcpPrefixDelegationConfig {
+                    uplink_interface,
+                    subnet_id: subnet_id.map(|id| id as u64),
+                    announce,
+                })
+            }),
+        )
     }
 
     async fn save_ipv6_accept_ra_config_tx(

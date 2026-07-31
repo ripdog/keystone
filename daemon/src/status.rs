@@ -505,7 +505,7 @@ fn check_network_interfaces() -> SystemCheck {
 }
 
 /// Get list of physical network interfaces (filtering out virtual ones)
-fn get_physical_interfaces() -> Vec<String> {
+pub(crate) fn get_physical_interfaces() -> Vec<String> {
     let mut interfaces = Vec::new();
 
     if let Ok(entries) = fs::read_dir("/sys/class/net") {

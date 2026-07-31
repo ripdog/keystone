@@ -3,7 +3,9 @@
 //! This module generates a human-readable representation of the firewall
 //! configuration in nftables syntax format.
 
-use crate::firewall::generate::{FILTER_TABLE, NAT_TABLE, find_wan_zones};
+use crate::firewall::generate::{
+    FILTER_TABLE, NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones,
+};
 use keystone_core::{
     FirewallConfig, FirewallPolicy, ForwardRule, InputRule, PortForward, RuleProtocol,
 };
@@ -63,7 +65,11 @@ pub fn generate_preview(
             {
                 let ifaces = format_interface_set(&zone.interfaces);
                 output.push_str(&format!(
-                    "        iifname {} icmp type echo-request counter accept  # ping from {}\n",
+                    "        iifname {} icmp type echo-request counter accept  # IPv4 ping from {}\n",
+                    ifaces, zone.name
+                ));
+                output.push_str(&format!(
+                    "        iifname {} icmpv6 type echo-request counter accept  # IPv6 ping from {}\n",
                     ifaces, zone.name
                 ));
             }
@@ -76,7 +82,11 @@ pub fn generate_preview(
             if !zone.interfaces.is_empty() {
                 let ifaces = format_interface_set(&zone.interfaces);
                 output.push_str(&format!(
-                    "        iifname {} icmp type echo-request counter accept  # ping from {}\n",
+                    "        iifname {} icmp type echo-request counter accept  # IPv4 ping from {}\n",
+                    ifaces, zone.name
+                ));
+                output.push_str(&format!(
+                    "        iifname {} icmpv6 type echo-request counter accept  # IPv6 ping from {}\n",
                     ifaces, zone.name
                 ));
             }
@@ -86,6 +96,10 @@ pub fn generate_preview(
     output
         .push_str("        # Allow essential ICMP types (required for proper network operation)\n");
     output.push_str("        icmp type { destination-unreachable, time-exceeded, parameter-problem } counter accept\n");
+    output.push_str(
+        "        # Essential ICMPv6 error, neighbour/router discovery, and MLD traffic\n",
+    );
+    output.push_str("        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, mld-listener-query, mld-listener-report, mld-listener-done, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, mld2-listener-report } counter accept\n");
     output.push_str("        \n");
     output.push_str("        # Priority 4: User Input Rules\n");
 
@@ -254,8 +268,8 @@ pub fn generate_preview(
         }
     }
 
-    let wan_zones = find_wan_zones(&config.zones);
-    for zone in wan_zones {
+    let masquerade_zones = find_ipv4_masquerade_zones(&config.zones);
+    for zone in masquerade_zones {
         for iface in &zone.interfaces {
             output.push_str(&format!(
                 "        # MSS clamping for {} ({})\n",
@@ -269,7 +283,10 @@ pub fn generate_preview(
                 "        # Masquerade for {} ({})\n",
                 iface, zone.name
             ));
-            output.push_str(&format!("        oifname \"{}\" masquerade\n", iface));
+            output.push_str(&format!(
+                "        meta nfproto ipv4 oifname \"{}\" masquerade\n",
+                iface
+            ));
         }
     }
 

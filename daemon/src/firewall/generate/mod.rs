@@ -19,7 +19,7 @@ use chains::{
 };
 use preview::generate_preview;
 
-use keystone_core::{FirewallConfig, FirewallPolicy, FirewallZone};
+use keystone_core::{FirewallConfig, FirewallZone};
 use nftables::{
     batch::Batch,
     schema::{NfListObject, Table},
@@ -65,13 +65,6 @@ pub fn generate_ruleset(config: &FirewallConfig) -> GeneratedRuleset<'static> {
         ..Default::default()
     }));
 
-    // Create NAT table
-    batch.add(NfListObject::Table(Table {
-        family: NfFamily::INet,
-        name: Cow::Borrowed(NAT_TABLE),
-        ..Default::default()
-    }));
-
     // Generate filter chains
     generate_input_chain(&mut batch, config, &zone_interfaces);
     generate_forward_chain(&mut batch, config, &zone_interfaces);
@@ -95,24 +88,22 @@ pub fn build_zone_interface_map(zones: &[FirewallZone]) -> HashMap<String, Vec<S
         .collect()
 }
 
-/// Find zones that should be considered "WAN" (for masquerading)
-/// A zone is WAN if it has default drop policies for both input and forward
+/// Find explicitly Internet-facing zones.
 pub fn find_wan_zones(zones: &[FirewallZone]) -> Vec<&FirewallZone> {
-    zones
-        .iter()
-        .filter(|z| {
-            z.default_input_policy == FirewallPolicy::Drop
-                && z.default_forward_policy == FirewallPolicy::Drop
-        })
-        .collect()
+    zones.iter().filter(|zone| zone.is_wan).collect()
+}
+
+/// Find zones whose egress traffic should receive IPv4 source NAT.
+pub fn find_ipv4_masquerade_zones(zones: &[FirewallZone]) -> Vec<&FirewallZone> {
+    zones.iter().filter(|zone| zone.masquerade_ipv4).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use keystone_core::{
-        FirewallAction, FirewallGlobalSettings, InputRule, PortForward, RuleProtocol,
-        ZoneForwardPolicy,
+        FirewallAction, FirewallGlobalSettings, FirewallPolicy, InputRule, PortForward,
+        RuleProtocol, ZoneForwardPolicy,
     };
 
     fn create_test_config() -> FirewallConfig {
@@ -123,6 +114,8 @@ mod tests {
                     name: "wan".to_string(),
                     description: Some("Internet-facing".to_string()),
                     interfaces: vec!["eth0".to_string()],
+                    is_wan: true,
+                    masquerade_ipv4: true,
                     default_input_policy: FirewallPolicy::Drop,
                     default_forward_policy: FirewallPolicy::Drop,
                 },
@@ -131,6 +124,8 @@ mod tests {
                     name: "lan".to_string(),
                     description: Some("Internal network".to_string()),
                     interfaces: vec!["eth1".to_string(), "eth2".to_string()],
+                    is_wan: false,
+                    masquerade_ipv4: false,
                     default_input_policy: FirewallPolicy::Accept,
                     default_forward_policy: FirewallPolicy::Accept,
                 },
@@ -185,6 +180,9 @@ mod tests {
         let json = serde_json::to_string_pretty(&result.nftables).unwrap();
         assert!(json.contains("keystone"));
         assert!(json.contains("keystone_nat"));
+        assert!(json.contains("nfproto"));
+        assert!(json.contains("ipv4"));
+        assert!(json.contains("ipv6-icmp"));
     }
 
     #[test]
@@ -210,6 +208,8 @@ mod tests {
                 name: "wan".to_string(),
                 description: None,
                 interfaces: vec!["eth0".to_string()],
+                is_wan: true,
+                masquerade_ipv4: true,
                 default_input_policy: FirewallPolicy::Drop,
                 default_forward_policy: FirewallPolicy::Drop,
             },
@@ -218,6 +218,8 @@ mod tests {
                 name: "lan".to_string(),
                 description: None,
                 interfaces: vec!["eth1".to_string(), "eth2".to_string()],
+                is_wan: false,
+                masquerade_ipv4: false,
                 default_input_policy: FirewallPolicy::Accept,
                 default_forward_policy: FirewallPolicy::Accept,
             },
@@ -239,6 +241,8 @@ mod tests {
                 name: "wan".to_string(),
                 description: None,
                 interfaces: vec!["eth0".to_string()],
+                is_wan: true,
+                masquerade_ipv4: true,
                 default_input_policy: FirewallPolicy::Drop,
                 default_forward_policy: FirewallPolicy::Drop,
             },
@@ -247,8 +251,20 @@ mod tests {
                 name: "lan".to_string(),
                 description: None,
                 interfaces: vec!["eth1".to_string()],
+                is_wan: false,
+                masquerade_ipv4: false,
                 default_input_policy: FirewallPolicy::Accept,
                 default_forward_policy: FirewallPolicy::Accept,
+            },
+            FirewallZone {
+                id: Some(3),
+                name: "isolated".to_string(),
+                description: None,
+                interfaces: vec!["eth2".to_string()],
+                is_wan: false,
+                masquerade_ipv4: false,
+                default_input_policy: FirewallPolicy::Drop,
+                default_forward_policy: FirewallPolicy::Drop,
             },
         ];
 

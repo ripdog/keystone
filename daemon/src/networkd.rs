@@ -4,18 +4,244 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, IpForwardMode,
-    IpMasqueradeMode, VlanConfig,
+    BridgeConfig, DhcpMode, Dhcpv4ClientConfig, Dhcpv6ClientConfig, InterfaceConfig, IpForwardMode,
+    VlanConfig,
 };
+use std::collections::HashSet;
 use std::fmt::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::info;
+use uuid::Uuid;
 
-/// Directory where networkd config files are written
+/// Directory where networkd link configuration files are written.
 const NETWORKD_DIR: &str = "/etc/systemd/network";
+/// Directory for global systemd-networkd configuration drop-ins.
+const NETWORKD_CONFIG_DIR: &str = "/etc/systemd/networkd.conf.d";
+/// Keystone-owned global forwarding configuration.
+const NETWORKD_ROUTER_CONFIG: &str = "50-keystone-router.conf";
 
 /// Prefix for keystone-managed files to distinguish from system configs
 const KEYSTONE_PREFIX: &str = "50-keystone-";
+
+/// Summary of a successfully applied networkd configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NetworkdApplySummary {
+    pub interfaces: usize,
+    pub vlans: usize,
+    pub bridges: usize,
+}
+
+#[derive(Debug)]
+struct NetworkdConfigSnapshot {
+    files: Vec<(PathBuf, Vec<u8>)>,
+}
+
+impl NetworkdConfigSnapshot {
+    fn capture() -> Result<Self> {
+        let mut files = Vec::new();
+        let network_dir = Path::new(NETWORKD_DIR);
+        if network_dir.exists() {
+            for entry in std::fs::read_dir(network_dir)
+                .with_context(|| format!("Failed to read networkd directory: {:?}", network_dir))?
+            {
+                let entry = entry.context("Failed to inspect networkd directory entry")?;
+                let path = entry.path();
+                if is_keystone_networkd_file(&path) {
+                    let content = std::fs::read(&path)
+                        .with_context(|| format!("Failed to snapshot networkd file: {:?}", path))?;
+                    files.push((path, content));
+                }
+            }
+        }
+
+        let global_path = networkd_global_config_path();
+        if global_path.exists() {
+            let content = std::fs::read(&global_path).with_context(|| {
+                format!(
+                    "Failed to snapshot networkd global config: {:?}",
+                    global_path
+                )
+            })?;
+            files.push((global_path, content));
+        }
+
+        Ok(Self { files })
+    }
+
+    fn restore(&self) -> Result<()> {
+        remove_all_keystone_networkd_files()?;
+        let global_path = networkd_global_config_path();
+        if global_path.exists() {
+            std::fs::remove_file(&global_path).with_context(|| {
+                format!("Failed to remove networkd global config: {:?}", global_path)
+            })?;
+        }
+
+        for (path, content) in &self.files {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to recreate networkd directory: {:?}", parent)
+                })?;
+            }
+            atomic_write(path, content)?;
+        }
+        Ok(())
+    }
+}
+
+/// Atomically install all Keystone-owned networkd files and reload networkd.
+/// Existing files are restored if writing or reloading fails.
+pub fn apply_configuration(
+    configs: &[InterfaceConfig],
+    vlans: &[VlanConfig],
+    bridges: &[BridgeConfig],
+) -> Result<NetworkdApplySummary> {
+    ensure_networkd_dir()?;
+    let snapshot = NetworkdConfigSnapshot::capture()?;
+
+    let result = apply_configuration_files(configs, vlans, bridges)
+        .and_then(|summary| reload_networkd().map(|()| summary));
+
+    match result {
+        Ok(summary) => Ok(summary),
+        Err(error) => {
+            let restore_result = snapshot.restore();
+            let reload_result = restore_result.as_ref().ok().map(|()| reload_networkd());
+
+            match (restore_result, reload_result) {
+                (Ok(()), Some(Ok(()))) => anyhow::bail!(
+                    "Network configuration failed and the previous files were restored: {}",
+                    error
+                ),
+                (Ok(()), Some(Err(reload_error))) => anyhow::bail!(
+                    "Network configuration failed ({}); previous files were restored but networkd could not reload them ({})",
+                    error,
+                    reload_error
+                ),
+                (Err(restore_error), _) => anyhow::bail!(
+                    "Network configuration failed ({}) and restoring the previous files also failed ({})",
+                    error,
+                    restore_error
+                ),
+                (Ok(()), None) => unreachable!("reload result is present after successful restore"),
+            }
+        }
+    }
+}
+
+fn apply_configuration_files(
+    configs: &[InterfaceConfig],
+    vlans: &[VlanConfig],
+    bridges: &[BridgeConfig],
+) -> Result<NetworkdApplySummary> {
+    write_networkd_global_config(configs)?;
+
+    let mut expected_paths = HashSet::new();
+    let mut interface_count = 0;
+    for config in configs {
+        if config.enabled {
+            write_network_file(config)?;
+            expected_paths.insert(get_network_filepath(&config.name));
+            interface_count += 1;
+        }
+    }
+
+    for vlan in vlans {
+        write_vlan_netdev_file(vlan)?;
+        expected_paths.insert(get_vlan_netdev_filepath(&vlan.name));
+    }
+
+    for bridge in bridges {
+        write_bridge_netdev_file(bridge)?;
+        expected_paths.insert(get_bridge_netdev_filepath(&bridge.name));
+        write_bridge_member_network_files(bridge)?;
+        for member in &bridge.members {
+            expected_paths.insert(get_network_filepath(member));
+        }
+    }
+
+    remove_stale_keystone_networkd_files(&expected_paths)?;
+
+    Ok(NetworkdApplySummary {
+        interfaces: interface_count,
+        vlans: vlans.len(),
+        bridges: bridges.len(),
+    })
+}
+
+fn networkd_global_config_path() -> PathBuf {
+    Path::new(NETWORKD_CONFIG_DIR).join(NETWORKD_ROUTER_CONFIG)
+}
+
+fn is_keystone_networkd_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(KEYSTONE_PREFIX))
+}
+
+fn remove_all_keystone_networkd_files() -> Result<()> {
+    let network_dir = Path::new(NETWORKD_DIR);
+    if !network_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(network_dir)
+        .with_context(|| format!("Failed to read networkd directory: {:?}", network_dir))?
+    {
+        let path = entry
+            .context("Failed to inspect networkd directory entry")?
+            .path();
+        if is_keystone_networkd_file(&path) {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("Failed to remove Keystone networkd file: {:?}", path))?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_stale_keystone_networkd_files(expected_paths: &HashSet<PathBuf>) -> Result<()> {
+    let network_dir = Path::new(NETWORKD_DIR);
+    if !network_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(network_dir)
+        .with_context(|| format!("Failed to read networkd directory: {:?}", network_dir))?
+    {
+        let path = entry
+            .context("Failed to inspect networkd directory entry")?
+            .path();
+        if is_keystone_networkd_file(&path) && !expected_paths.contains(&path) {
+            std::fs::remove_file(&path)
+                .with_context(|| format!("Failed to remove stale networkd file: {:?}", path))?;
+            info!("Removed stale Keystone networkd file: {:?}", path);
+        }
+    }
+    Ok(())
+}
+
+fn atomic_write(path: &Path, content: impl AsRef<[u8]>) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Path has no parent: {:?}", path))?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create directory: {:?}", parent))?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Invalid file name: {:?}", path))?;
+    let temporary = parent.join(format!(".{}.keystone-tmp-{}", file_name, Uuid::new_v4()));
+
+    std::fs::write(&temporary, content)
+        .with_context(|| format!("Failed to write temporary file: {:?}", temporary))?;
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error)
+            .with_context(|| format!("Failed to atomically replace file: {:?}", path));
+    }
+    Ok(())
+}
 
 /// Generate a .network file content from an InterfaceConfig
 pub fn generate_network_file(config: &InterfaceConfig) -> String {
@@ -61,14 +287,25 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
     )
     .unwrap();
 
-    // IP Forwarding
-    if config.ip_forward != IpForwardMode::No {
-        writeln!(output, "IPForward={}", config.ip_forward).unwrap();
+    // Current systemd versions use protocol-specific forwarding directives.
+    match config.ip_forward {
+        IpForwardMode::No => {}
+        IpForwardMode::Yes => {
+            writeln!(output, "IPv4Forwarding=yes").unwrap();
+            writeln!(output, "IPv6Forwarding=yes").unwrap();
+        }
+        IpForwardMode::Ipv4 => writeln!(output, "IPv4Forwarding=yes").unwrap(),
+        IpForwardMode::Ipv6 => writeln!(output, "IPv6Forwarding=yes").unwrap(),
     }
 
-    // IP Masquerade (NAT)
-    if config.ip_masquerade != IpMasqueradeMode::No {
-        writeln!(output, "IPMasquerade={}", config.ip_masquerade).unwrap();
+    // Keystone owns source NAT in nftables. Do not also ask networkd to
+    // masquerade traffic, as that duplicates policy in a second subsystem.
+
+    if config.ipv6_send_ra {
+        writeln!(output, "IPv6SendRA=yes").unwrap();
+    }
+    if config.dhcp_prefix_delegation.is_some() {
+        writeln!(output, "DHCPPrefixDelegation=yes").unwrap();
     }
 
     // Static DNS servers
@@ -156,6 +393,10 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
         output.push_str(&generate_ipv6_accept_ra_section(ra_client_cfg));
     }
 
+    if let Some(pd_cfg) = &config.dhcp_prefix_delegation {
+        output.push_str(&generate_dhcp_prefix_delegation_section(pd_cfg));
+    }
+
     output
 }
 
@@ -189,6 +430,12 @@ fn generate_dhcpv6_section(cfg: &Dhcpv6ClientConfig) -> String {
     if cfg.use_domains != "yes" {
         writeln!(output, "UseDomains={}", cfg.use_domains).unwrap();
     }
+    writeln!(
+        output,
+        "UseDelegatedPrefix={}",
+        bool_to_yesno(cfg.use_delegated_prefix)
+    )
+    .unwrap();
     if let Some(hint) = &cfg.prefix_delegation_hint {
         writeln!(output, "PrefixDelegationHint={}", hint).unwrap();
     }
@@ -196,6 +443,22 @@ fn generate_dhcpv6_section(cfg: &Dhcpv6ClientConfig) -> String {
     if cfg.without_ra != "no" {
         writeln!(output, "WithoutRA={}", cfg.without_ra).unwrap();
     }
+    writeln!(output).unwrap();
+    output
+}
+
+fn generate_dhcp_prefix_delegation_section(
+    cfg: &keystone_core::DhcpPrefixDelegationConfig,
+) -> String {
+    let mut output = String::new();
+    writeln!(output, "[DHCPPrefixDelegation]").unwrap();
+    if let Some(uplink) = &cfg.uplink_interface {
+        writeln!(output, "UplinkInterface={}", uplink).unwrap();
+    }
+    if let Some(subnet_id) = cfg.subnet_id {
+        writeln!(output, "SubnetId={}", subnet_id).unwrap();
+    }
+    writeln!(output, "Announce={}", bool_to_yesno(cfg.announce)).unwrap();
     writeln!(output).unwrap();
     output
 }
@@ -225,6 +488,54 @@ fn bool_to_yesno(b: bool) -> &'static str {
     if b { "yes" } else { "no" }
 }
 
+/// Generate global forwarding settings required for router operation.
+pub fn generate_networkd_global_config(configs: &[InterfaceConfig]) -> Option<String> {
+    let ipv4_forwarding = configs.iter().any(|config| {
+        config.enabled && matches!(config.ip_forward, IpForwardMode::Yes | IpForwardMode::Ipv4)
+    });
+    let ipv6_forwarding = configs.iter().any(|config| {
+        config.enabled && matches!(config.ip_forward, IpForwardMode::Yes | IpForwardMode::Ipv6)
+    });
+
+    if !ipv4_forwarding && !ipv6_forwarding {
+        return None;
+    }
+
+    let mut output = String::new();
+    writeln!(output, "# Generated by Keystone - do not edit manually").unwrap();
+    writeln!(output, "[Network]").unwrap();
+    if ipv4_forwarding {
+        writeln!(output, "IPv4Forwarding=yes").unwrap();
+    }
+    if ipv6_forwarding {
+        writeln!(output, "IPv6Forwarding=yes").unwrap();
+    }
+    Some(output)
+}
+
+/// Write or remove Keystone's global networkd router configuration.
+pub fn write_networkd_global_config(configs: &[InterfaceConfig]) -> Result<()> {
+    let directory = Path::new(NETWORKD_CONFIG_DIR);
+    let path = directory.join(NETWORKD_ROUTER_CONFIG);
+
+    if let Some(content) = generate_networkd_global_config(configs) {
+        std::fs::create_dir_all(directory).with_context(|| {
+            format!(
+                "Failed to create networkd config directory: {:?}",
+                directory
+            )
+        })?;
+        atomic_write(&path, content.as_bytes())?;
+        info!("Wrote global networkd router config to {:?}", path);
+    } else if path.exists() {
+        std::fs::remove_file(&path)
+            .with_context(|| format!("Failed to remove networkd router config: {:?}", path))?;
+        info!("Removed global networkd router config: {:?}", path);
+    }
+
+    Ok(())
+}
+
 /// Get the filename for a managed interface
 pub fn get_network_filename(interface_name: &str) -> String {
     format!("{}{}.network", KEYSTONE_PREFIX, interface_name)
@@ -240,8 +551,7 @@ pub fn write_network_file(config: &InterfaceConfig) -> Result<()> {
     let content = generate_network_file(config);
     let path = get_network_filepath(&config.name);
 
-    std::fs::write(&path, &content)
-        .with_context(|| format!("Failed to write network file: {:?}", path))?;
+    atomic_write(&path, content.as_bytes())?;
 
     info!("Wrote network config to {:?}", path);
     Ok(())
@@ -347,8 +657,7 @@ pub fn write_vlan_netdev_file(config: &VlanConfig) -> Result<()> {
     let content = generate_vlan_netdev_file(config);
     let path = get_vlan_netdev_filepath(&config.name);
 
-    std::fs::write(&path, &content)
-        .with_context(|| format!("Failed to write VLAN netdev file: {:?}", path))?;
+    atomic_write(&path, content.as_bytes())?;
 
     info!("Wrote VLAN netdev config to {:?}", path);
     Ok(())
@@ -418,8 +727,7 @@ pub fn write_bridge_netdev_file(config: &keystone_core::BridgeConfig) -> Result<
     let content = generate_bridge_netdev_file(config);
     let path = get_bridge_netdev_filepath(&config.name);
 
-    std::fs::write(&path, &content)
-        .with_context(|| format!("Failed to write bridge netdev file: {:?}", path))?;
+    atomic_write(&path, content.as_bytes())?;
 
     info!("Wrote bridge netdev config to {:?}", path);
     Ok(())
@@ -472,8 +780,7 @@ pub fn write_bridge_member_network_files(
         let filename = format!("{}{}.network", KEYSTONE_PREFIX, member);
         let path = Path::new(NETWORKD_DIR).join(&filename);
 
-        std::fs::write(&path, &content)
-            .with_context(|| format!("Failed to write bridge member network file: {:?}", path))?;
+        atomic_write(&path, content.as_bytes())?;
 
         info!("Wrote bridge member config for {} to {:?}", member, path);
         written.push(member.clone());
@@ -485,7 +792,8 @@ pub fn write_bridge_member_network_files(
 mod tests {
     use super::*;
     use keystone_core::{
-        ActivationPolicy, AddressScope, InterfaceRole, LinkLocalMode, StaticAddress, VlanProtocol,
+        ActivationPolicy, AddressScope, InterfaceRole, IpMasqueradeMode, LinkLocalMode,
+        StaticAddress, VlanProtocol,
     };
 
     #[test]
@@ -509,6 +817,8 @@ mod tests {
             dhcpv6_client: None,
             ipv6_accept_ra: true,
             ipv6_accept_ra_config: None,
+            ipv6_send_ra: false,
+            dhcp_prefix_delegation: None,
             mtu: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
@@ -547,6 +857,8 @@ mod tests {
             dhcpv6_client: None,
             ipv6_accept_ra: false,
             ipv6_accept_ra_config: None,
+            ipv6_send_ra: false,
+            dhcp_prefix_delegation: None,
             mtu: None,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::No,
@@ -558,7 +870,52 @@ mod tests {
         assert!(output.contains("Address=192.168.1.1/24"));
         assert!(output.contains("DNS=8.8.8.8"));
         assert!(output.contains("Domains=example.com"));
-        assert!(output.contains("IPForward=yes"));
+        assert!(output.contains("IPv4Forwarding=yes"));
+        assert!(output.contains("IPv6Forwarding=yes"));
+    }
+
+    #[test]
+    fn test_dual_stack_router_directives() {
+        let wan = InterfaceConfig {
+            name: "wan0".to_string(),
+            role: InterfaceRole::WAN,
+            dhcp_mode: DhcpMode::Yes,
+            dhcpv6_client: Some(Dhcpv6ClientConfig::default()),
+            ip_forward: IpForwardMode::Yes,
+            ip_masquerade: IpMasqueradeMode::Ipv4,
+            ..Default::default()
+        };
+        let wan_output = generate_network_file(&wan);
+        assert!(wan_output.contains("DHCP=yes"));
+        assert!(wan_output.contains("UseDelegatedPrefix=yes"));
+        assert!(wan_output.contains("IPv4Forwarding=yes"));
+        assert!(wan_output.contains("IPv6Forwarding=yes"));
+        assert!(!wan_output.contains("IPMasquerade="));
+
+        let lan = InterfaceConfig {
+            name: "lan0".to_string(),
+            role: InterfaceRole::LAN,
+            ipv6_accept_ra: false,
+            ipv6_send_ra: true,
+            dhcp_prefix_delegation: Some(keystone_core::DhcpPrefixDelegationConfig {
+                uplink_interface: Some("wan0".to_string()),
+                subnet_id: Some(1),
+                announce: true,
+            }),
+            ip_forward: IpForwardMode::Yes,
+            ..Default::default()
+        };
+        let lan_output = generate_network_file(&lan);
+        assert!(lan_output.contains("IPv6SendRA=yes"));
+        assert!(lan_output.contains("DHCPPrefixDelegation=yes"));
+        assert!(lan_output.contains("[DHCPPrefixDelegation]"));
+        assert!(lan_output.contains("UplinkInterface=wan0"));
+        assert!(lan_output.contains("SubnetId=1"));
+        assert!(lan_output.contains("Announce=yes"));
+
+        let global = generate_networkd_global_config(&[wan, lan]).unwrap();
+        assert!(global.contains("IPv4Forwarding=yes"));
+        assert!(global.contains("IPv6Forwarding=yes"));
     }
 
     #[test]
@@ -632,6 +989,8 @@ mod tests {
             dhcpv6_client: None,
             ipv6_accept_ra: false,
             ipv6_accept_ra_config: None,
+            ipv6_send_ra: false,
+            dhcp_prefix_delegation: None,
             mtu: None,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,

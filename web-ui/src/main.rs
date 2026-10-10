@@ -25,7 +25,7 @@ use tokio::{
     time::{self, Duration},
 };
 #[cfg(feature = "server")]
-use tower_http::services::ServeDir;
+use tower_http::services::{ServeDir, ServeFile};
 #[cfg(feature = "server")]
 use tracing::{error, info, warn};
 
@@ -52,10 +52,7 @@ async fn main() -> anyhow::Result<()> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| exe_dir.join("dist"));
 
-    let app = Router::new()
-        .route("/api/{*path}", any(proxy_to_daemon))
-        .route("/health", get(health_check))
-        .fallback_service(ServeDir::new(dist_dir));
+    let app = build_router(&dist_dir);
 
     // Never bind a wildcard socket, not even temporarily. Reconcile numeric
     // addresses so DHCP renewals, interface role changes and configured VLANs
@@ -100,6 +97,18 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// Serve real assets normally, but return the SPA entry point for client-side
+/// routes such as /interfaces/enp3s0. The API and health routes take priority.
+#[cfg(feature = "server")]
+fn build_router(dist_dir: &std::path::Path) -> Router {
+    Router::new()
+        .route("/api/{*path}", any(proxy_to_daemon))
+        .route("/health", get(health_check))
+        .fallback_service(
+            ServeDir::new(dist_dir).fallback(ServeFile::new(dist_dir.join("index.html"))),
+        )
 }
 
 #[cfg(feature = "server")]
@@ -207,6 +216,56 @@ async fn proxy_to_daemon(req: Request) -> Result<Response, StatusCode> {
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn deep_links_serve_spa_without_breaking_assets_or_health() {
+        use tower::ServiceExt;
+
+        let dist =
+            std::env::temp_dir().join(format!("keystone-web-router-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<html>Keystone app</html>").unwrap();
+        std::fs::write(dist.join("app.js"), "console.log('app');").unwrap();
+        let router = build_router(&dist);
+
+        for path in ["/", "/interfaces", "/interfaces/enp3s0", "/status"] {
+            let response = router
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{path}");
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            assert_eq!(&body[..], b"<html>Keystone app</html>", "{path}");
+        }
+        let asset = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(asset.status(), StatusCode::OK);
+        assert_eq!(
+            &asset.into_body().collect().await.unwrap().to_bytes()[..],
+            b"console.log('app');"
+        );
+
+        let health = router
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+        std::fs::remove_dir_all(&dist).unwrap();
+    }
 
     #[test]
     fn only_specific_lan_addresses() {

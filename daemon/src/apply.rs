@@ -86,9 +86,9 @@ pub async fn apply_all(
             component_success(msg)
         }
         Err(e) => {
-            error!("Networkd failed: {}", e);
+            error!("Networkd failed: {e:#}");
             all_success = false;
-            component_failure(e.to_string())
+            component_failure(format!("{e:#}"))
         }
     };
 
@@ -122,9 +122,9 @@ pub async fn apply_all(
             )
         }
         Err(e) => {
-            error!("Firewall failed: {}", e);
+            error!("Firewall failed: {e:#}");
             all_success = false;
-            components.firewall = component_failure(e.to_string());
+            components.firewall = component_failure(format!("{e:#}"));
             (false, None, None)
         }
     };
@@ -137,9 +137,9 @@ pub async fn apply_all(
             component_success("Applied successfully")
         }
         Err(e) => {
-            error!("Dnsmasq failed: {}", e);
+            error!("Dnsmasq failed: {e:#}");
             all_success = false;
-            component_failure(e.to_string())
+            component_failure(format!("{e:#}"))
         }
     };
 
@@ -151,9 +151,9 @@ pub async fn apply_all(
             component_success("Applied successfully")
         }
         Err(e) => {
-            error!("Caddy failed: {}", e);
+            error!("Caddy failed: {e:#}");
             all_success = false;
-            component_failure(e.to_string())
+            component_failure(format!("{e:#}"))
         }
     };
 

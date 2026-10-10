@@ -370,11 +370,12 @@ fn SettingsTab(
                         class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white font-mono text-sm"
                     />
                     <p class="text-sm text-gray-500 mt-1">
-                        "Raw Caddyfile TLS directives. Examples: dns cloudflare, custom cert files, etc."
+                        "For security, only a three-line Cloudflare DNS challenge block or 'tls /absolute/cert /absolute/key' is accepted. Do not paste API tokens here."
                     </p>
                     <div class="mt-2 p-3 bg-gray-900 rounded text-sm text-gray-400">
                         <p class="font-medium text-gray-300 mb-1">"Example for Cloudflare DNS challenge:"</p>
                         <pre class="text-xs font-mono">"tls {\n    dns cloudflare {env.CF_API_TOKEN}\n}"</pre>
+                        <p class="mt-2">"Requires the Cloudflare DNS provider module in Caddy and CF_API_TOKEN set in the Caddy service environment. The standard Arch Caddy package does not include the provider."</p>
                     </div>
                 </div>
             </Show>

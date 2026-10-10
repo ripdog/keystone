@@ -175,6 +175,9 @@ fn create_wan_config(assignment: &WizardInterfaceAssignment) -> InterfaceConfig 
         }),
         dhcpv6_client: Some(Dhcpv6ClientConfig {
             use_delegated_prefix: true,
+            // The RA's M/O flags need not advertise stateful DHCPv6 even
+            // when the ISP offers DHCPv6-PD. Routers must solicit PD anyway.
+            without_ra: "solicit".to_string(),
             ..Default::default()
         }),
         ipv6_accept_ra: true,
@@ -443,7 +446,9 @@ mod tests {
             wan.dhcpv4_client.as_ref().unwrap().client_identifier,
             Some(Dhcpv4ClientIdentifier::Mac)
         );
-        assert!(wan.dhcpv6_client.unwrap().use_delegated_prefix);
+        let dhcpv6 = wan.dhcpv6_client.unwrap();
+        assert!(dhcpv6.use_delegated_prefix);
+        assert_eq!(dhcpv6.without_ra, "solicit");
 
         let lan = db.get_interface_config("lan0").await.unwrap().unwrap();
         assert_eq!(lan.addresses[0].address, "192.168.1.1/24");

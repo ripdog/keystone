@@ -52,6 +52,9 @@ struct AppState {
     auth: Arc<AuthManager>,
     db: Database,
     firewall_manager: Arc<firewall::FirewallApplyManager>,
+    login_slots: Arc<tokio::sync::Semaphore>,
+    login_attempts:
+        Arc<tokio::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u32)>>>,
 }
 
 impl AppState {
@@ -64,6 +67,8 @@ impl AppState {
             auth,
             db,
             firewall_manager,
+            login_slots: Arc::new(tokio::sync::Semaphore::new(3)),
+            login_attempts: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 }
@@ -102,13 +107,10 @@ async fn main() -> anyhow::Result<()> {
         Config::default()
     });
 
-    // Check if we have any users in the database
-    let users = db.get_users().await?;
-    if users.is_empty() {
-        info!("Creating default admin user");
-        let default_hash = AuthManager::hash_password("admin")?;
-        db.create_user("admin", None, &default_hash).await?;
-        warn!("⚠️  Created default admin user with password 'admin' - CHANGE THIS IMMEDIATELY!");
+    // No network-accessible bootstrap account. The first administrator must be
+    // created locally using: sudo keystonectl bootstrap-admin
+    if db.get_users().await?.is_empty() {
+        warn!("No administrator configured. Run 'sudo keystonectl bootstrap-admin' locally.");
     }
 
     let socket_path = config.daemon.socket_path.clone();
@@ -120,6 +122,12 @@ async fn main() -> anyhow::Result<()> {
             parent.display(),
             err
         );
+    }
+
+    // Never allow the unprivileged web account to replace the socket itself.
+    if let Some(parent) = Path::new(&socket_path).parent() {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o755))?;
     }
 
     // Remove old socket if it exists
@@ -201,6 +209,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(health_check))
         .route("/login", post(login))
         .route("/system-status", get(get_system_status))
+        .route("/lan-bind-addresses", get(lan_bind_addresses))
         .merge(protected)
         // State must be applied before TraceLayer so middleware/handlers can
         // reliably extract State<Arc<AppState>>.
@@ -229,7 +238,7 @@ async fn main() -> anyhow::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(
             &socket_path,
-            fs::Permissions::from_mode(config.daemon.socket_mode),
+            fs::Permissions::from_mode(config.daemon.socket_mode & 0o660),
         )?;
 
         // Set socket group so non-root users can access it
@@ -297,6 +306,72 @@ async fn health_check() -> impl IntoResponse {
     }))
 }
 
+/// Addresses eligible for the unprivileged HTTP listener.
+/// LAN roles come exclusively from the daemon database, not from user-supplied
+/// HTTP headers, the default gateway, or the web service's environment.
+async fn lan_bind_addresses(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<keystone_core::LanBindAddressesResponse>, AppError> {
+    use keystone_core::InterfaceRole;
+    use std::collections::HashSet;
+
+    let lan_names: HashSet<String> = state
+        .db
+        .get_interface_configs()
+        .await?
+        .into_iter()
+        .filter(|interface| interface.enabled && interface.role == InterfaceRole::LAN)
+        .map(|interface| interface.name)
+        .collect();
+
+    if lan_names.is_empty() {
+        return Ok(Json(keystone_core::LanBindAddressesResponse {
+            addresses: vec![],
+        }));
+    }
+
+    let output = tokio::process::Command::new("ip")
+        .args(["-j", "address", "show"])
+        .output()
+        .await?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "Cannot enumerate LAN addresses: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
+    }
+
+    let interfaces: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)?;
+    let mut addresses = HashSet::new();
+    for interface in interfaces {
+        if !interface
+            .get("ifname")
+            .and_then(|v| v.as_str())
+            .is_some_and(|name| lan_names.contains(name))
+        {
+            continue;
+        }
+        if let Some(info) = interface.get("addr_info").and_then(|v| v.as_array()) {
+            for address in info {
+                // Ignore link-local IPv6: without an interface scope, it
+                // cannot be bound as a normal SocketAddr and isn't LAN-routable.
+                if address.get("scope").and_then(|v| v.as_str()) != Some("global") {
+                    continue;
+                }
+                if let Some(ip) = address.get("local").and_then(|v| v.as_str())
+                    && let Ok(parsed) = ip.parse::<std::net::IpAddr>()
+                {
+                    addresses.insert(parsed.to_string());
+                }
+            }
+        }
+    }
+    let mut addresses: Vec<_> = addresses.into_iter().collect();
+    addresses.sort();
+    Ok(Json(keystone_core::LanBindAddressesResponse { addresses }))
+}
+
 /// GET /system-status - Get system status checks (public endpoint)
 async fn get_system_status(
     State(state): State<Arc<AppState>>,
@@ -343,6 +418,42 @@ async fn login(
 ) -> Result<Json<LoginResponse>, AppError> {
     info!("Login attempt for user: {}", request.username);
 
+    // Bound simultaneous expensive Argon2 verification and limit guesses per
+    // username. Fail without doing any password hashing after the limit.
+    let _slot = state
+        .login_slots
+        .acquire()
+        .await
+        .map_err(|_| anyhow::anyhow!("Login verification unavailable"))?;
+    {
+        let mut attempts = state.login_attempts.lock().await;
+        // Bound memory use under random-username attacks.
+        if attempts.len() >= 1024 && !attempts.contains_key(&request.username) {
+            attempts.retain(|_, (start, _)| start.elapsed().as_secs() < 60);
+            if attempts.len() >= 1024 {
+                return Ok(Json(LoginResponse {
+                    success: false,
+                    token: None,
+                    message: "Login capacity exceeded. Try again shortly.".to_string(),
+                }));
+            }
+        }
+        let entry = attempts
+            .entry(request.username.clone())
+            .or_insert((std::time::Instant::now(), 0));
+        if entry.0.elapsed().as_secs() >= 60 {
+            *entry = (std::time::Instant::now(), 0);
+        }
+        if entry.1 >= 10 {
+            return Ok(Json(LoginResponse {
+                success: false,
+                token: None,
+                message: "Too many attempts. Try again later.".to_string(),
+            }));
+        }
+        entry.1 += 1;
+    }
+
     // Look up user in database
     let user = state.db.get_user_by_username(&request.username).await?;
 
@@ -350,10 +461,13 @@ async fn login(
         Some(user) => {
             match state.auth.verify_and_login(
                 &user.username,
+                user.id,
+                user.auth_version,
                 &request.password,
                 &user.password_hash,
             ) {
                 Ok(token) => {
+                    state.login_attempts.lock().await.remove(&request.username);
                     info!("Login successful for user: {}", request.username);
                     Ok(Json(LoginResponse {
                         success: true,
@@ -432,9 +546,19 @@ async fn auth_middleware(
 
     if let Some(auth_value) = auth_header
         && let Some(token) = auth_value.strip_prefix("Bearer ")
-        && state.auth.verify(token)
+        && let Some(claims) = state.auth.decode_claims(token)
     {
-        return Ok(next.run(request).await);
+        let revision = state
+            .db
+            .get_auth_revision(claims.uid)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        if let Some((username, version)) = revision
+            && username == claims.sub
+            && version == claims.version
+        {
+            return Ok(next.run(request).await);
+        }
     }
 
     warn!("Unauthorized request - invalid or missing token");

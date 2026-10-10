@@ -3,7 +3,7 @@
 //! Multi-step wizard for initial Keystone configuration.
 //! Steps:
 //! 0. Welcome - Introduction and login
-//! 1. Password Change - Force change of default password
+//! 1. Administrator ready - Account created locally via keystonectl
 //! 2. System Checks - Verify packages and services
 //! 3. Interface Assignment - Assign WAN/LAN roles
 //! 4. Complete - Summary and apply
@@ -12,9 +12,8 @@
 #![allow(clippy::unit_arg)]
 
 use keystone_core::{
-    CheckCategory, CheckSeverity, InterfaceRole, SaveUserRequest, SystemCheck,
-    SystemStatusResponse, WizardInterfaceAssignment, WizardSaveInterfacesRequest, WizardState,
-    WizardStep,
+    CheckCategory, CheckSeverity, InterfaceRole, SystemCheck, SystemStatusResponse,
+    WizardInterfaceAssignment, WizardSaveInterfacesRequest, WizardState, WizardStep,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -463,7 +462,7 @@ fn LoginForm(set_auth_token: WriteSignal<Option<String>>) -> impl IntoView {
                 {move || if loading.get() { "Logging in..." } else { "Login" }}
             </button>
             <p class="text-center text-gray-500 text-xs mt-2">
-                "Default: admin / admin"
+                "First-time setup: run sudo keystonectl bootstrap-admin on the router."
             </p>
         </form>
     }
@@ -476,83 +475,22 @@ fn PasswordStep(
     on_advance: Callback<()>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
-    let (new_password, set_new_password) = signal(String::new());
-    let (confirm_password, set_confirm_password) = signal(String::new());
     let (saving, set_saving) = signal(false);
     let (error, set_error) = signal(Option::<String>::None);
 
-    let passwords_match = move || {
-        let pw = new_password.get();
-        let confirm = confirm_password.get();
-        !pw.is_empty() && pw == confirm
-    };
-
-    let password_valid = move || {
-        let pw = new_password.get();
-        pw.len() >= 8
-    };
-
-    let can_submit = move || passwords_match() && password_valid();
-
-    let handle_submit = move |ev: web_sys::SubmitEvent| {
-        ev.prevent_default();
-
-        if !can_submit() {
+    let continue_setup = move |_| {
+        let Some(token) = auth_token.get() else {
+            on_unauthorized.run(());
             return;
-        }
-
-        let token = match auth_token.get() {
-            Some(t) => t,
-            None => {
-                on_unauthorized.run(());
-                return;
-            }
         };
-
-        let password = new_password.get();
         set_saving.set(true);
         set_error.set(None);
-
         spawn_local(async move {
-            // First, save the new password for the admin user
-            let request = SaveUserRequest {
-                id: Some(1), // Admin user is always ID 1
-                username: "admin".to_string(),
-                email: None,
-                password: Some(password),
-            };
-
-            match api::save_user(&token, request).await {
-                Ok(response) => {
-                    if response.success {
-                        // Now advance the wizard
-                        match api::advance_wizard(&token, WizardStep::PasswordChanged).await {
-                            Ok(advance_response) => {
-                                if advance_response.success {
-                                    on_advance.run(());
-                                } else {
-                                    set_error.set(Some(advance_response.message));
-                                }
-                            }
-                            Err(e) => {
-                                if e.contains("Unauthorized") {
-                                    on_unauthorized.run(());
-                                } else {
-                                    set_error.set(Some(e));
-                                }
-                            }
-                        }
-                    } else {
-                        set_error.set(Some(response.message));
-                    }
-                }
-                Err(e) => {
-                    if e.contains("Unauthorized") {
-                        on_unauthorized.run(());
-                    } else {
-                        set_error.set(Some(e));
-                    }
-                }
+            match api::advance_wizard(&token, WizardStep::PasswordChanged).await {
+                Ok(response) if response.success => on_advance.run(()),
+                Ok(response) => set_error.set(Some(response.message)),
+                Err(e) if e.contains("Unauthorized") => on_unauthorized.run(()),
+                Err(e) => set_error.set(Some(e)),
             }
             set_saving.set(false);
         });
@@ -560,56 +498,18 @@ fn PasswordStep(
 
     view! {
         <div class="bg-gray-800 rounded-lg p-8 shadow-xl">
-            <h2 class="text-2xl font-bold text-blue-400 mb-2">"Change Default Password"</h2>
+            <h2 class="text-2xl font-bold text-blue-400 mb-2">"Administrator Ready"</h2>
             <p class="text-gray-400 mb-6">
-                "For security, you must change the default admin password before continuing."
+                "Your administrator credentials have been configured locally. Continue to the system checks."
             </p>
-
-            <form on:submit=handle_submit class="max-w-md">
-                <div class="mb-4">
-                    <label class="block text-gray-300 mb-2">"New Password"</label>
-                    <input
-                        type="password"
-                        prop:value=move || new_password.get()
-                        on:input=move |ev| set_new_password.set(event_target_value(&ev))
-                        class="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded focus:outline-none focus:border-blue-500 text-white"
-                        placeholder="At least 8 characters"
-                        disabled=move || saving.get()
-                    />
-                    <Show when=move || !new_password.get().is_empty() && !password_valid()>
-                        <p class="text-red-400 text-sm mt-1">"Password must be at least 8 characters"</p>
-                    </Show>
-                </div>
-
-                <div class="mb-6">
-                    <label class="block text-gray-300 mb-2">"Confirm Password"</label>
-                    <input
-                        type="password"
-                        prop:value=move || confirm_password.get()
-                        on:input=move |ev| set_confirm_password.set(event_target_value(&ev))
-                        class="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded focus:outline-none focus:border-blue-500 text-white"
-                        placeholder="Re-enter your password"
-                        disabled=move || saving.get()
-                    />
-                    <Show when=move || !confirm_password.get().is_empty() && !passwords_match()>
-                        <p class="text-red-400 text-sm mt-1">"Passwords do not match"</p>
-                    </Show>
-                </div>
-
-                <Show when=move || error.get().is_some()>
-                    <div class="mb-4 p-3 bg-red-900/50 border border-red-500 rounded text-red-200">
-                        {move || error.get().unwrap_or_default()}
-                    </div>
-                </Show>
-
-                <button
-                    type="submit"
-                    class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white px-6 py-3 rounded font-medium w-full"
-                    disabled=move || !can_submit() || saving.get()
-                >
-                    {move || if saving.get() { "Saving..." } else { "Save Password & Continue" }}
-                </button>
-            </form>
+            <Show when=move || error.get().is_some()>
+                <p class="text-red-400">{move || error.get().unwrap_or_default()}</p>
+            </Show>
+            <button
+                class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white px-6 py-3 rounded"
+                disabled=move || saving.get()
+                on:click=continue_setup
+            >"Continue"</button>
         </div>
     }
 }

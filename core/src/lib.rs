@@ -6,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod validation;
+
 // ============================================================================
 // Network Configuration Types (systemd-networkd compatible)
 // ============================================================================
@@ -2366,6 +2368,13 @@ pub struct ComponentResult {
     pub skipped: bool,
 }
 
+/// The numeric IP addresses currently assigned to enabled LAN interfaces.
+/// The web service must bind only these addresses (plus loopback).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanBindAddressesResponse {
+    pub addresses: Vec<String>,
+}
+
 /// Login request containing username and password
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginRequest {
@@ -2384,8 +2393,10 @@ pub struct LoginResponse {
 /// JWT claims structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
-    pub sub: String, // Subject (username)
-    pub exp: u64,    // Expiration time (Unix timestamp)
+    pub sub: String,  // Subject (username)
+    pub exp: u64,     // Expiration time (Unix timestamp)
+    pub uid: i64,     // Immutable database user ID
+    pub version: i64, // Invalidated on account modification
 }
 
 /// User account
@@ -2396,6 +2407,7 @@ pub struct User {
     pub email: Option<String>,
     pub password_hash: String,
     pub created_at: i64,
+    pub auth_version: i64,
 }
 
 /// Request to create or update a user

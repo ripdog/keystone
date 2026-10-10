@@ -34,6 +34,7 @@ HOSTNAME="keystone-router"
 MODE="create"  # create|upgrade-keystone
 RUN_TESTS=false
 FORCE_BUILD=false
+ROOT_INITIAL_PASSWORD=""
 
 # Print colored output
 info() { echo -e "${BLUE}[INFO]${NC} $*"; }
@@ -588,12 +589,12 @@ EOF
     # Generate locale
     arch-chroot "$WORKDIR/rootfs" locale-gen
     
-    # Set root password (temporary, user should change)
-    echo "root:keystone" | arch-chroot "$WORKDIR/rootfs" chpasswd
-    
-    # Create keystone user
-    arch-chroot "$WORKDIR/rootfs" useradd -m -G wheel -s /bin/bash keystone
-    echo "keystone:keystone" | arch-chroot "$WORKDIR/rootfs" chpasswd
+    # Unique per-image console password, never a published default.
+    ROOT_INITIAL_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
+    echo "root:$ROOT_INITIAL_PASSWORD" | arch-chroot "$WORKDIR/rootfs" chpasswd
+
+    # The Keystone package creates the dedicated, non-login service account
+    # using systemd-sysusers. Do not create a password-enabled wheel user.
     
     # Enable sudo for wheel group
     echo "%wheel ALL=(ALL:ALL) ALL" > "$WORKDIR/rootfs/etc/sudoers.d/wheel"
@@ -774,17 +775,17 @@ create_welcome_message() {
  ║                                                               ║
  ╚═══════════════════════════════════════════════════════════════╝
 
- Web UI:     http://<this-ip>:8080
- Default credentials: admin / admin  ← CHANGE IMMEDIATELY!
+ Initial setup: sudo keystonectl bootstrap-admin
+ Then:          sudo keystonectl setup
+ Web UI:        http://<configured-lan-ip>:8080
 
  Quick commands:
    keystonectl health     Check daemon status
    keystonectl state      View current state
    journalctl -u keystone-daemon -f    View daemon logs
 
- Default passwords (CHANGE THESE!):
-   root:keystone
-   keystone:keystone
+ Initial console password: generated uniquely when the USB was built.
+ Change the root password after first login.
 
 EOF
 }
@@ -816,17 +817,18 @@ print_completion() {
     echo ""
     echo "To use:"
     echo "  1. Boot your router hardware from the USB drive"
-    echo "  2. Login as root/keystone or keystone/keystone"
-    echo "  3. CHANGE THE DEFAULT PASSWORDS IMMEDIATELY:"
-    echo "       passwd root"
-    echo "       passwd keystone"
-    echo "  4. Access the web UI at http://<router-ip>:8080"
-    echo "  5. Login with admin/admin and change the password"
+    echo "  2. Log in as root using the unique password shown below"
+    echo "  3. Change the initial root password: passwd root"
+    echo "  4. Run: sudo keystonectl bootstrap-admin"
+    echo "  5. Run: sudo keystonectl setup"
+    echo "  6. Access the web UI at http://<configured-lan-ip>:8080"
     echo ""
     echo "Keystone services will start automatically on boot."
     echo ""
     echo "Device: $DEVICE"
     echo "Hostname: $HOSTNAME"
+    echo ""
+    echo "Initial root password (save securely; rotate after first login): $ROOT_INITIAL_PASSWORD"
     echo ""
 }
 

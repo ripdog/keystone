@@ -47,6 +47,8 @@ impl AuthManager {
     pub fn verify_and_login(
         &self,
         username: &str,
+        uid: i64,
+        version: i64,
         input_pass: &str,
         stored_hash: &str,
     ) -> Result<String> {
@@ -72,6 +74,8 @@ impl AuthManager {
             let claims = Claims {
                 sub: username.to_string(),
                 exp,
+                uid,
+                version,
             };
 
             let token = encode(&Header::default(), &claims, &self.signing_key)
@@ -85,17 +89,19 @@ impl AuthManager {
     }
 
     /// Verify a JWT token's validity
-    pub fn verify(&self, token: &str) -> bool {
+    pub fn decode_claims(&self, token: &str) -> Option<Claims> {
         match decode::<Claims>(token, &self.decoding_key, &Validation::default()) {
-            Ok(_) => {
-                debug!("Token verified successfully");
-                true
-            }
+            Ok(jwt) => Some(jwt.claims),
             Err(e) => {
                 warn!("Token verification failed: {}", e);
-                false
+                None
             }
         }
+    }
+
+    #[cfg(test)]
+    pub fn verify(&self, token: &str) -> bool {
+        self.decode_claims(token).is_some()
     }
 }
 
@@ -112,7 +118,7 @@ mod tests {
         let key_bytes = vec![0u8; 32];
         let auth = AuthManager::new(key_bytes);
 
-        let token = auth.verify_and_login("testuser", password, &hash);
+        let token = auth.verify_and_login("testuser", 1, 0, password, &hash);
         assert!(token.is_ok());
     }
 
@@ -124,7 +130,7 @@ mod tests {
         let key_bytes = vec![0u8; 32];
         let auth = AuthManager::new(key_bytes);
 
-        let token = auth.verify_and_login("testuser", "wrong_password", &hash);
+        let token = auth.verify_and_login("testuser", 1, 0, "wrong_password", &hash);
         assert!(token.is_err());
     }
 
@@ -136,7 +142,9 @@ mod tests {
         let key_bytes = vec![0u8; 32];
         let auth = AuthManager::new(key_bytes);
 
-        let token = auth.verify_and_login("testuser", password, &hash).unwrap();
+        let token = auth
+            .verify_and_login("testuser", 1, 0, password, &hash)
+            .unwrap();
         assert!(auth.verify(&token));
     }
 

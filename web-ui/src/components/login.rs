@@ -98,7 +98,8 @@ pub fn LoginPage(on_login: WriteSignal<Option<String>>) -> impl IntoView {
                 </form>
 
                 <div class="mt-6 text-center text-sm text-gray-400">
-                    <p>"Default credentials: " <code class="bg-gray-700 px-2 py-1 rounded">"admin / admin"</code></p>
+                    <p>"First installation? On the router console run:"</p>
+                    <code class="block mt-2 bg-gray-700 px-2 py-2 rounded">"sudo keystonectl bootstrap-admin"</code>
                 </div>
             </div>
         </div>

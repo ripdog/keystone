@@ -40,6 +40,10 @@ impl Database {
         // Ensure directory exists
         let db_dir = std::path::Path::new(DB_PATH).parent().unwrap();
         std::fs::create_dir_all(db_dir).context("Failed to create database directory")?;
+        use std::os::unix::fs::PermissionsExt;
+        // SQLite holds password hashes and the JWT signing key. The web UI
+        // runs under another account and must not be able to read these files.
+        std::fs::set_permissions(db_dir, std::fs::Permissions::from_mode(0o700))?;
 
         let db_url = format!("sqlite:{}?mode=rwc", DB_PATH);
 
@@ -49,6 +53,7 @@ impl Database {
             .await
             .context("Failed to connect to database")?;
 
+        std::fs::set_permissions(DB_PATH, std::fs::Permissions::from_mode(0o600))?;
         info!("Connected to database at {}", DB_PATH);
 
         let db = Self { pool };
@@ -101,6 +106,11 @@ impl Database {
     /// Get a user by username (with password hash)
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>> {
         self.users().get_user_by_username(username).await
+    }
+
+    /// Check that a bearer token still refers to the current account revision.
+    pub async fn get_auth_revision(&self, id: i64) -> Result<Option<(String, i64)>> {
+        self.users().get_auth_revision(id).await
     }
 
     /// Create a new user

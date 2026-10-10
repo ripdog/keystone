@@ -6,13 +6,15 @@ post_install() {
     systemd-tmpfiles --create keystone.conf
 
     echo "==> Setting permissions on /var/lib/keystone..."
-    chown -R root:keystone /var/lib/keystone 2>/dev/null || true
-    chmod 750 /var/lib/keystone 2>/dev/null || true
+    chown -R root:root /var/lib/keystone 2>/dev/null || true
+    chmod 700 /var/lib/keystone 2>/dev/null || true
+    chmod 600 /var/lib/keystone/keystone.db* 2>/dev/null || true
 
     echo ""
     echo "==> Keystone has been installed!"
     echo ""
-    echo "    IMPORTANT: Default credentials are admin/admin - change immediately!"
+    echo "    IMPORTANT: Create your administrator locally first:"
+    echo "      # sudo keystonectl bootstrap-admin"
     echo ""
     echo "    To start the services:"
     echo "      # systemctl enable --now keystone-daemon"

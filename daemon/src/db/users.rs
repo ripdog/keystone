@@ -39,23 +39,34 @@ impl<'a> UsersDb<'a> {
 
     /// Get a user by username (with password hash)
     pub async fn get_user_by_username(&self, username: &str) -> Result<Option<User>> {
-        let row = sqlx::query_as::<_, (i64, String, Option<String>, String, i64)>(
-            "SELECT id, username, email, password_hash, created_at FROM users WHERE username = ?",
+        let row = sqlx::query_as::<_, (i64, String, Option<String>, String, i64, i64)>(
+            "SELECT id, username, email, password_hash, created_at, auth_version FROM users WHERE username = ?",
         )
         .bind(username)
         .fetch_optional(self.pool)
         .await
         .context("Failed to fetch user")?;
 
-        Ok(
-            row.map(|(id, username, email, password_hash, created_at)| User {
+        Ok(row.map(
+            |(id, username, email, password_hash, created_at, auth_version)| User {
                 id,
                 username,
                 email,
                 password_hash,
                 created_at,
-            }),
+                auth_version,
+            },
+        ))
+    }
+
+    /// Fetch account identity and revision for token validation.
+    pub async fn get_auth_revision(&self, id: i64) -> Result<Option<(String, i64)>> {
+        Ok(sqlx::query_as::<_, (String, i64)>(
+            "SELECT username, auth_version FROM users WHERE id = ?",
         )
+        .bind(id)
+        .fetch_optional(self.pool)
+        .await?)
     }
 
     /// Create a new user
@@ -93,7 +104,7 @@ impl<'a> UsersDb<'a> {
         password_hash: Option<&str>,
     ) -> Result<()> {
         if let Some(hash) = password_hash {
-            sqlx::query("UPDATE users SET username = ?, email = ?, password_hash = ? WHERE id = ?")
+            sqlx::query("UPDATE users SET username = ?, email = ?, password_hash = ?, auth_version = auth_version + 1 WHERE id = ?")
                 .bind(username)
                 .bind(email)
                 .bind(hash)
@@ -102,7 +113,7 @@ impl<'a> UsersDb<'a> {
                 .await
                 .context("Failed to update user")?;
         } else {
-            sqlx::query("UPDATE users SET username = ?, email = ? WHERE id = ?")
+            sqlx::query("UPDATE users SET username = ?, email = ?, auth_version = auth_version + 1 WHERE id = ?")
                 .bind(username)
                 .bind(email)
                 .bind(id)
@@ -157,5 +168,27 @@ impl<'a> UsersDb<'a> {
 
         info!("Generated new JWT key and stored in database");
         Ok(key_bytes.to_vec())
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    #[tokio::test]
+    async fn editing_or_deleting_a_user_revokes_old_tokens() {
+        let db = crate::db::Database::new_in_memory().await.unwrap();
+        let id = db.create_user("admin", None, "hash").await.unwrap();
+        assert_eq!(
+            db.get_auth_revision(id).await.unwrap(),
+            Some(("admin".into(), 0))
+        );
+        db.update_user(id, "admin", None, Some("newhash"))
+            .await
+            .unwrap();
+        assert_eq!(
+            db.get_auth_revision(id).await.unwrap(),
+            Some(("admin".into(), 1))
+        );
+        db.delete_user(id).await.unwrap();
+        assert_eq!(db.get_auth_revision(id).await.unwrap(), None);
     }
 }

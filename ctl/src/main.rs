@@ -14,6 +14,7 @@ use keystone_core::{
     SystemState, UsersResponse,
 };
 
+mod bootstrap;
 mod client;
 mod commands;
 mod handlers;
@@ -148,6 +149,11 @@ pub fn save_interfaces(response: &SaveManagedInterfacesResponse) {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Bootstrapping operates on the local database, not the daemon socket.
+    if let Some(Commands::BootstrapAdmin { username }) = &cli.command {
+        return bootstrap::run(username).await;
+    }
+
     // Check socket exists before trying to connect
     if !Path::new(&cli.socket).exists() {
         eprintln!(
@@ -178,6 +184,8 @@ async fn main() -> Result<()> {
                 }
             }
         }
+
+        Some(Commands::BootstrapAdmin { .. }) => unreachable!("handled before socket connection"),
 
         Some(Commands::Health) => {
             let response: serde_json::Value = client.get("/health", None).await?;

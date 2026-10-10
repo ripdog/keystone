@@ -24,6 +24,13 @@ pub enum Commands {
     /// Check daemon health
     Health,
 
+    /// Create the initial administrator locally (requires root; only works with no users)
+    BootstrapAdmin {
+        /// Initial administrator username
+        #[arg(short, long, default_value = "admin")]
+        username: String,
+    },
+
     /// Login to get a JWT token
     Login {
         /// Username

@@ -100,7 +100,7 @@ pub async fn run_wizard(client: &DaemonClient) -> Result<()> {
         println!();
         println!(
             "{}",
-            style("━━━ Step 1: Change Default Password ━━━")
+            style("━━━ Step 1: Configure Administrator ━━━")
                 .cyan()
                 .bold()
         );
@@ -179,7 +179,7 @@ pub async fn run_wizard(client: &DaemonClient) -> Result<()> {
     );
     println!();
     println!("What's been configured:");
-    println!("  {} Admin password changed", style("✓").green());
+    println!("  {} Administrator account configured", style("✓").green());
     println!("  {} System requirements verified", style("✓").green());
     println!("  {} WAN and LAN interfaces configured", style("✓").green());
     println!("  {} Firewall zones created (wan, lan)", style("✓").green());
@@ -206,7 +206,10 @@ pub async fn run_wizard(client: &DaemonClient) -> Result<()> {
 /// Login step - authenticate with the daemon
 async fn login_step(client: &DaemonClient) -> Result<String> {
     println!("{}", style("Please login to continue.").dim());
-    println!("{}", style("Default credentials: admin / admin").dim());
+    println!(
+        "{}",
+        style("If no administrator exists, first run: sudo keystonectl bootstrap-admin").dim()
+    );
     println!();
 
     loop {
@@ -285,18 +288,18 @@ async fn advance_wizard(
 async fn change_password_step(client: &DaemonClient, token: &str) -> Result<()> {
     println!(
         "{}",
-        style("For security, you must change the default admin password.").dim()
+        style("Set a unique administrator password before continuing.").dim()
     );
     println!();
 
     loop {
         let new_password = Password::new("New password:")
             .with_display_mode(PasswordDisplayMode::Masked)
-            .with_help_message("At least 8 characters")
+            .with_help_message("At least 12 characters")
             .without_confirmation()
             .prompt()?;
 
-        if new_password.len() < 8 {
+        if new_password.len() < 12 {
             println!(
                 "{} Password must be at least 8 characters",
                 style("✗").red()

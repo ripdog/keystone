@@ -17,7 +17,8 @@ Group=keystone
 
 # Environment
 Environment=KEYSTONE_DIST_DIR=/usr/share/keystone/dist
-Environment=KEYSTONE_LISTEN_ADDR=0.0.0.0:8080
+# The web service discovers assigned LAN addresses from the daemon and binds
+# only those addresses and loopback. No wildcard listener override is allowed.
 
 # Security hardening
 ProtectHome=yes

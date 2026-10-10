@@ -1,8 +1,4 @@
-//! Keystone Web UI - Server
-//!
-//! Unprivileged web server that:
-//! 1. Serves the Leptos WASM frontend
-//! 2. Proxies API requests from HTTP to the daemon's Unix socket
+//! Unprivileged frontend server. Listens only on loopback and actual LAN IPs.
 
 #[cfg(feature = "server")]
 use axum::{
@@ -11,126 +7,221 @@ use axum::{
     extract::Request,
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{any, get},
 };
+#[cfg(feature = "server")]
+use http_body_util::BodyExt;
 #[cfg(feature = "server")]
 use hyper_util::rt::TokioIo;
 #[cfg(feature = "server")]
-use tokio::net::UnixStream;
+use std::{
+    collections::{HashMap, HashSet},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+};
 #[cfg(feature = "server")]
-use tower_http::cors::CorsLayer;
+use tokio::{
+    net::{TcpListener, UnixStream},
+    task::JoinHandle,
+    time::{self, Duration},
+};
 #[cfg(feature = "server")]
 use tower_http::services::ServeDir;
 #[cfg(feature = "server")]
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[cfg(feature = "server")]
 const DAEMON_SOCKET: &str = "/run/keystone/keystone.sock";
 #[cfg(feature = "server")]
-const LISTEN_ADDR: &str = "0.0.0.0:8080";
+const HTTP_PORT: u16 = 8080;
 
 #[cfg(feature = "server")]
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "keystone_web_ui=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "keystone_web_ui=info,tower_http=info".into()),
         )
         .init();
 
-    info!("Starting Keystone Web UI");
-
-    // Determine asset directory relative to binary location
     let exe_path = std::env::current_exe()?;
     let exe_dir = exe_path
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("Failed to get binary directory"))?;
-    let dist_dir = exe_dir.join("dist");
+        .ok_or_else(|| anyhow::anyhow!("No executable directory"))?;
+    let dist_dir = std::env::var("KEYSTONE_DIST_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| exe_dir.join("dist"));
 
-    info!("Serving static assets from: {}", dist_dir.display());
-
-    // Build the router
     let app = Router::new()
-        .route("/api/{*path}", get(proxy_to_daemon).post(proxy_to_daemon))
+        .route("/api/{*path}", any(proxy_to_daemon))
         .route("/health", get(health_check))
-        .fallback_service(ServeDir::new(dist_dir))
-        .layer(CorsLayer::permissive());
+        .fallback_service(ServeDir::new(dist_dir));
 
-    let listener = tokio::net::TcpListener::bind(LISTEN_ADDR).await?;
-    info!("Web UI listening on http://{}", LISTEN_ADDR);
+    // Never bind a wildcard socket, not even temporarily. Reconcile numeric
+    // addresses so DHCP renewals, interface role changes and configured VLANs
+    // are reflected without restarting the web process.
+    let mut listeners: HashMap<SocketAddr, JoinHandle<()>> = HashMap::new();
+    let mut interval = time::interval(Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+        let desired = match fetch_lan_bind_addresses().await {
+            Ok(addresses) => addresses,
+            Err(e) => {
+                warn!("Cannot refresh LAN bindings: {e}");
+                // Fail closed on role-discovery failures. Keep loopback usable.
+                loopback_addresses()
+            }
+        };
 
-    axum::serve(listener, app).await?;
+        for address in listeners.keys().copied().collect::<Vec<_>>() {
+            if !desired.contains(&address)
+                && let Some(handle) = listeners.remove(&address)
+            {
+                handle.abort();
+                info!("Unbound HTTP listener {address}");
+            }
+        }
+        for address in desired {
+            if listeners.contains_key(&address) {
+                continue;
+            }
+            match TcpListener::bind(address).await {
+                Ok(listener) => {
+                    let router = app.clone();
+                    let handle = tokio::spawn(async move {
+                        if let Err(err) = axum::serve(listener, router).await {
+                            error!("HTTP server on {address} exited: {err}");
+                        }
+                    });
+                    listeners.insert(address, handle);
+                    info!("Serving Keystone on {address}");
+                }
+                Err(e) => warn!("Unable to bind {address}: {e}"),
+            }
+        }
+    }
+}
 
-    Ok(())
+#[cfg(feature = "server")]
+fn loopback_addresses() -> HashSet<SocketAddr> {
+    [
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), HTTP_PORT),
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), HTTP_PORT),
+    ]
+    .into_iter()
+    .collect()
+}
+
+#[cfg(feature = "server")]
+fn addresses_to_bind(addrs: &[String]) -> HashSet<SocketAddr> {
+    let mut result = loopback_addresses();
+    for candidate in addrs {
+        if let Ok(ip) = candidate.parse::<IpAddr>() {
+            // Never permit wildcard/multicast or unscoped link-local sockets.
+            if ip.is_unspecified()
+                || ip.is_multicast()
+                || matches!(ip, IpAddr::V6(v6) if v6.is_unicast_link_local())
+            {
+                continue;
+            }
+            result.insert(SocketAddr::new(ip, HTTP_PORT));
+        }
+    }
+    result
+}
+
+#[cfg(feature = "server")]
+async fn fetch_lan_bind_addresses() -> anyhow::Result<HashSet<SocketAddr>> {
+    let stream = UnixStream::connect(DAEMON_SOCKET).await?;
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
+    tokio::spawn(async move {
+        if let Err(e) = conn.await {
+            error!("Daemon connection error: {e}");
+        }
+    });
+
+    let req = Request::builder()
+        .uri("/lan-bind-addresses")
+        .header("Host", "localhost")
+        .body(Body::empty())?;
+    let response = sender.send_request(req).await?;
+    if !response.status().is_success() {
+        anyhow::bail!("Daemon LAN query failed: {}", response.status());
+    }
+    let body = response.into_body().collect().await?.to_bytes();
+    let payload: keystone_core::LanBindAddressesResponse = serde_json::from_slice(&body)?;
+    Ok(addresses_to_bind(&payload.addresses))
 }
 
 #[cfg(feature = "server")]
 async fn health_check() -> impl IntoResponse {
-    axum::Json(serde_json::json!({
-        "status": "healthy",
-        "service": "keystone-web-ui"
-    }))
+    axum::Json(serde_json::json!({"status":"healthy", "service":"keystone-web-ui"}))
 }
 
 #[cfg(feature = "server")]
 async fn proxy_to_daemon(req: Request) -> Result<Response, StatusCode> {
-    // Strip /api prefix from path first, before moving req
-    let path = req
+    // Keep the query string: several daemon endpoints require it.
+    let uri = req
         .uri()
-        .path()
-        .strip_prefix("/api")
-        .unwrap_or(req.uri().path())
-        .to_string();
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+    let path = uri.strip_prefix("/api").unwrap_or(uri).to_string();
 
-    info!("Proxying request to daemon: {} {}", req.method(), path);
-
-    // Connect to Unix socket
     let stream = UnixStream::connect(DAEMON_SOCKET).await.map_err(|e| {
-        error!("Failed to connect to daemon socket: {}", e);
+        error!("Failed to connect to daemon socket: {e}");
         StatusCode::BAD_GATEWAY
     })?;
-
     let io = TokioIo::new(stream);
-
-    // Create hyper HTTP/1 connection
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
         .await
-        .map_err(|e| {
-            error!("Failed to establish connection: {}", e);
-            StatusCode::BAD_GATEWAY
-        })?;
-
-    // Spawn connection handler
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
     tokio::spawn(async move {
         if let Err(e) = conn.await {
-            error!("Connection error: {}", e);
+            error!("Daemon connection error: {e}");
         }
     });
 
-    // Build new request
     let (parts, body) = req.into_parts();
-    let mut new_req = Request::builder()
+    let mut builder = Request::builder()
         .method(parts.method)
         .uri(path)
         .version(parts.version);
-
-    // Copy headers
-    for (key, value) in parts.headers.iter() {
-        new_req = new_req.header(key, value);
+    for (key, value) in &parts.headers {
+        if key != axum::http::header::HOST {
+            builder = builder.header(key, value);
+        }
     }
-
-    let new_req = new_req.body(body).map_err(|e| {
-        error!("Failed to build request: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    // Send request
-    let response = sender.send_request(new_req).await.map_err(|e| {
-        error!("Failed to send request to daemon: {}", e);
-        StatusCode::BAD_GATEWAY
-    })?;
-
+    let new_req = builder
+        .header("Host", "localhost")
+        .body(body)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let response = sender
+        .send_request(new_req)
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
     Ok(response.map(Body::new))
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_specific_lan_addresses() {
+        let bindings = addresses_to_bind(&[
+            "192.168.1.1".into(),
+            "fd00::1".into(),
+            "0.0.0.0".into(),
+            "::".into(),
+            "fe80::1".into(),
+        ]);
+        assert!(bindings.contains(&"192.168.1.1:8080".parse().unwrap()));
+        assert!(bindings.contains(&"[fd00::1]:8080".parse().unwrap()));
+        assert!(bindings.contains(&"127.0.0.1:8080".parse().unwrap()));
+        assert!(!bindings.contains(&"0.0.0.0:8080".parse().unwrap()));
+        assert!(!bindings.contains(&"[::]:8080".parse().unwrap()));
+        assert!(!bindings.contains(&"[fe80::1]:8080".parse().unwrap()));
+    }
 }

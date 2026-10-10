@@ -12,7 +12,8 @@ use ipnet::Ipv4Net;
 use keystone_core::{
     AddressScope, DhcpMode, DhcpPrefixDelegationConfig, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
     DnsmasqDhcpRange, FirewallAction, FirewallPolicy, FirewallZone, InterfaceConfig, InterfaceRole,
-    IpForwardMode, IpMasqueradeMode, StaticAddress, WizardInterfaceAssignment, ZoneForwardPolicy,
+    IpForwardMode, IpMasqueradeMode, LinkLocalMode, StaticAddress, WizardInterfaceAssignment,
+    ZoneForwardPolicy,
 };
 use tracing::info;
 
@@ -196,6 +197,8 @@ fn create_lan_config(
             scope: AddressScope::Global,
         }],
         ipv6_accept_ra: false,
+        // A router's statically addressed LAN does not need IPv4LL (169.254/16).
+        link_local: LinkLocalMode::Ipv6,
         ipv6_send_ra: true,
         dhcp_prefix_delegation: Some(DhcpPrefixDelegationConfig {
             uplink_interface: Some(wan_interface.to_string()),
@@ -436,6 +439,7 @@ mod tests {
         let lan = db.get_interface_config("lan0").await.unwrap().unwrap();
         assert_eq!(lan.addresses[0].address, "192.168.1.1/24");
         assert!(lan.ipv6_send_ra);
+        assert_eq!(lan.link_local, LinkLocalMode::Ipv6);
         assert_eq!(
             lan.dhcp_prefix_delegation
                 .as_ref()
@@ -444,6 +448,7 @@ mod tests {
         );
         let network_file = crate::networkd::generate_network_file(&lan);
         assert!(network_file.contains("IPv6SendRA=yes"));
+        assert!(network_file.contains("LinkLocalAddressing=ipv6"));
         assert!(network_file.contains("DHCPPrefixDelegation=yes"));
         assert!(network_file.contains("UplinkInterface=wan0"));
 

@@ -154,49 +154,48 @@ pub fn DashboardPage(
                 </div>
             </Show>
 
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                <div class="bg-gray-800 rounded-lg p-5 shadow-lg">
-                    <div class="text-sm text-gray-400 mb-1">"WAN IP"</div>
-                    <div class="text-lg font-medium">
-                        {move || {
-                            state
-                                .get()
-                                .interfaces
-                                .iter()
-                                .find(|i| i.role == InterfaceRole::WAN)
-                                .and_then(|i| i.address.clone())
-                                .unwrap_or_else(|| "—".to_string())
-                        }}
-                    </div>
-                </div>
-
-                <div class="bg-gray-800 rounded-lg p-5 shadow-lg">
-                    <div class="text-sm text-gray-400 mb-1">"LAN IPs"</div>
-                    <div class="text-sm text-gray-200 space-y-1">
-                        <For
-                            each=move || {
-                                state
-                                    .get()
-                                    .interfaces
-                                    .iter()
-                                    .filter(|i| i.role == InterfaceRole::LAN)
-                                    .filter_map(|i| i.address.clone().map(|a| (i.name.clone(), a)))
-                                    .collect::<Vec<_>>()
-                            }
-                            key=|(name, _)| name.clone()
-                            children=|(name, addr)| view! { <div><span class="text-gray-400">{name} ": "</span>{addr}</div> }
-                        />
-                        <Show when=move || {
-                            !state
-                                .get()
-                                .interfaces
-                                .iter()
-                                .any(|i| i.role == InterfaceRole::LAN && i.address.is_some())
-                        }>
-                            <div class="text-gray-500">"—"</div>
-                        </Show>
-                    </div>
-                </div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {move || {
+                    [InterfaceRole::WAN, InterfaceRole::LAN].into_iter().map(|role| {
+                        let relevant = state.get().interfaces.into_iter()
+                            .filter(|iface| iface.role == role).collect::<Vec<_>>();
+                        let ipv4 = relevant.iter().flat_map(|iface| iface.ipv4_addresses.iter()
+                            .filter(|address| !address.starts_with("169.254."))
+                            .map(|address| (iface.name.clone(), address.clone())))
+                            .collect::<Vec<_>>();
+                        let ipv6 = relevant.iter().flat_map(|iface| iface.ipv6_addresses.iter()
+                            .filter(|address| !address.starts_with("fe80:"))
+                            .map(|address| (iface.name.clone(), address.clone())))
+                            .collect::<Vec<_>>();
+                        let link_local = relevant.iter().flat_map(|iface| iface.ipv6_addresses.iter()
+                            .filter(|address| address.starts_with("fe80:"))
+                            .map(|address| (iface.name.clone(), address.clone())))
+                            .collect::<Vec<_>>();
+                        let link_local_text = link_local.into_iter()
+                            .map(|(name, address)| format!("{name}: {address} (link-local)"))
+                            .collect::<Vec<_>>().join(" · ");
+                        view! {
+                            <div class="bg-gray-800 rounded-lg p-5 shadow-lg space-y-4 min-w-0">
+                                <h2 class="text-blue-300 font-medium">{role.to_string()}</h2>
+                                <div>
+                                    <div class="text-sm text-gray-400 mb-1">"IPv4"</div>
+                                    {if ipv4.is_empty() { view! { <div class="text-gray-500">"—"</div> }.into_any() }
+                                    else { view! { <div class="space-y-1">{ipv4.into_iter().map(|(name, address)| view! {
+                                        <div class="text-sm text-gray-200 break-all"><span class="text-gray-400">{name} ": "</span>{address}</div>
+                                    }).collect_view()}</div> }.into_any() }}
+                                </div>
+                                <div>
+                                    <div class="text-sm text-gray-400 mb-1">"IPv6"</div>
+                                    {if ipv6.is_empty() { view! { <div class="text-gray-500">"No global address"</div> }.into_any() }
+                                    else { view! { <div class="space-y-1">{ipv6.into_iter().map(|(name, address)| view! {
+                                        <div class="text-sm text-gray-200 break-all"><span class="text-gray-400">{name} ": "</span>{address}</div>
+                                    }).collect_view()}</div> }.into_any() }}
+                                    <div class="text-xs text-gray-500 mt-1 break-all">{link_local_text}</div>
+                                </div>
+                            </div>
+                        }
+                    }).collect_view()
+                }}
             </div>
 
             <div class="bg-gray-800 rounded-lg p-6 shadow-lg">

@@ -1493,6 +1493,14 @@ pub struct Interface {
     /// IP address with CIDR notation (e.g., "192.168.1.1/24")
     pub address: Option<String>,
 
+    /// All assigned IPv4 addresses, including secondary addresses.
+    #[serde(default)]
+    pub ipv4_addresses: Vec<String>,
+
+    /// All assigned IPv6 addresses, including link-local and delegated addresses.
+    #[serde(default)]
+    pub ipv6_addresses: Vec<String>,
+
     /// Whether DHCP is enabled for this interface
     pub dhcp_enabled: bool,
 
@@ -2958,6 +2966,8 @@ mod tests {
     #[test]
     fn test_interface_serialization() {
         let iface = Interface {
+            ipv4_addresses: vec!["192.168.1.1/24".to_string()],
+            ipv6_addresses: vec!["2407:8b00:1168:3200::1/64".to_string()],
             name: "eth0".to_string(),
             address: Some("192.168.1.1/24".to_string()),
             dhcp_enabled: true,

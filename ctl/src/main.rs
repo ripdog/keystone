@@ -40,12 +40,17 @@ pub fn state(state: &SystemState) {
     println!("Interfaces ({}):", state.interfaces.len());
     for iface in &state.interfaces {
         let status = if iface.enabled { "UP" } else { "DOWN" };
-        let addr = iface.address.as_deref().unwrap_or("no address");
         let dhcp = if iface.dhcp_enabled { "DHCP" } else { "static" };
-        println!(
-            "  {} [{}] {} ({}, {})",
-            iface.name, iface.role, addr, dhcp, status
-        );
+        println!("  {} [{}] ({}, {})", iface.name, iface.role, dhcp, status);
+        for addr in &iface.ipv4_addresses {
+            println!("    IPv4: {addr}");
+        }
+        for addr in &iface.ipv6_addresses {
+            println!("    IPv6: {addr}");
+        }
+        if iface.ipv4_addresses.is_empty() && iface.ipv6_addresses.is_empty() {
+            println!("    No addresses");
+        }
     }
 
     // TODO: Add firewall zone display once FirewallConfig is integrated

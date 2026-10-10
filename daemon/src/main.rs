@@ -566,23 +566,25 @@ async fn auth_middleware(
 }
 
 /// GET /state - Retrieve current system state
-async fn get_state(State(_state): State<Arc<AppState>>) -> Result<Json<SystemState>, AppError> {
+async fn get_state(State(state): State<Arc<AppState>>) -> Result<Json<SystemState>, AppError> {
     info!("Retrieving system state");
 
-    Ok(Json(read_system_state().unwrap_or_default()))
+    let configs = state.db.get_interface_configs().await?;
+    Ok(Json(read_system_state(&configs).unwrap_or_default()))
 }
 
 /// GET /dashboard - Dashboard payload (state + interface counters)
 async fn get_dashboard(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<DashboardResponse>, AppError> {
     info!("Retrieving dashboard");
 
-    Ok(Json(read_dashboard().unwrap_or_default()))
+    let configs = state.db.get_interface_configs().await?;
+    Ok(Json(read_dashboard(&configs).unwrap_or_default()))
 }
 
-fn read_dashboard() -> anyhow::Result<DashboardResponse> {
-    let state = read_system_state().unwrap_or_default();
+fn read_dashboard(configs: &[keystone_core::InterfaceConfig]) -> anyhow::Result<DashboardResponse> {
+    let state = read_system_state(configs).unwrap_or_default();
     let interface_counters = read_interface_counters()?;
 
     let timestamp_ms = std::time::SystemTime::now()
@@ -626,7 +628,7 @@ fn read_interface_counters() -> anyhow::Result<Vec<InterfaceCounters>> {
     Ok(counters)
 }
 
-fn read_system_state() -> anyhow::Result<SystemState> {
+fn read_system_state(configs: &[keystone_core::InterfaceConfig]) -> anyhow::Result<SystemState> {
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::process::Command;
@@ -651,47 +653,58 @@ fn read_system_state() -> anyhow::Result<SystemState> {
         dev: Option<String>,
     }
 
-    let default_route_ifaces: HashSet<String> = Command::new("ip")
-        .args(["-j", "route", "show", "default"])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if !o.status.success() {
-                return None;
-            }
-            serde_json::from_slice::<Vec<RouteEntry>>(&o.stdout).ok()
-        })
-        .map(|routes| {
-            routes
+    let default_route_ifaces: HashSet<String> = ["-4", "-6"]
+        .iter()
+        .flat_map(|family| {
+            Command::new("ip")
+                .args(["-j", family, "route", "show", "default"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| serde_json::from_slice::<Vec<RouteEntry>>(&o.stdout).ok())
+                .unwrap_or_default()
                 .into_iter()
                 .filter_map(|r| r.dev)
-                .collect::<HashSet<_>>()
+                .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .collect();
 
-    let addr_map: HashMap<String, String> = Command::new("ip")
-        .args(["-j", "-4", "addr", "show"])
+    let configured_roles: HashMap<&str, keystone_core::InterfaceRole> = configs
+        .iter()
+        .filter(|config| config.enabled)
+        .map(|config| (config.name.as_str(), config.role))
+        .collect();
+
+    let addr_map: HashMap<String, (Vec<String>, Vec<String>)> = Command::new("ip")
+        .args(["-j", "addr", "show"])
         .output()
         .ok()
         .and_then(|o| {
-            if !o.status.success() {
-                return None;
+            if o.status.success() {
+                serde_json::from_slice::<Vec<IpAddrEntry>>(&o.stdout).ok()
+            } else {
+                None
             }
-            serde_json::from_slice::<Vec<IpAddrEntry>>(&o.stdout).ok()
         })
         .map(|entries| {
             entries
                 .into_iter()
-                .filter_map(|e| {
-                    let addr = e
-                        .addr_info
-                        .iter()
-                        .find(|a| a.family == "inet")
-                        .and_then(|a| Some((a.local.clone()?, a.prefixlen?)))
-                        .map(|(ip, prefix)| format!("{}/{}", ip, prefix));
-                    Some((e.ifname, addr?))
+                .map(|e| {
+                    let mut ipv4 = Vec::new();
+                    let mut ipv6 = Vec::new();
+                    for addr in e.addr_info {
+                        if let (Some(local), Some(prefix)) = (addr.local, addr.prefixlen) {
+                            let cidr = format!("{local}/{prefix}");
+                            match addr.family.as_str() {
+                                "inet" => ipv4.push(cidr),
+                                "inet6" => ipv6.push(cidr),
+                                _ => {}
+                            }
+                        }
+                    }
+                    (e.ifname, (ipv4, ipv6))
                 })
-                .collect::<HashMap<_, _>>()
+                .collect()
         })
         .unwrap_or_default();
 
@@ -709,16 +722,35 @@ fn read_system_state() -> anyhow::Result<SystemState> {
             .unwrap_or_else(|_| "unknown".to_string());
         let enabled = operstate.trim() == "up";
 
-        let role = if default_route_ifaces.contains(&name) {
-            keystone_core::InterfaceRole::WAN
-        } else {
-            keystone_core::InterfaceRole::LAN
-        };
-
+        let role = configured_roles
+            .get(name.as_str())
+            .copied()
+            .unwrap_or_else(|| {
+                if default_route_ifaces.contains(&name) {
+                    keystone_core::InterfaceRole::WAN
+                } else {
+                    keystone_core::InterfaceRole::LAN
+                }
+            });
+        let (ipv4_addresses, ipv6_addresses) = addr_map.get(&name).cloned().unwrap_or_default();
+        let address = ipv4_addresses
+            .iter()
+            .find(|ip| !ip.starts_with("169.254."))
+            .or_else(|| ipv4_addresses.first())
+            .cloned();
         interfaces.push(keystone_core::Interface {
             name: name.clone(),
-            address: addr_map.get(&name).cloned(),
-            dhcp_enabled: false,
+            address,
+            ipv4_addresses,
+            ipv6_addresses,
+            dhcp_enabled: configs.iter().any(|c| {
+                c.enabled
+                    && c.name == name
+                    && matches!(
+                        c.dhcp_mode,
+                        keystone_core::DhcpMode::Yes | keystone_core::DhcpMode::Ipv4
+                    )
+            }),
             role,
             enabled,
         });

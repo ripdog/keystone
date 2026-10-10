@@ -74,6 +74,7 @@ pub fn InterfaceEditPage(
     let (dhcp6_use_delegated_prefix, set_dhcp6_use_delegated_prefix) = signal(true);
     let (dhcp6_rapid_commit, set_dhcp6_rapid_commit) = signal(true);
     let (dhcp6_prefix_hint, set_dhcp6_prefix_hint) = signal(String::new());
+    let (dhcp6_without_ra, set_dhcp6_without_ra) = signal("no".to_string());
 
     // Interface state settings (P2)
     let (link_local, set_link_local) = signal(LinkLocalMode::default());
@@ -150,6 +151,7 @@ pub fn InterfaceEditPage(
                             set_dhcp6_rapid_commit.set(dhcp6_cfg.rapid_commit);
                             set_dhcp6_prefix_hint
                                 .set(dhcp6_cfg.prefix_delegation_hint.clone().unwrap_or_default());
+                            set_dhcp6_without_ra.set(dhcp6_cfg.without_ra.clone());
                         }
 
                         // Interface state settings (P2)
@@ -345,7 +347,7 @@ pub fn InterfaceEditPage(
                             use_delegated_prefix: dhcp6_use_delegated_prefix.get(),
                             prefix_delegation_hint: if hint.is_empty() { None } else { Some(hint) },
                             rapid_commit: dhcp6_rapid_commit.get(),
-                            without_ra: "no".to_string(),
+                            without_ra: dhcp6_without_ra.get(),
                         })
                     } else {
                         None
@@ -671,6 +673,19 @@ pub fn InterfaceEditPage(
                                     />
                                     <span class="text-gray-300">"Rapid Commit"</span>
                                 </label>
+                            </div>
+                            <div>
+                                <label class="block text-gray-400 text-sm mb-1">"DHCPv6 without Router Advertisement"</label>
+                                <select
+                                    class="bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
+                                    prop:value=move || dhcp6_without_ra.get()
+                                    on:change=move |ev| set_dhcp6_without_ra.set(event_target_value(&ev))
+                                >
+                                    <option value="no">"Wait for RA flags (default)"</option>
+                                    <option value="solicit">"Solicit immediately (recommended for prefix delegation)"</option>
+                                    <option value="information-request">"Information-request only"</option>
+                                </select>
+                                <p class="text-gray-500 text-xs mt-1">"Some ISPs offer DHCPv6-PD without setting the RA M/O flags."</p>
                             </div>
                             <div>
                                 <label class="block text-gray-400 text-sm mb-1">"Prefix Delegation Hint (optional)"</label>

@@ -222,36 +222,41 @@ fn build_http_redirect_address(config: &CaddyConfig) -> String {
     }
 }
 
-/// Get the IP address of an interface
+/// Return the usable LAN IPv4 address rather than whichever address `ip`
+/// lists first (a stale 169.254/16 IPv4LL address may precede the LAN IP).
+fn parse_interface_global_ipv4(stdout: &str) -> Option<String> {
+    for line in stdout.lines() {
+        let parts: Vec<_> = line.split_ascii_whitespace().collect();
+        if parts.len() < 4 || parts[0] != "inet" {
+            continue;
+        }
+        if !parts.windows(2).any(|pair| pair == ["scope", "global"]) {
+            continue;
+        }
+        let Some(address) = parts[1].split('/').next() else {
+            continue;
+        };
+        if let Ok(ip) = address.parse::<std::net::Ipv4Addr>()
+            && !ip.is_link_local()
+            && !ip.is_unspecified()
+            && !ip.is_multicast()
+        {
+            return Some(ip.to_string());
+        }
+    }
+    None
+}
+
+/// Get the LAN interface's assigned global-scope IPv4 address.
 pub fn get_interface_ip(interface: &str) -> Option<String> {
-    // Use `ip addr show` to get interface addresses
     let output = Command::new("ip")
         .args(["-4", "addr", "show", interface])
         .output()
         .ok()?;
-
     if !output.status.success() {
         return None;
     }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse output to find inet address
-    // Example line: "    inet 192.168.1.1/24 brd 192.168.1.255 scope global eth0"
-    for line in stdout.lines() {
-        let line = line.trim();
-        if line.starts_with("inet ") {
-            // Extract the IP address (before the /)
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2
-                && let Some(ip) = parts[1].split('/').next()
-            {
-                return Some(ip.to_string());
-            }
-        }
-    }
-
-    None
+    parse_interface_global_ipv4(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Ensure the Caddy configuration directory exists
@@ -596,6 +601,16 @@ mod tests {
         assert!(lan_interface_name(db.pool(), "wan0").await.is_err());
         assert!(lan_interface_name(db.pool(), "down0").await.is_err());
         assert!(lan_interface_name(db.pool(), "missing").await.is_err());
+    }
+
+    #[test]
+    fn caddy_prefers_global_lan_address_over_ipv4_link_local() {
+        let ip_output = "    inet 169.254.41.250/16 metric 2048 brd 169.254.255.255 scope link enp2s0\n    inet 192.168.1.1/24 brd 192.168.1.255 scope global enp2s0\n";
+        assert_eq!(
+            parse_interface_global_ipv4(ip_output).as_deref(),
+            Some("192.168.1.1")
+        );
+        assert!(parse_interface_global_ipv4("inet 169.254.41.250/16 scope link enp2s0").is_none());
     }
 
     #[test]

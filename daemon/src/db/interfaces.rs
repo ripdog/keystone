@@ -463,8 +463,8 @@ impl<'a> InterfacesDb<'a> {
         if let Some(dhcp_config) = &config.dhcpv4_client {
             sqlx::query(
                 r#"INSERT INTO dhcpv4_client_config 
-                   (interface_config_id, send_hostname, hostname, use_dns, use_ntp, use_routes, use_gateway, use_mtu, use_domains, route_metric)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#
+                   (interface_config_id, send_hostname, hostname, use_dns, use_ntp, use_routes, use_gateway, use_mtu, use_domains, route_metric, client_identifier)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#
             )
             .bind(config_id)
             .bind(dhcp_config.send_hostname)
@@ -476,6 +476,7 @@ impl<'a> InterfacesDb<'a> {
             .bind(dhcp_config.use_mtu)
             .bind(&dhcp_config.use_domains)
             .bind(dhcp_config.route_metric.map(|m| m as i64))
+            .bind(dhcp_config.client_identifier.map(|id| id.to_string()))
             .execute(&mut *tx)
             .await?;
         }
@@ -594,8 +595,8 @@ impl<'a> InterfacesDb<'a> {
     }
 
     async fn get_dhcpv4_client_config(&self, config_id: i64) -> Result<Option<Dhcpv4ClientConfig>> {
-        let row = sqlx::query_as::<_, (bool, Option<String>, bool, bool, bool, bool, bool, String, Option<i64>)>(
-            r#"SELECT send_hostname, hostname, use_dns, use_ntp, use_routes, use_gateway, use_mtu, use_domains, route_metric
+        let row = sqlx::query_as::<_, (bool, Option<String>, bool, bool, bool, bool, bool, String, Option<i64>, Option<String>)>(
+            r#"SELECT send_hostname, hostname, use_dns, use_ntp, use_routes, use_gateway, use_mtu, use_domains, route_metric, client_identifier
                FROM dhcpv4_client_config WHERE interface_config_id = ?"#
         )
         .bind(config_id)
@@ -603,7 +604,7 @@ impl<'a> InterfacesDb<'a> {
         .await
         .context("Failed to fetch DHCPv4 client config")?;
 
-        Ok(row.map(
+        row.map(
             |(
                 send_hostname,
                 hostname,
@@ -614,8 +615,17 @@ impl<'a> InterfacesDb<'a> {
                 use_mtu,
                 use_domains,
                 route_metric,
-            )| {
-                Dhcpv4ClientConfig {
+                client_identifier,
+            )|
+             -> Result<Dhcpv4ClientConfig> {
+                let client_identifier = match client_identifier.as_deref() {
+                    None => None,
+                    Some("mac") => Some(keystone_core::Dhcpv4ClientIdentifier::Mac),
+                    Some("duid") => Some(keystone_core::Dhcpv4ClientIdentifier::Duid),
+                    Some(other) => anyhow::bail!("Unknown DHCPv4 client identifier: {other}"),
+                };
+                Ok(Dhcpv4ClientConfig {
+                    client_identifier,
                     send_hostname,
                     hostname,
                     use_dns,
@@ -625,9 +635,10 @@ impl<'a> InterfacesDb<'a> {
                     use_mtu,
                     use_domains,
                     route_metric: route_metric.map(|m| m as u32),
-                }
+                })
             },
-        ))
+        )
+        .transpose()
     }
 
     async fn get_dhcpv6_client_config(&self, config_id: i64) -> Result<Option<Dhcpv6ClientConfig>> {

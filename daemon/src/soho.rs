@@ -10,10 +10,10 @@ use std::net::Ipv4Addr;
 use anyhow::{Context, Result, bail};
 use ipnet::Ipv4Net;
 use keystone_core::{
-    AddressScope, DhcpMode, DhcpPrefixDelegationConfig, Dhcpv4ClientConfig, Dhcpv6ClientConfig,
-    DnsmasqDhcpRange, FirewallAction, FirewallPolicy, FirewallZone, InterfaceConfig, InterfaceRole,
-    IpForwardMode, IpMasqueradeMode, LinkLocalMode, StaticAddress, WizardInterfaceAssignment,
-    ZoneForwardPolicy,
+    AddressScope, DhcpMode, DhcpPrefixDelegationConfig, Dhcpv4ClientConfig, Dhcpv4ClientIdentifier,
+    Dhcpv6ClientConfig, DnsmasqDhcpRange, FirewallAction, FirewallPolicy, FirewallZone,
+    InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode, LinkLocalMode, StaticAddress,
+    WizardInterfaceAssignment, ZoneForwardPolicy,
 };
 use tracing::info;
 
@@ -167,7 +167,12 @@ fn create_wan_config(assignment: &WizardInterfaceAssignment) -> InterfaceConfig 
         role: InterfaceRole::WAN,
         description: Some(SOHO_WAN_DESCRIPTION.to_string()),
         dhcp_mode: DhcpMode::Yes,
-        dhcpv4_client: Some(Dhcpv4ClientConfig::default()),
+        // Residential IPoE providers may lease an address with DUID but only
+        // authorise forwarding for a MAC-based DHCP client identifier.
+        dhcpv4_client: Some(Dhcpv4ClientConfig {
+            client_identifier: Some(Dhcpv4ClientIdentifier::Mac),
+            ..Default::default()
+        }),
         dhcpv6_client: Some(Dhcpv6ClientConfig {
             use_delegated_prefix: true,
             ..Default::default()
@@ -434,6 +439,10 @@ mod tests {
 
         let wan = db.get_interface_config("wan0").await.unwrap().unwrap();
         assert_eq!(wan.dhcp_mode, DhcpMode::Yes);
+        assert_eq!(
+            wan.dhcpv4_client.as_ref().unwrap().client_identifier,
+            Some(Dhcpv4ClientIdentifier::Mac)
+        );
         assert!(wan.dhcpv6_client.unwrap().use_delegated_prefix);
 
         let lan = db.get_interface_config("lan0").await.unwrap().unwrap();

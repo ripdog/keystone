@@ -346,9 +346,29 @@ pub struct StaticRoute {
     pub route_type: RouteType,
 }
 
+/// Identity sent as DHCPv4 option 61. Some ISPs authorise traffic based on it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Dhcpv4ClientIdentifier {
+    Duid,
+    Mac,
+}
+
+impl std::fmt::Display for Dhcpv4ClientIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Duid => write!(f, "duid"),
+            Self::Mac => write!(f, "mac"),
+        }
+    }
+}
+
 /// DHCPv4 client configuration options
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Dhcpv4ClientConfig {
+    /// None preserves systemd-networkd's default (DUID). MAC is common on residential WANs.
+    #[serde(default)]
+    pub client_identifier: Option<Dhcpv4ClientIdentifier>,
     /// Send hostname to DHCP server
     pub send_hostname: bool,
     /// Custom hostname to send (if different from system hostname)
@@ -372,6 +392,7 @@ pub struct Dhcpv4ClientConfig {
 impl Default for Dhcpv4ClientConfig {
     fn default() -> Self {
         Self {
+            client_identifier: None,
             send_hostname: true,
             hostname: None,
             use_dns: true,
@@ -3090,6 +3111,7 @@ mod tests {
             required_for_online: true,
             activation_policy: ActivationPolicy::Up,
             dhcpv4_client: Some(Dhcpv4ClientConfig {
+                client_identifier: None,
                 send_hostname: true,
                 hostname: None,
                 use_dns: true,

@@ -2,8 +2,8 @@
 
 use keystone_core::{
     ActivationPolicy, AddressScope, DhcpMode, DhcpPrefixDelegationConfig, Dhcpv4ClientConfig,
-    Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode, IpMasqueradeMode,
-    Ipv6AcceptRaConfig, LinkLocalMode, RouteType, StaticAddress, StaticRoute,
+    Dhcpv4ClientIdentifier, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
+    IpMasqueradeMode, Ipv6AcceptRaConfig, LinkLocalMode, RouteType, StaticAddress, StaticRoute,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -65,6 +65,8 @@ pub fn InterfaceEditPage(
     let (dhcp_use_mtu, set_dhcp_use_mtu) = signal(true);
     let (dhcp_send_hostname, set_dhcp_send_hostname) = signal(true);
     let (dhcp_route_metric, set_dhcp_route_metric) = signal(String::new());
+    let (dhcp_client_identifier, set_dhcp_client_identifier) =
+        signal::<Option<Dhcpv4ClientIdentifier>>(None);
 
     // DHCPv6 client settings
     let (dhcp6_use_dns, set_dhcp6_use_dns) = signal(true);
@@ -125,6 +127,7 @@ pub fn InterfaceEditPage(
 
                         // DHCPv4 client settings
                         if let Some(dhcp_cfg) = &cfg.dhcpv4_client {
+                            set_dhcp_client_identifier.set(dhcp_cfg.client_identifier);
                             set_dhcp_use_dns.set(dhcp_cfg.use_dns);
                             set_dhcp_use_ntp.set(dhcp_cfg.use_ntp);
                             set_dhcp_use_routes.set(dhcp_cfg.use_routes);
@@ -316,6 +319,7 @@ pub fn InterfaceEditPage(
                 let dhcpv4_client =
                     if current_dhcp_mode == DhcpMode::Yes || current_dhcp_mode == DhcpMode::Ipv4 {
                         Some(Dhcpv4ClientConfig {
+                            client_identifier: dhcp_client_identifier.get(),
                             send_hostname: dhcp_send_hostname.get(),
                             hostname: None,
                             use_dns: dhcp_use_dns.get(),
@@ -540,6 +544,23 @@ pub fn InterfaceEditPage(
                     <Show when=move || dhcp_mode.get() == DhcpMode::Yes || dhcp_mode.get() == DhcpMode::Ipv4>
                         <div class="bg-gray-700/50 rounded-lg p-4 space-y-4">
                             <h3 class="text-gray-200 font-medium">"DHCPv4 Client Options"</h3>
+                            <div>
+                                <label class="block text-gray-400 text-sm mb-1">"Client Identifier (DHCP option 61)"</label>
+                                <select
+                                    class="bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
+                                    on:change=move |ev| {
+                                        set_dhcp_client_identifier.set(match event_target_value(&ev).as_str() {
+                                            "mac" => Some(Dhcpv4ClientIdentifier::Mac),
+                                            "duid" => Some(Dhcpv4ClientIdentifier::Duid),
+                                            _ => None,
+                                        })
+                                    }
+                                >
+                                    <option value="default" selected=move || dhcp_client_identifier.get().is_none()>"System default (DUID)"</option>
+                                    <option value="mac" selected=move || dhcp_client_identifier.get() == Some(Dhcpv4ClientIdentifier::Mac)>"MAC address (common for ISP WAN)"</option>
+                                    <option value="duid" selected=move || dhcp_client_identifier.get() == Some(Dhcpv4ClientIdentifier::Duid)>"DUID"</option>
+                                </select>
+                            </div>
                             <div class="grid grid-cols-2 gap-4">
                                 <label class="flex items-center gap-2 cursor-pointer">
                                     <input

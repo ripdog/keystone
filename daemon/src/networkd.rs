@@ -459,6 +459,9 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
 fn generate_dhcpv4_section(cfg: &Dhcpv4ClientConfig) -> String {
     let mut output = String::new();
     writeln!(output, "[DHCPv4]").unwrap();
+    if let Some(identifier) = cfg.client_identifier {
+        writeln!(output, "ClientIdentifier={identifier}").unwrap();
+    }
     writeln!(output, "SendHostname={}", bool_to_yesno(cfg.send_hostname)).unwrap();
     if let Some(hostname) = &cfg.hostname {
         writeln!(output, "Hostname={}", hostname).unwrap();
@@ -981,6 +984,7 @@ mod tests {
             ..Default::default()
         };
         let wan_output = generate_network_file(&wan);
+        assert!(!wan_output.contains("ClientIdentifier="));
         assert!(wan_output.contains("DHCP=yes"));
         assert!(wan_output.contains("UseDelegatedPrefix=yes"));
         assert!(wan_output.contains("IPv4Forwarding=yes"));
@@ -1015,6 +1019,14 @@ mod tests {
         let sysctl = generate_router_sysctl_config(&configs);
         assert!(sysctl.contains("net.ipv4.ip_forward = 1"));
         assert!(sysctl.contains("net.ipv6.conf.all.forwarding = 1"));
+    }
+
+    #[test]
+    fn dhcp_mac_identifier_is_explicit_and_optional() {
+        let mut client = Dhcpv4ClientConfig::default();
+        assert!(!generate_dhcpv4_section(&client).contains("ClientIdentifier="));
+        client.client_identifier = Some(keystone_core::Dhcpv4ClientIdentifier::Mac);
+        assert!(generate_dhcpv4_section(&client).contains("ClientIdentifier=mac"));
     }
 
     #[test]

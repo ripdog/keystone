@@ -593,8 +593,10 @@ EOF
     ROOT_INITIAL_PASSWORD="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
     echo "root:$ROOT_INITIAL_PASSWORD" | arch-chroot "$WORKDIR/rootfs" chpasswd
 
-    # The Keystone package creates the dedicated, non-login service account
-    # using systemd-sysusers. Do not create a password-enabled wheel user.
+    # The source builder needs this account before the package is installed.
+    # Keep it locked, without a login shell or wheel membership.
+    arch-chroot "$WORKDIR/rootfs" useradd -m -s /usr/bin/nologin keystone
+    arch-chroot "$WORKDIR/rootfs" passwd -l keystone
     
     # Enable sudo for wheel group
     echo "%wheel ALL=(ALL:ALL) ALL" > "$WORKDIR/rootfs/etc/sudoers.d/wheel"

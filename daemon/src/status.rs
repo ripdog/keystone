@@ -29,7 +29,7 @@ pub fn perform_all_checks(setup_complete: bool) -> SystemStatusResponse {
         // Package checks
         check_package_nftables(),
         check_package_iproute2(),
-        check_package_dnsmasq(),
+        check_package_dnsmasq(setup_complete),
         check_package_caddy(),
         // Service checks
         check_service_systemd_networkd(),
@@ -198,26 +198,35 @@ fn check_package_iproute2() -> SystemCheck {
     }
 }
 
-fn check_package_dnsmasq() -> SystemCheck {
+fn dnsmasq_check_severity(installed: bool, setup_complete: bool) -> CheckSeverity {
+    if installed {
+        CheckSeverity::Pass
+    } else if setup_complete {
+        CheckSeverity::Warning
+    } else {
+        // The initial SOHO wizard always provisions DHCP/DNS.
+        CheckSeverity::Error
+    }
+}
+
+fn check_package_dnsmasq(setup_complete: bool) -> SystemCheck {
     let exists = command_exists("dnsmasq");
     SystemCheck {
         id: "pkg_dnsmasq".to_string(),
         name: "dnsmasq".to_string(),
         category: CheckCategory::Package,
-        severity: if exists {
-            CheckSeverity::Pass
-        } else {
-            CheckSeverity::Warning
-        },
+        severity: dnsmasq_check_severity(exists, setup_complete),
         message: if exists {
             "dnsmasq is installed".to_string()
-        } else {
+        } else if setup_complete {
             "dnsmasq is not installed - DNS/DHCP server features will not be available".to_string()
+        } else {
+            "dnsmasq is required to complete initial router setup".to_string()
         },
         fix_advice: if exists {
             None
         } else {
-            Some("Install dnsmasq if you need DNS/DHCP: pacman -S dnsmasq".to_string())
+            Some("Install dnsmasq: pacman -S dnsmasq".to_string())
         },
     }
 }
@@ -585,6 +594,13 @@ fn check_daemon_running_as_root() -> SystemCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_dnsmasq_blocks_initial_setup_but_not_other_modes() {
+        assert_eq!(dnsmasq_check_severity(false, false), CheckSeverity::Error);
+        assert_eq!(dnsmasq_check_severity(false, true), CheckSeverity::Warning);
+        assert_eq!(dnsmasq_check_severity(true, false), CheckSeverity::Pass);
+    }
 
     #[test]
     fn test_command_exists() {

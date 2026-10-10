@@ -85,6 +85,11 @@ impl<'a> BridgesDb<'a> {
 
     /// Save (insert or update) a bridge configuration
     pub async fn save_bridge(&self, config: &BridgeConfig) -> Result<i64> {
+        keystone_core::validation::single_line_fields(config).map_err(anyhow::Error::msg)?;
+        keystone_core::validation::interface_name(&config.name).map_err(anyhow::Error::msg)?;
+        for name in &config.members {
+            keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
+        }
         let members_json =
             serde_json::to_string(&config.members).context("Failed to serialize bridge members")?;
 

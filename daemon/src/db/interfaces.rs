@@ -50,6 +50,11 @@ impl<'a> InterfacesDb<'a> {
 
     /// Save managed interfaces (replaces all existing)
     pub async fn save_managed_interfaces(&self, interfaces: &[ManagedInterface]) -> Result<()> {
+        keystone_core::validation::single_line_fields(&interfaces).map_err(anyhow::Error::msg)?;
+        for interface in interfaces {
+            keystone_core::validation::interface_name(&interface.name)
+                .map_err(anyhow::Error::msg)?;
+        }
         let mut tx = self.pool.begin().await?;
 
         // Clear existing
@@ -270,6 +275,11 @@ impl<'a> InterfacesDb<'a> {
 
     /// Save an interface configuration (insert or update)
     pub async fn save_interface_config(&self, config: &InterfaceConfig) -> Result<i64> {
+        keystone_core::validation::single_line_fields(config).map_err(anyhow::Error::msg)?;
+        keystone_core::validation::interface_name(&config.name).map_err(anyhow::Error::msg)?;
+        for name in &config.vlans {
+            keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
+        }
         let mut tx = self.pool.begin().await?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

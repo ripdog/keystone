@@ -199,6 +199,21 @@ pub fn remove_dnsmasq_config() -> Result<()> {
 pub async fn apply_dnsmasq_config(pool: &SqlitePool) -> Result<()> {
     // Load complete state from database
     let state = load_dnsmasq_state(pool).await?;
+    // Old database rows may predate API validation. Never write them into a
+    // root-owned dnsmasq configuration without checking all fields again.
+    keystone_core::validation::single_line_fields(&state).map_err(anyhow::Error::msg)?;
+    for range in &state.dhcp_ranges {
+        keystone_core::validation::interface_name(&range.interface).map_err(anyhow::Error::msg)?;
+    }
+    for name in state
+        .config
+        .listen_interfaces
+        .iter()
+        .chain(&state.config.except_interfaces)
+        .chain(&state.config.no_dhcp_interfaces)
+    {
+        keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
+    }
 
     // Check if dnsmasq is enabled
     if !state.config.enabled {

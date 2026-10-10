@@ -125,9 +125,7 @@ fn validate_assignments(assignments: &[WizardInterfaceAssignment]) -> Result<()>
 
     let mut names = HashSet::new();
     for assignment in assignments {
-        if assignment.name.is_empty() {
-            bail!("Interface name cannot be empty");
-        }
+        keystone_core::validation::interface_name(&assignment.name).map_err(anyhow::Error::msg)?;
         if !names.insert(assignment.name.as_str()) {
             bail!(
                 "Interface '{}' was assigned more than once",

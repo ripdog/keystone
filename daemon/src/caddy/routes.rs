@@ -5,7 +5,7 @@
 //! - Preview/Validate
 //! - Apply
 
-use crate::caddy::{self, get_available_interfaces};
+use crate::caddy::{self};
 use crate::db::Database;
 use axum::{
     Json, Router,
@@ -53,7 +53,14 @@ async fn get_caddy_state(
     info!("Getting Caddy state");
     let pool = state.db.pool();
     let config = caddy::load_caddy_config(pool).await?;
-    let available_interfaces = get_available_interfaces();
+    let available_interfaces = state
+        .db
+        .get_interface_configs()
+        .await?
+        .into_iter()
+        .filter(|iface| iface.enabled && iface.role == keystone_core::InterfaceRole::LAN)
+        .map(|iface| iface.name)
+        .collect();
 
     Ok(Json(CaddyStateResponse {
         config,

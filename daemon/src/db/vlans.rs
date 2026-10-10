@@ -80,6 +80,10 @@ impl<'a> VlansDb<'a> {
 
     /// Save (insert or update) a VLAN configuration
     pub async fn save_vlan(&self, config: &VlanConfig) -> Result<i64> {
+        keystone_core::validation::single_line_fields(config).map_err(anyhow::Error::msg)?;
+        keystone_core::validation::interface_name(&config.name).map_err(anyhow::Error::msg)?;
+        keystone_core::validation::interface_name(&config.parent_interface)
+            .map_err(anyhow::Error::msg)?;
         // Validate VLAN ID
         if config.vlan_id < 1 || config.vlan_id > 4094 {
             anyhow::bail!("VLAN ID must be between 1 and 4094");

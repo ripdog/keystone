@@ -296,7 +296,7 @@ fn SettingsTab(
                         on:change=move |ev| bind_interface.set(event_target_value(&ev))
                         class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                     >
-                        <option value="">"Select interface..."</option>
+                        <option value="">"Automatic (first LAN interface)"</option>
                         <For
                             each=move || available_interfaces.get()
                             key=|iface| iface.clone()
@@ -307,7 +307,7 @@ fn SettingsTab(
                             }
                         />
                     </select>
-                    <p class="text-sm text-gray-500 mt-1">"Caddy will only listen on this interface's IP"</p>
+                    <p class="text-sm text-gray-500 mt-1">"Only configured LAN interfaces are available; Caddy never binds to WAN."</p>
                 </div>
 
                 // HTTPS Mode

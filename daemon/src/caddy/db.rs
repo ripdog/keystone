@@ -40,6 +40,9 @@ pub async fn load_caddy_config(pool: &SqlitePool) -> Result<CaddyConfig> {
 
 /// Save the Caddy configuration to the database
 pub async fn save_caddy_config(pool: &SqlitePool, config: &CaddyConfig) -> Result<()> {
+    if config.enabled {
+        super::apply::validate_config(config)?;
+    }
     sqlx::query(
         r#"
         INSERT OR REPLACE INTO caddy_config 
@@ -75,22 +78,4 @@ pub async fn update_validation_status(pool: &SqlitePool, status: &str) -> Result
     .await?;
 
     Ok(())
-}
-
-/// Get a list of available network interfaces from the system
-pub fn get_available_interfaces() -> Vec<String> {
-    // Read from /sys/class/net which lists all network interfaces
-    let path = std::path::Path::new("/sys/class/net");
-    if !path.exists() {
-        return Vec::new();
-    }
-
-    match std::fs::read_dir(path) {
-        Ok(entries) => entries
-            .filter_map(|entry| entry.ok())
-            .filter_map(|entry| entry.file_name().into_string().ok())
-            .filter(|name| name != "lo") // Exclude loopback
-            .collect(),
-        Err(_) => Vec::new(),
-    }
 }

@@ -21,20 +21,22 @@ RuntimeDirectoryMode=0755
 
 # State directory for SQLite database
 StateDirectory=keystone
-StateDirectoryMode=0750
+StateDirectoryMode=0700
 
 # Restrict capabilities
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN
 
 # Filesystem restrictions
 ProtectHome=yes
 ProtectSystem=strict
+# Keystone generates these files; the rest of /etc remains read-only.
 ReadWritePaths=/etc/systemd/network /etc/nftables.conf /var/lib/keystone /run/keystone
+ReadWritePaths=-/etc/dnsmasq.conf -/etc/dnsmasq.d -/var/lib/dnsmasq -/etc/caddy -/var/log/caddy
 PrivateTmp=yes
 
 # Additional hardening
-NoNewPrivileges=no
+NoNewPrivileges=yes
 ProtectKernelTunables=no
 ProtectKernelModules=yes
 ProtectControlGroups=yes

@@ -68,6 +68,7 @@ pub async fn load_dnsmasq_config(pool: &SqlitePool) -> Result<DnsmasqConfig> {
 
 /// Save the global dnsmasq configuration to the database
 pub async fn save_dnsmasq_config(pool: &SqlitePool, config: &DnsmasqConfig) -> Result<()> {
+    keystone_core::validation::single_line_fields(config).map_err(anyhow::Error::msg)?;
     // Upsert main config
     sqlx::query(
         r#"
@@ -212,6 +213,8 @@ pub async fn load_dhcp_ranges(pool: &SqlitePool) -> Result<Vec<DnsmasqDhcpRange>
 
 /// Save a DHCP range (insert or update)
 pub async fn save_dhcp_range(pool: &SqlitePool, range: &DnsmasqDhcpRange) -> Result<i64> {
+    keystone_core::validation::single_line_fields(range).map_err(anyhow::Error::msg)?;
+    keystone_core::validation::interface_name(&range.interface).map_err(anyhow::Error::msg)?;
     let ipv6_mode_str = range.ipv6_mode.map(|m| m.to_string());
 
     if let Some(id) = range.id {
@@ -313,6 +316,7 @@ pub async fn load_static_leases(pool: &SqlitePool) -> Result<Vec<DnsmasqStaticLe
 
 /// Save a static lease (insert or update)
 pub async fn save_static_lease(pool: &SqlitePool, lease: &DnsmasqStaticLease) -> Result<i64> {
+    keystone_core::validation::single_line_fields(lease).map_err(anyhow::Error::msg)?;
     let id = if let Some(id) = lease.id {
         // Update existing
         sqlx::query(
@@ -420,6 +424,7 @@ pub async fn load_dhcp_options(pool: &SqlitePool) -> Result<Vec<DnsmasqDhcpOptio
 
 /// Save a DHCP option (insert or update)
 pub async fn save_dhcp_option(pool: &SqlitePool, option: &DnsmasqDhcpOption) -> Result<i64> {
+    keystone_core::validation::single_line_fields(option).map_err(anyhow::Error::msg)?;
     let id = if let Some(id) = option.id {
         // Update existing
         sqlx::query(
@@ -524,6 +529,7 @@ pub async fn load_host_records(pool: &SqlitePool) -> Result<Vec<DnsmasqHostRecor
 
 /// Save a host record (insert or update)
 pub async fn save_host_record(pool: &SqlitePool, record: &DnsmasqHostRecord) -> Result<i64> {
+    keystone_core::validation::single_line_fields(record).map_err(anyhow::Error::msg)?;
     let id = if let Some(id) = record.id {
         // Update existing
         sqlx::query(
@@ -610,6 +616,7 @@ pub async fn load_cname_records(pool: &SqlitePool) -> Result<Vec<DnsmasqCnameRec
 
 /// Save a CNAME record (insert or update)
 pub async fn save_cname_record(pool: &SqlitePool, record: &DnsmasqCnameRecord) -> Result<i64> {
+    keystone_core::validation::single_line_fields(record).map_err(anyhow::Error::msg)?;
     if let Some(id) = record.id {
         // Update existing
         sqlx::query(
@@ -681,6 +688,7 @@ pub async fn save_address_override(
     pool: &SqlitePool,
     override_entry: &DnsmasqAddressOverride,
 ) -> Result<i64> {
+    keystone_core::validation::single_line_fields(override_entry).map_err(anyhow::Error::msg)?;
     if let Some(id) = override_entry.id {
         // Update existing
         sqlx::query(

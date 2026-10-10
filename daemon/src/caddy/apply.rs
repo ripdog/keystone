@@ -23,6 +23,44 @@ pub const CADDY_MAIN_CONFIG: &str = "/etc/caddy/Caddyfile";
 /// The port that keystone-web-ui listens on (internal)
 const KEYSTONE_WEB_UI_PORT: u16 = 8080;
 
+/// Validate the subset of Caddy configuration that Keystone safely supports.
+pub fn validate_config(config: &CaddyConfig) -> Result<()> {
+    keystone_core::validation::hostname_or_ip(&config.server_address)
+        .map_err(anyhow::Error::msg)?;
+    keystone_core::validation::single_line_fields(&config.server_address)
+        .map_err(anyhow::Error::msg)?;
+    if !config.bind_interface.is_empty() {
+        keystone_core::validation::interface_name(&config.bind_interface)
+            .map_err(anyhow::Error::msg)?;
+    }
+    if config.https_mode == CaddyHttpsMode::AcmeCustom {
+        keystone_core::validation::custom_tls_config(&config.custom_tls_config)
+            .map_err(anyhow::Error::msg)?;
+    }
+    Ok(())
+}
+
+/// Return only an address of an enabled LAN interface. Caddy must never use
+/// its implicit all-interfaces bind when acting as Keystone's proxy.
+async fn lan_bind_ip(pool: &SqlitePool, selected: &str) -> Result<String> {
+    let lans: Vec<(String,)> = sqlx::query_as(
+        "SELECT name FROM interface_configs WHERE enabled = 1 AND role = 'LAN' ORDER BY name",
+    )
+    .fetch_all(pool)
+    .await?;
+    let name = if selected.is_empty() {
+        lans.first().map(|row| row.0.as_str())
+    } else {
+        lans.iter()
+            .find(|row| row.0 == selected)
+            .map(|row| row.0.as_str())
+    }
+    .ok_or_else(|| anyhow::anyhow!("Select an enabled LAN interface before enabling Caddy"))?;
+
+    get_interface_ip(name)
+        .ok_or_else(|| anyhow::anyhow!("No assigned IPv4 address on LAN interface {name}"))
+}
+
 /// Generate the Caddyfile content from the configuration
 pub fn generate_caddyfile(config: &CaddyConfig, bind_ip: Option<&str>) -> String {
     if !config.enabled || config.server_address.is_empty() {
@@ -231,16 +269,26 @@ pub fn ensure_caddy_import() -> Result<()> {
 /// Validate a Caddyfile using `caddy validate`
 pub fn validate_caddyfile(content: &str) -> Result<(bool, String)> {
     // Write to a temporary file for validation
-    let temp_path = "/tmp/keystone-caddy-validate.conf";
-    fs::write(temp_path, content).context("Failed to write temporary Caddyfile for validation")?;
+    use std::os::unix::fs::OpenOptionsExt;
+    let temp_path = std::env::temp_dir().join(format!(
+        "keystone-caddy-validate-{}.conf",
+        uuid::Uuid::new_v4()
+    ));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp_path)?;
+    file.write_all(content.as_bytes())?;
+    drop(file);
 
     let output = Command::new("caddy")
-        .args(["validate", "--config", temp_path, "--adapter", "caddyfile"])
-        .output()
-        .context("Failed to execute caddy validate")?;
-
-    // Clean up temp file
-    let _ = fs::remove_file(temp_path);
+        .args(["validate", "--config"])
+        .arg(&temp_path)
+        .args(["--adapter", "caddyfile"])
+        .output();
+    let _ = fs::remove_file(&temp_path);
+    let output = output.context("Failed to execute caddy validate")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -388,16 +436,8 @@ pub async fn apply_caddy_config(pool: &SqlitePool) -> Result<()> {
     }
 
     // Validate required fields
-    if config.server_address.is_empty() {
-        anyhow::bail!("Server address is required");
-    }
-
-    // Get bind IP if interface is specified
-    let bind_ip = if !config.bind_interface.is_empty() {
-        get_interface_ip(&config.bind_interface)
-    } else {
-        None
-    };
+    validate_config(&config)?;
+    let bind_ip = Some(lan_bind_ip(pool, &config.bind_interface).await?);
 
     // Generate Caddyfile
     let content = generate_caddyfile(&config, bind_ip.as_deref());
@@ -424,15 +464,12 @@ pub async fn apply_caddy_config(pool: &SqlitePool) -> Result<()> {
 /// Generate a preview of the Caddyfile without applying
 pub async fn preview_caddyfile(pool: &SqlitePool) -> Result<String> {
     let config = load_caddy_config(pool).await?;
-
-    // Get bind IP if interface is specified
-    let bind_ip = if !config.bind_interface.is_empty() {
-        get_interface_ip(&config.bind_interface)
-    } else {
-        None
-    };
-
-    Ok(generate_caddyfile(&config, bind_ip.as_deref()))
+    if !config.enabled {
+        return Ok(generate_caddyfile(&config, None));
+    }
+    validate_config(&config)?;
+    let bind_ip = lan_bind_ip(pool, &config.bind_interface).await?;
+    Ok(generate_caddyfile(&config, Some(&bind_ip)))
 }
 
 /// Validate the current configuration from database
@@ -447,14 +484,9 @@ pub async fn validate_caddy_config(pool: &SqlitePool) -> Result<(bool, String)> 
         return Ok((false, "Server address is required".to_string()));
     }
 
-    // Get bind IP if interface is specified
-    let bind_ip = if !config.bind_interface.is_empty() {
-        get_interface_ip(&config.bind_interface)
-    } else {
-        None
-    };
-
-    let content = generate_caddyfile(&config, bind_ip.as_deref());
+    validate_config(&config)?;
+    let bind_ip = lan_bind_ip(pool, &config.bind_interface).await?;
+    let content = generate_caddyfile(&config, Some(&bind_ip));
     let result = validate_caddyfile(&content)?;
 
     // Update status in database

@@ -96,6 +96,29 @@ pub fn apply_configuration(
     vlans: &[VlanConfig],
     bridges: &[BridgeConfig],
 ) -> Result<NetworkdApplySummary> {
+    // Validate both newly submitted and persisted configuration before doing
+    // anything to root-owned networkd files.
+    for config in configs {
+        keystone_core::validation::single_line_fields(config).map_err(anyhow::Error::msg)?;
+        keystone_core::validation::interface_name(&config.name).map_err(anyhow::Error::msg)?;
+        for name in &config.vlans {
+            keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
+        }
+    }
+    for config in vlans {
+        keystone_core::validation::single_line_fields(config).map_err(anyhow::Error::msg)?;
+        keystone_core::validation::interface_name(&config.name).map_err(anyhow::Error::msg)?;
+        keystone_core::validation::interface_name(&config.parent_interface)
+            .map_err(anyhow::Error::msg)?;
+    }
+    for config in bridges {
+        keystone_core::validation::single_line_fields(config).map_err(anyhow::Error::msg)?;
+        keystone_core::validation::interface_name(&config.name).map_err(anyhow::Error::msg)?;
+        for name in &config.members {
+            keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
+        }
+    }
+
     ensure_networkd_dir()?;
     let snapshot = NetworkdConfigSnapshot::capture()?;
 
@@ -559,6 +582,7 @@ pub fn write_network_file(config: &InterfaceConfig) -> Result<()> {
 
 /// Remove a network config file from disk
 pub fn remove_network_file(interface_name: &str) -> Result<()> {
+    keystone_core::validation::interface_name(interface_name).map_err(anyhow::Error::msg)?;
     let path = get_network_filepath(interface_name);
     if path.exists() {
         std::fs::remove_file(&path)
@@ -665,6 +689,7 @@ pub fn write_vlan_netdev_file(config: &VlanConfig) -> Result<()> {
 
 /// Remove a VLAN netdev config file from disk
 pub fn remove_vlan_netdev_file(vlan_name: &str) -> Result<()> {
+    keystone_core::validation::interface_name(vlan_name).map_err(anyhow::Error::msg)?;
     let path = get_vlan_netdev_filepath(vlan_name);
     if path.exists() {
         std::fs::remove_file(&path)
@@ -735,6 +760,7 @@ pub fn write_bridge_netdev_file(config: &keystone_core::BridgeConfig) -> Result<
 
 /// Remove a bridge netdev config file from disk
 pub fn remove_bridge_netdev_file(bridge_name: &str) -> Result<()> {
+    keystone_core::validation::interface_name(bridge_name).map_err(anyhow::Error::msg)?;
     let path = get_bridge_netdev_filepath(bridge_name);
     if path.exists() {
         std::fs::remove_file(&path)

@@ -78,18 +78,30 @@ pub async fn list_units(keystone_only: bool) -> Result<Vec<SystemdUnit>> {
     Ok(result)
 }
 
-/// Check if a unit name is keystone-related
+/// Only explicitly managed services can be controlled by the privileged API.
+/// Filtering the displayed list is not a security boundary.
 fn is_keystone_related(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower.contains("keystone")
-        || lower.contains("systemd-networkd")
-        || lower.contains("nftables")
-        || lower.contains("dnsmasq")
-        || lower.contains("caddy")
+    matches!(
+        name,
+        "keystone-daemon.service"
+            | "keystone-web-ui.service"
+            | "systemd-networkd.service"
+            | "nftables.service"
+            | "dnsmasq.service"
+            | "caddy.service"
+    )
+}
+
+fn ensure_managed_unit(name: &str) -> Result<()> {
+    if !is_keystone_related(name) {
+        anyhow::bail!("Service is not managed by Keystone: {name}");
+    }
+    Ok(())
 }
 
 /// Get detailed information about a specific unit
 pub async fn get_unit_detail(unit_name: &str) -> Result<Option<SystemdUnitDetail>> {
+    ensure_managed_unit(unit_name)?;
     let connection = Connection::system()
         .await
         .context("Failed to connect to system D-Bus")?;
@@ -176,6 +188,7 @@ pub async fn get_unit_detail(unit_name: &str) -> Result<Option<SystemdUnitDetail
 
 /// Start a systemd unit
 pub async fn start_unit(unit_name: &str) -> Result<()> {
+    ensure_managed_unit(unit_name)?;
     let connection = Connection::system()
         .await
         .context("Failed to connect to system D-Bus")?;
@@ -194,6 +207,7 @@ pub async fn start_unit(unit_name: &str) -> Result<()> {
 
 /// Stop a systemd unit
 pub async fn stop_unit(unit_name: &str) -> Result<()> {
+    ensure_managed_unit(unit_name)?;
     let connection = Connection::system()
         .await
         .context("Failed to connect to system D-Bus")?;
@@ -212,6 +226,7 @@ pub async fn stop_unit(unit_name: &str) -> Result<()> {
 
 /// Restart a systemd unit
 pub async fn restart_unit(unit_name: &str) -> Result<()> {
+    ensure_managed_unit(unit_name)?;
     let connection = Connection::system()
         .await
         .context("Failed to connect to system D-Bus")?;
@@ -230,6 +245,7 @@ pub async fn restart_unit(unit_name: &str) -> Result<()> {
 
 /// Enable a systemd unit (start on boot)
 pub async fn enable_unit(unit_name: &str) -> Result<()> {
+    ensure_managed_unit(unit_name)?;
     let connection = Connection::system()
         .await
         .context("Failed to connect to system D-Bus")?;
@@ -254,6 +270,7 @@ pub async fn enable_unit(unit_name: &str) -> Result<()> {
 
 /// Disable a systemd unit (don't start on boot)
 pub async fn disable_unit(unit_name: &str) -> Result<()> {
+    ensure_managed_unit(unit_name)?;
     let connection = Connection::system()
         .await
         .context("Failed to connect to system D-Bus")?;
@@ -315,4 +332,16 @@ fn parse_load_state(state: &str) -> SystemdLoadState {
 
 fn parse_active_state(state: &str) -> SystemdActiveState {
     state.parse().unwrap_or(SystemdActiveState::Inactive)
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    #[test]
+    fn cannot_control_unrelated_system_units() {
+        assert!(ensure_managed_unit("systemd-networkd.service").is_ok());
+        assert!(ensure_managed_unit("ssh.service").is_err());
+        assert!(ensure_managed_unit("--user").is_err());
+        assert!(ensure_managed_unit("malicious-keystone.service").is_err());
+    }
 }

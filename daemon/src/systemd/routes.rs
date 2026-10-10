@@ -2,7 +2,7 @@
 
 use axum::{
     Json, Router,
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     routing::{get, post},
 };
 use keystone_core::{SystemdUnitControlResponse, SystemdUnitDetailResponse, SystemdUnitsResponse};
@@ -11,6 +11,23 @@ use std::sync::Arc;
 use tracing::info;
 
 use crate::AppError;
+
+async fn check_control_allowed(
+    state: &Arc<crate::AppState>,
+) -> Result<Option<Json<SystemdUnitControlResponse>>, AppError> {
+    if state
+        .db
+        .get_global_settings()
+        .await?
+        .config_changes_disabled
+    {
+        return Ok(Some(Json(SystemdUnitControlResponse {
+            success: false,
+            message: "Configuration changes are locked".to_string(),
+        })));
+    }
+    Ok(None)
+}
 
 /// Query parameters for listing units
 #[derive(Debug, Deserialize)]
@@ -51,9 +68,13 @@ async fn get_unit_detail(
 
 /// POST /systemd/units/:name/start - Start a unit
 async fn start_unit(
+    State(state): State<Arc<crate::AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Starting unit: {}", name);
+    if let Some(response) = check_control_allowed(&state).await? {
+        return Ok(response);
+    }
 
     match super::start_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
@@ -68,8 +89,14 @@ async fn start_unit(
 }
 
 /// POST /systemd/units/:name/stop - Stop a unit
-async fn stop_unit(Path(name): Path<String>) -> Result<Json<SystemdUnitControlResponse>, AppError> {
+async fn stop_unit(
+    State(state): State<Arc<crate::AppState>>,
+    Path(name): Path<String>,
+) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Stopping unit: {}", name);
+    if let Some(response) = check_control_allowed(&state).await? {
+        return Ok(response);
+    }
 
     match super::stop_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
@@ -85,9 +112,13 @@ async fn stop_unit(Path(name): Path<String>) -> Result<Json<SystemdUnitControlRe
 
 /// POST /systemd/units/:name/restart - Restart a unit
 async fn restart_unit(
+    State(state): State<Arc<crate::AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Restarting unit: {}", name);
+    if let Some(response) = check_control_allowed(&state).await? {
+        return Ok(response);
+    }
 
     match super::restart_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
@@ -103,9 +134,13 @@ async fn restart_unit(
 
 /// POST /systemd/units/:name/enable - Enable a unit (start on boot)
 async fn enable_unit(
+    State(state): State<Arc<crate::AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Enabling unit: {}", name);
+    if let Some(response) = check_control_allowed(&state).await? {
+        return Ok(response);
+    }
 
     match super::enable_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {
@@ -121,9 +156,13 @@ async fn enable_unit(
 
 /// POST /systemd/units/:name/disable - Disable a unit (don't start on boot)
 async fn disable_unit(
+    State(state): State<Arc<crate::AppState>>,
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitControlResponse>, AppError> {
     info!("Disabling unit: {}", name);
+    if let Some(response) = check_control_allowed(&state).await? {
+        return Ok(response);
+    }
 
     match super::disable_unit(&name).await {
         Ok(()) => Ok(Json(SystemdUnitControlResponse {

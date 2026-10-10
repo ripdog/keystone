@@ -11,12 +11,16 @@ pub fn event_target_checked(ev: &web_sys::Event) -> bool {
         .unwrap_or(false)
 }
 
-/// Extract value from an input event
+/// Extract the value of an input, select, or textarea control.
+///
+/// All three expose a `value` property; casting a select to HtmlInputElement
+/// silently fails and used to submit an empty value for DHCPv6 WithoutRA.
 pub fn event_target_value(ev: &web_sys::Event) -> String {
-    use wasm_bindgen::JsCast;
     ev.target()
-        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-        .map(|e| e.value())
+        .and_then(|target| {
+            js_sys::Reflect::get(&target, &wasm_bindgen::JsValue::from_str("value")).ok()
+        })
+        .and_then(|value| value.as_string())
         .unwrap_or_default()
 }
 

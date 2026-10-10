@@ -92,7 +92,9 @@ pub async fn put_no_response<B: Serialize>(url: &str, token: &str, body: &B) -> 
     if response.ok() {
         Ok(())
     } else {
-        Err(format!("Server error: {}", response.status()))
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(error_message(status, &body))
     }
 }
 
@@ -122,7 +124,9 @@ pub async fn delete_no_response(url: &str, token: &str) -> Result<(), String> {
     if response.ok() {
         Ok(())
     } else {
-        Err(format!("Server error: {}", response.status()))
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(error_message(status, &body))
     }
 }
 
@@ -158,7 +162,64 @@ async fn handle_response<T: DeserializeOwned>(
             .await
             .map_err(|e| format!("Failed to parse response: {}", e))
     } else {
-        Err(format!("Server error: {}", response.status()))
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(error_message(status, &body))
+    }
+}
+
+/// Extract the meaningful error text returned by the daemon, not just HTTP 500.
+/// KeystoneError currently serializes as a tagged object: {"Internal":"..."}.
+fn error_message(status: u16, body: &str) -> String {
+    let detail = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| {
+            if let Some(message) = json.as_str() {
+                return Some(message.to_string());
+            }
+            [
+                "message",
+                "error",
+                "Internal",
+                "Validation",
+                "InvalidInput",
+                "InvalidConfig",
+                "SystemCommandFailed",
+                "NotFound",
+                "PermissionDenied",
+            ]
+            .into_iter()
+            .find_map(|key| {
+                json.get(key)
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
+        })
+        .filter(|message| !message.trim().is_empty());
+    match detail {
+        Some(message) => format!("Server error ({status}): {message}"),
+        None => format!("Server error ({status})"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_message;
+
+    #[test]
+    fn displays_daemon_validation_errors() {
+        assert_eq!(
+            error_message(500, r#"{"Internal":"Unsupported DHCPv6 WithoutRA mode"}"#),
+            "Server error (500): Unsupported DHCPv6 WithoutRA mode"
+        );
+        assert_eq!(
+            error_message(400, r#"{"message":"Invalid interface configuration"}"#),
+            "Server error (400): Invalid interface configuration"
+        );
+        assert_eq!(
+            error_message(503, "<html>broken</html>"),
+            "Server error (503)"
+        );
     }
 }
 

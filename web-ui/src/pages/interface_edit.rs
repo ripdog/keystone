@@ -1020,6 +1020,14 @@ pub fn InterfaceEditPage(
                         </Show>
                     </div>
 
+                    // Keep save failures beside the Save button: this long
+                    // form may be scrolled far below the page-level banner.
+                    <Show when=move || error.get().is_some()>
+                        <div role="alert" class="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded">
+                            {move || error.get().unwrap_or_default()}
+                        </div>
+                    </Show>
+
                     // Save/Cancel buttons
                     <div class="flex gap-3 pt-4 border-t border-gray-700">
                         <button

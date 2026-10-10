@@ -183,6 +183,11 @@ mod tests {
         assert!(json.contains("nfproto"));
         assert!(json.contains("ipv4"));
         assert!(json.contains("ipv6-icmp"));
+        // A multicast Solicit can receive a unicast DHCPv6 reply which is
+        // not classified as established by conntrack. The router must accept it.
+        assert!(json.contains("Allow DHCPv6 server replies on WAN"));
+        assert!(json.contains("\"sport\""));
+        assert!(json.contains("\"dport\""));
     }
 
     #[test]
@@ -198,6 +203,13 @@ mod tests {
         assert!(preview.contains("chain prerouting"));
         assert!(preview.contains("chain postrouting"));
         assert!(preview.contains("masquerade"));
+        assert!(preview.contains("udp sport 547 udp dport 546"));
+        let dhcpv6 = preview.find("udp sport 547 udp dport 546").unwrap();
+        let drop_invalid = preview.find("ct state invalid drop").unwrap();
+        assert!(
+            dhcpv6 < drop_invalid,
+            "DHCPv6 reply must precede invalid DROP"
+        );
     }
 
     #[test]

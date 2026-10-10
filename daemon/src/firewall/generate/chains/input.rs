@@ -43,6 +43,22 @@ pub fn generate_input_chain(
         "input",
     )));
 
+    // DHCPv6 Solicit goes to multicast ff02::1:2, but the server's reply
+    // comes from its unicast address. Conntrack need not classify that reply
+    // as established, so explicitly allow server -> client DHCPv6 on WAN
+    // before the invalid-state and default-drop rules.
+    let mut wan_interfaces: Vec<String> = find_wan_zones(&config.zones)
+        .into_iter()
+        .flat_map(|zone| zone.interfaces.iter().cloned())
+        .collect();
+    wan_interfaces.sort();
+    wan_interfaces.dedup();
+    if !wan_interfaces.is_empty() {
+        batch.add(NfListObject::Rule(create_dhcpv6_client_accept_rule(
+            &wan_interfaces,
+        )));
+    }
+
     // Priority 2: Drop invalid packets
     batch.add(NfListObject::Rule(create_conntrack_invalid_rule(
         FILTER_TABLE,
@@ -101,6 +117,57 @@ pub fn create_conntrack_established_rule(
         ]
         .into(),
         comment: Some(Cow::Borrowed("Accept established/related")),
+        ..Default::default()
+    }
+}
+
+/// DHCPv6 server replies arriving from the WAN to the local DHCPv6 client.
+fn create_dhcpv6_client_accept_rule(interfaces: &[String]) -> Rule<'static> {
+    Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(FILTER_TABLE),
+        chain: Cow::Borrowed("input"),
+        expr: vec![
+            create_iif_match(interfaces),
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                    key: MetaKey::Nfproto,
+                })),
+                right: Expression::String(Cow::Borrowed("ipv6")),
+                op: Operator::EQ,
+            }),
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+                    key: MetaKey::L4proto,
+                })),
+                right: Expression::String(Cow::Borrowed("udp")),
+                op: Operator::EQ,
+            }),
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Payload(
+                    Payload::PayloadField(PayloadField {
+                        protocol: Cow::Borrowed("udp"),
+                        field: Cow::Borrowed("sport"),
+                    }),
+                )),
+                right: Expression::Number(547),
+                op: Operator::EQ,
+            }),
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::Payload(
+                    Payload::PayloadField(PayloadField {
+                        protocol: Cow::Borrowed("udp"),
+                        field: Cow::Borrowed("dport"),
+                    }),
+                )),
+                right: Expression::Number(546),
+                op: Operator::EQ,
+            }),
+            Statement::Counter(Counter::Anonymous(None)),
+            Statement::Accept(None),
+        ]
+        .into(),
+        comment: Some(Cow::Borrowed("Allow DHCPv6 server replies on WAN")),
         ..Default::default()
     }
 }

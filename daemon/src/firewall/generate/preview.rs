@@ -36,6 +36,22 @@ pub fn generate_preview(
     output.push_str("        # Priority 1: Established/Related connections\n");
     output.push_str("        ct state established,related accept\n");
     output.push_str("        \n");
+    // DHCPv6 unicast replies to multicast solicitations may not match
+    // conntrack's established state; preserve them before invalid DROP.
+    let mut wan_interfaces = find_wan_zones(&config.zones)
+        .into_iter()
+        .flat_map(|zone| zone.interfaces.iter().cloned())
+        .collect::<Vec<_>>();
+    wan_interfaces.sort();
+    wan_interfaces.dedup();
+    if !wan_interfaces.is_empty() {
+        output.push_str("        # Accept DHCPv6 server replies on WAN\n");
+        output.push_str(&format!(
+            "        iifname {} meta nfproto ipv6 meta l4proto udp udp sport 547 udp dport 546 counter accept\n",
+            format_interface_set(&wan_interfaces)
+        ));
+    }
+    output.push_str("        \n");
     output.push_str("        # Priority 2: Invalid packets\n");
     output.push_str("        ct state invalid drop\n");
     output.push_str("        \n");

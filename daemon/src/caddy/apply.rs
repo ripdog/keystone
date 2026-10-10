@@ -40,11 +40,11 @@ pub fn validate_config(config: &CaddyConfig) -> Result<()> {
     Ok(())
 }
 
-/// Return only an address of an enabled LAN interface. Caddy must never use
-/// its implicit all-interfaces bind when acting as Keystone's proxy.
-async fn lan_bind_ip(pool: &SqlitePool, selected: &str) -> Result<String> {
+/// Resolve a LAN interface against the same authoritative `interface_config`
+/// table as networkd and the interface management API.
+async fn lan_interface_name(pool: &SqlitePool, selected: &str) -> Result<String> {
     let lans: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM interface_configs WHERE enabled = 1 AND role = 'LAN' ORDER BY name",
+        "SELECT interface_name FROM interface_config WHERE enabled = 1 AND role = 'LAN' ORDER BY interface_name",
     )
     .fetch_all(pool)
     .await?;
@@ -56,9 +56,45 @@ async fn lan_bind_ip(pool: &SqlitePool, selected: &str) -> Result<String> {
             .map(|row| row.0.as_str())
     }
     .ok_or_else(|| anyhow::anyhow!("Select an enabled LAN interface before enabling Caddy"))?;
+    Ok(name.to_string())
+}
 
-    get_interface_ip(name)
+/// Return only an address of an enabled LAN interface. Caddy must never use
+/// its implicit all-interfaces bind when acting as Keystone's proxy.
+async fn lan_bind_ip(pool: &SqlitePool, selected: &str) -> Result<String> {
+    let name = lan_interface_name(pool, selected).await?;
+    get_interface_ip(&name)
         .ok_or_else(|| anyhow::anyhow!("No assigned IPv4 address on LAN interface {name}"))
+}
+
+/// Cloudflare DNS support is an optional Caddy module, not in Arch's base binary.
+/// Report the missing dependency before trying to adapt the generated Caddyfile.
+fn ensure_required_dns_modules(config: &CaddyConfig) -> Result<()> {
+    if config.https_mode != CaddyHttpsMode::AcmeCustom
+        || !config.custom_tls_config.lines().any(|line| {
+            let mut words = line.split_ascii_whitespace();
+            words.next() == Some("dns") && words.next() == Some("cloudflare")
+        })
+    {
+        return Ok(());
+    }
+    let output = Command::new("caddy")
+        .arg("list-modules")
+        .output()
+        .context("Failed to inspect Caddy modules")?;
+    anyhow::ensure!(output.status.success(), "Failed to list Caddy modules");
+    let modules = String::from_utf8_lossy(&output.stdout);
+    anyhow::ensure!(
+        has_cloudflare_module(&modules),
+        "Caddy is missing the Cloudflare DNS provider (dns.providers.cloudflare). Install a Caddy build with github.com/caddy-dns/cloudflare before enabling Cloudflare DNS challenge TLS."
+    );
+    Ok(())
+}
+
+fn has_cloudflare_module(modules: &str) -> bool {
+    modules
+        .lines()
+        .any(|line| line.trim() == "dns.providers.cloudflare")
 }
 
 /// Generate the Caddyfile content from the configuration
@@ -437,6 +473,7 @@ pub async fn apply_caddy_config(pool: &SqlitePool) -> Result<()> {
 
     // Validate required fields
     validate_config(&config)?;
+    ensure_required_dns_modules(&config)?;
     let bind_ip = Some(lan_bind_ip(pool, &config.bind_interface).await?);
 
     // Generate Caddyfile
@@ -485,6 +522,7 @@ pub async fn validate_caddy_config(pool: &SqlitePool) -> Result<(bool, String)> 
     }
 
     validate_config(&config)?;
+    ensure_required_dns_modules(&config)?;
     let bind_ip = lan_bind_ip(pool, &config.bind_interface).await?;
     let content = generate_caddyfile(&config, Some(&bind_ip));
     let result = validate_caddyfile(&content)?;
@@ -524,5 +562,48 @@ pub fn get_caddy_status() -> CaddyServiceStatus {
         running,
         enabled,
         config_exists,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use keystone_core::{InterfaceConfig, InterfaceRole};
+
+    #[tokio::test]
+    async fn caddy_lan_selection_reads_authoritative_interface_table() {
+        let db = Database::new_in_memory().await.unwrap();
+        for (name, role, enabled) in [
+            ("wan0", InterfaceRole::WAN, true),
+            ("lan1", InterfaceRole::LAN, true),
+            ("lan0", InterfaceRole::LAN, true),
+            ("down0", InterfaceRole::LAN, false),
+        ] {
+            db.save_interface_config(&InterfaceConfig {
+                name: name.to_string(),
+                role,
+                enabled,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        }
+        // Use the production migrations. The old `interface_configs` table
+        // does not exist, so this also catches stale-schema queries.
+        assert_eq!(lan_interface_name(db.pool(), "").await.unwrap(), "lan0");
+        assert_eq!(lan_interface_name(db.pool(), "lan1").await.unwrap(), "lan1");
+        assert!(lan_interface_name(db.pool(), "wan0").await.is_err());
+        assert!(lan_interface_name(db.pool(), "down0").await.is_err());
+        assert!(lan_interface_name(db.pool(), "missing").await.is_err());
+    }
+
+    #[test]
+    fn cloudflare_module_detection_requires_exact_provider() {
+        assert!(has_cloudflare_module(
+            "tls.issuance.acme\ndns.providers.cloudflare\n"
+        ));
+        assert!(!has_cloudflare_module("dns.providers.cloudflare_extra\n"));
+        assert!(!has_cloudflare_module("tls.issuance.acme\n"));
     }
 }

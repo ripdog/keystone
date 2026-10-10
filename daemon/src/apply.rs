@@ -165,17 +165,7 @@ pub async fn apply_all(
             "All configuration applied successfully.".to_string()
         }
     } else {
-        let failed: Vec<&str> = [
-            (!components.networkd.success && !components.networkd.skipped).then_some("networkd"),
-            (!components.firewall.success && !components.firewall.skipped).then_some("firewall"),
-            (!components.dnsmasq.success && !components.dnsmasq.skipped).then_some("dnsmasq"),
-            (!components.caddy.success && !components.caddy.skipped).then_some("caddy"),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
-
-        format!("Some components failed: {}", failed.join(", "))
+        format_failed_components(&components)
     };
 
     info!("Unified apply complete: {}", message);
@@ -190,6 +180,32 @@ pub async fn apply_all(
     })
 }
 
+/// Format the component-specific errors instead of discarding their diagnostics.
+/// The CLI setup wizard displays this summary verbatim on activation failure.
+fn format_failed_components(components: &ApplyComponentResults) -> String {
+    let failures = [
+        ("networkd", &components.networkd),
+        ("firewall", &components.firewall),
+        ("dnsmasq", &components.dnsmasq),
+        ("caddy", &components.caddy),
+    ]
+    .into_iter()
+    .filter(|(_, result)| !result.success && !result.skipped)
+    .collect::<Vec<_>>();
+
+    let names = failures.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+    let details = failures
+        .iter()
+        .map(|(name, result)| format!("  {name}: {}", result.message))
+        .collect::<Vec<_>>();
+
+    format!(
+        "Some components failed: {}\n{}",
+        names.join(", "),
+        details.join("\n")
+    )
+}
+
 /// Apply networkd configuration (interfaces, VLANs, bridges).
 async fn apply_networkd_config(db: &Database) -> Result<String> {
     let configs = db.get_interface_configs().await?;
@@ -201,4 +217,23 @@ async fn apply_networkd_config(db: &Database) -> Result<String> {
         "Applied {} interfaces, {} VLANs, {} bridges",
         summary.interfaces, summary.vlans, summary.bridges
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_error_summary_includes_component_diagnostics() {
+        let components = ApplyComponentResults {
+            networkd: component_failure("systemctl reload failed"),
+            firewall: component_success("applied"),
+            dnsmasq: component_failure("address already in use"),
+            caddy: component_skipped("not configured"),
+        };
+        assert_eq!(
+            format_failed_components(&components),
+            "Some components failed: networkd, dnsmasq\n  networkd: systemctl reload failed\n  dnsmasq: address already in use"
+        );
+    }
 }

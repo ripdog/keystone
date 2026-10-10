@@ -591,7 +591,10 @@ EOF
     echo "LANG=en_US.UTF-8" > "$WORKDIR/rootfs/etc/locale.conf"
     
     # Enable services
-    arch-chroot "$WORKDIR/rootfs" systemctl enable NetworkManager
+    # Keystone generates systemd-networkd profiles. Never let NetworkManager
+    # race it for ownership of WAN/LAN interfaces on the first boot.
+    arch-chroot "$WORKDIR/rootfs" systemctl disable NetworkManager
+    arch-chroot "$WORKDIR/rootfs" systemctl enable systemd-networkd
     arch-chroot "$WORKDIR/rootfs" systemctl enable sshd
     # Keystone owns nftables; the distro service can load an independent
     # default-drop 'inet filter' table and silently block DHCP/forwarding.

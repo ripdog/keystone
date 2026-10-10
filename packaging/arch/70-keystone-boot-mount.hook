@@ -1,0 +1,12 @@
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = boot/vmlinuz-*
+
+[Action]
+Description = Keystone: checking that /boot is mounted before kernel changes
+When = PreTransaction
+Exec = /usr/bin/mountpoint -q /boot
+AbortOnFail

@@ -482,6 +482,14 @@ mount_filesystems() {
     success "Filesystems mounted"
 }
 
+# Prevent pacman from upgrading the kernel into the hidden /boot directory
+# when the USB's separate EFI system partition has not been mounted.
+install_boot_mount_guard() {
+    install -Dm644 \
+        "$(dirname "${BASH_SOURCE[0]}")/../packaging/arch/70-keystone-boot-mount.hook" \
+        "$WORKDIR/rootfs/etc/pacman.d/hooks/70-keystone-boot-mount.hook"
+}
+
 # Mount the ISO
 mount_iso() {
     info "Mounting ISO..."
@@ -865,6 +873,7 @@ main() {
 
     if [[ "$MODE" == "upgrade-keystone" ]]; then
         mount_filesystems
+        install_boot_mount_guard
         build_keystone_package
         install_keystone
 
@@ -877,6 +886,7 @@ main() {
     mount_filesystems
     mount_iso
     install_base_system
+    install_boot_mount_guard
     generate_fstab
     configure_system
     install_bootloader

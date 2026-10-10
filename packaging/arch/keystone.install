@@ -29,6 +29,9 @@ post_install() {
 }
 
 post_upgrade() {
+    echo "==> Provisioning Keystone configuration directories..."
+    systemd-tmpfiles --create keystone.conf
+
     echo "==> Reloading systemd..."
     systemctl daemon-reload
 

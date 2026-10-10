@@ -35,6 +35,8 @@ pub fn perform_all_checks(setup_complete: bool) -> SystemStatusResponse {
         check_service_systemd_networkd(),
         check_service_network_manager(),
         check_service_nftables(),
+        check_foreign_firewall_chains(),
+        check_router_forwarding(),
         // Permission checks
         check_permission_networkd_dir(),
         check_permission_dnsmasq_dir(),
@@ -324,30 +326,125 @@ fn check_service_network_manager() -> SystemCheck {
 }
 
 fn check_service_nftables() -> SystemCheck {
-    // nftables service is optional - we apply rules directly
-    // But if it exists and is enabled, that's good for persistence
+    // Keystone loads its own confirmed nftables rules at daemon startup.
+    // The distro nftables unit loads a second, potentially conflicting ruleset.
     let enabled = service_is_enabled("nftables.service");
+    let active = service_is_active("nftables.service");
 
     SystemCheck {
         id: "svc_nftables".to_string(),
         name: "nftables service".to_string(),
         category: CheckCategory::Service,
-        severity: if enabled {
+        severity: if active {
+            CheckSeverity::Error
+        } else if enabled {
+            CheckSeverity::Warning
+        } else {
+            CheckSeverity::Pass
+        },
+        message: if active {
+            "nftables.service is running alongside Keystone and may override its firewall"
+                .to_string()
+        } else if enabled {
+            "nftables.service is enabled and may replace Keystone rules on the next boot"
+                .to_string()
+        } else {
+            "Keystone manages nftables directly; distro nftables.service is disabled".to_string()
+        },
+        fix_advice: if active || enabled {
+            Some("Disable future startup with systemctl disable nftables.service. Stop the competing service during a planned firewall reapply: its ExecStop may flush the entire nftables ruleset. Inspect and remove obsolete foreign tables".to_string())
+        } else {
+            None
+        },
+    }
+}
+
+fn check_router_forwarding() -> SystemCheck {
+    // Support routers configured before persistent sysctl management was added.
+    let sysctl =
+        fs::read_to_string("/etc/sysctl.d/99-zz-keystone-forwarding.conf").unwrap_or_default();
+    let networkd = fs::read_to_string("/etc/systemd/networkd.conf.d/50-keystone-router.conf")
+        .unwrap_or_default();
+    let expected_ipv4 = sysctl
+        .lines()
+        .any(|line| line.trim() == "net.ipv4.ip_forward = 1")
+        || networkd
+            .lines()
+            .any(|line| line.trim() == "IPv4Forwarding=yes");
+    let expected_ipv6 = sysctl
+        .lines()
+        .any(|line| line.trim() == "net.ipv6.conf.all.forwarding = 1")
+        || networkd
+            .lines()
+            .any(|line| line.trim() == "IPv6Forwarding=yes");
+    let mut failures = Vec::new();
+    for (expected, path, name) in [
+        (expected_ipv4, "/proc/sys/net/ipv4/ip_forward", "IPv4"),
+        (
+            expected_ipv6,
+            "/proc/sys/net/ipv6/conf/all/forwarding",
+            "IPv6",
+        ),
+    ] {
+        if expected
+            && fs::read_to_string(path)
+                .map(|value| value.trim() != "1")
+                .unwrap_or(true)
+        {
+            failures.push(name);
+        }
+    }
+    let healthy = failures.is_empty();
+    SystemCheck {
+        id: "router_forwarding".to_string(),
+        name: "Router forwarding".to_string(),
+        category: CheckCategory::Network,
+        severity: if healthy {
             CheckSeverity::Pass
         } else {
-            CheckSeverity::Warning
+            CheckSeverity::Error
         },
-        message: if enabled {
-            "nftables service is enabled (rules will persist across reboots)".to_string()
+        message: if healthy {
+            "Kernel forwarding matches Keystone router configuration".to_string()
         } else {
-            "nftables service is not enabled - firewall rules may not persist across reboots"
-                .to_string()
+            format!(
+                "Kernel {} forwarding is disabled despite Keystone router configuration",
+                failures.join(" and ")
+            )
         },
-        fix_advice: if enabled {
+        fix_advice: if healthy {
             None
         } else {
-            Some("Enable nftables: systemctl enable nftables".to_string())
+            Some("Reapply Keystone's network configuration; inspect its generated sysctl settings and networkd service if forwarding remains disabled".to_string())
         },
+    }
+}
+
+fn check_foreign_firewall_chains() -> SystemCheck {
+    let (severity, message, fix_advice) = match crate::firewall::foreign_drop_chains() {
+        Ok(conflicts) if conflicts.is_empty() => (
+            CheckSeverity::Pass,
+            "No foreign nftables default-drop input/forward chains detected".to_string(),
+            None,
+        ),
+        Ok(conflicts) => (
+            CheckSeverity::Error,
+            format!("Competing nftables input/forward chains: {}", conflicts.join(", ")),
+            Some("Inspect these foreign chains, disable their owner, and remove obsolete rules. An ACCEPT in Keystone cannot override another chain's DROP".to_string()),
+        ),
+        Err(error) => (
+            CheckSeverity::Error,
+            format!("Cannot inspect competing nftables chains: {error:#}"),
+            Some("Verify nftables is installed and the daemon can run nft -j list ruleset".to_string()),
+        ),
+    };
+    SystemCheck {
+        id: "nft_foreign_chains".to_string(),
+        name: "Competing firewall chains".to_string(),
+        category: CheckCategory::Configuration,
+        severity,
+        message,
+        fix_advice,
     }
 }
 

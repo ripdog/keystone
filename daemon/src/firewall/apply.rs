@@ -75,6 +75,9 @@ impl FirewallApplyManager {
 
                 let session_id = Uuid::new_v4().to_string();
                 let applied_config = self.db.get_firewall_config().await?;
+                if let Err(error) = apply_config_to_nftables(&applied_config).await {
+                    error!("Failed to restore pending firewall at startup: {error:#}");
+                }
                 *self.pending.write().await = Some(PendingApply {
                     session_id: session_id.clone(),
                     rollback_at: rollback_at as u64,
@@ -92,6 +95,15 @@ impl FirewallApplyManager {
         if self.db.get_active_firewall_config().await?.is_none() && keystone_tables_exist().await {
             let baseline = self.db.get_firewall_config().await?;
             self.db.save_active_firewall_config(&baseline).await?;
+        }
+
+        // Kernel nftables state does not survive reboot. Restore the last
+        // CONFIRMED policy, never unconfirmed working database changes.
+        // Keep the daemon available for recovery if restoration fails.
+        if let Some(confirmed) = self.db.get_active_firewall_config().await?
+            && let Err(error) = apply_config_to_nftables(&confirmed).await
+        {
+            error!("Failed to restore confirmed firewall at startup: {error:#}");
         }
 
         Ok(())
@@ -378,8 +390,61 @@ async fn keystone_tables_exist() -> bool {
     false
 }
 
+/// Identify foreign base chains whose default DROP cannot be overridden by
+/// an ACCEPT in a Keystone chain at the same netfilter hook.
+fn foreign_drop_chains_in_json(ruleset: &serde_json::Value) -> Vec<String> {
+    let mut conflicts = Vec::new();
+    let Some(objects) = ruleset.get("nftables").and_then(|value| value.as_array()) else {
+        return conflicts;
+    };
+    for object in objects {
+        let Some(chain) = object.get("chain") else {
+            continue;
+        };
+        let (Some(family), Some(table), Some(name)) = (
+            chain.get("family").and_then(|v| v.as_str()),
+            chain.get("table").and_then(|v| v.as_str()),
+            chain.get("name").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        if family == "inet" && table == "keystone" {
+            continue;
+        }
+        if matches!(
+            chain.get("hook").and_then(|v| v.as_str()),
+            Some("input" | "forward")
+        ) && chain.get("policy").and_then(|v| v.as_str()) == Some("drop")
+        {
+            conflicts.push(format!("{family} {table}/{name}"));
+        }
+    }
+    conflicts
+}
+
+pub(crate) fn foreign_drop_chains() -> Result<Vec<String>> {
+    let output = std::process::Command::new("nft")
+        .args(["-j", "list", "ruleset"])
+        .output()
+        .context("Unable to inspect nftables ruleset for conflicting chains")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Unable to inspect nftables ruleset: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ruleset: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    Ok(foreign_drop_chains_in_json(&ruleset))
+}
+
 /// Apply a firewall config to nftables.
 async fn apply_config_to_nftables(config: &FirewallConfig) -> Result<()> {
+    let conflicts = foreign_drop_chains()?;
+    anyhow::ensure!(
+        conflicts.is_empty(),
+        "Conflicting nftables base chains with drop policies: {}. Disable the other firewall manager and remove its obsolete rules before applying Keystone's firewall",
+        conflicts.join(", ")
+    );
+
     // nftables transactions cannot conditionally delete a table, so remove the
     // two Keystone-owned tables before loading the replacement JSON batch.
     cleanup_existing_tables().await?;
@@ -455,6 +520,25 @@ async fn cleanup_existing_tables() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod conflict_tests {
+    use super::*;
+
+    #[test]
+    fn detects_foreign_drop_chains_without_flagging_keystone() {
+        let sample = serde_json::json!({"nftables": [
+            {"chain": {"family": "inet", "table": "filter", "name": "input", "hook": "input", "policy": "drop"}},
+            {"chain": {"family": "inet", "table": "filter", "name": "forward", "hook": "forward", "policy": "drop"}},
+            {"chain": {"family": "inet", "table": "keystone", "name": "input", "hook": "input", "policy": "drop"}},
+            {"chain": {"family": "inet", "table": "other", "name": "output", "hook": "output", "policy": "drop"}}
+        ]});
+        assert_eq!(
+            foreign_drop_chains_in_json(&sample),
+            vec!["inet filter/input", "inet filter/forward"]
+        );
+    }
 }
 
 /// Get current config as nftables JSON string (for preview)

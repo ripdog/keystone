@@ -593,6 +593,9 @@ EOF
     # Enable services
     arch-chroot "$WORKDIR/rootfs" systemctl enable NetworkManager
     arch-chroot "$WORKDIR/rootfs" systemctl enable sshd
+    # Keystone owns nftables; the distro service can load an independent
+    # default-drop 'inet filter' table and silently block DHCP/forwarding.
+    arch-chroot "$WORKDIR/rootfs" systemctl mask nftables.service
     
     # Generate locale
     arch-chroot "$WORKDIR/rootfs" locale-gen

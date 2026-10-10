@@ -1,6 +1,6 @@
 //! Interfaces management page
 
-use keystone_core::{InterfaceRole, ManagedInterface, SystemState};
+use keystone_core::{Interface, InterfaceRole, ManagedInterface, SystemState};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
@@ -11,9 +11,11 @@ use crate::api;
 #[component]
 pub fn InterfacesPage(
     auth_token: ReadSignal<Option<String>>,
-    state: ReadSignal<SystemState>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    // Runtime interface discovery is owned by this page, not the Dashboard.
+    // Direct navigation to /interfaces must not depend on visiting / first.
+    let (state, set_state) = signal(SystemState::default());
     // Managed interfaces from the database
     let (managed_interfaces, set_managed_interfaces) = signal::<Vec<ManagedInterface>>(vec![]);
     // Local edits (interface name -> Option<role>, None means not managed)
@@ -25,26 +27,37 @@ pub fn InterfacesPage(
     let (error, set_error) = signal::<Option<String>>(None);
     let (success, set_success) = signal::<Option<String>>(None);
 
-    // Load managed interfaces on mount
-    {
+    // Load both discovered hardware and persisted management configuration.
+    // The separate /state endpoint supplies physical interfaces that are not
+    // yet managed; /managed-interfaces contains only configured interfaces.
+    Effect::new(move || {
+        let Some(token) = auth_token.get() else {
+            set_loading.set(false);
+            return;
+        };
+        set_loading.set(true);
         spawn_local(async move {
-            if let Some(token) = auth_token.get() {
-                match api::fetch_managed_interfaces(&token).await {
-                    Ok(interfaces) => {
-                        set_managed_interfaces.set(interfaces);
-                    }
-                    Err(e) => {
-                        if e == "Unauthorized" {
-                            on_unauthorized.run(());
-                        } else {
-                            set_error.set(Some(e));
-                        }
+            let discovered = api::fetch_system_state(&token).await;
+            let managed = api::fetch_managed_interfaces(&token).await;
+            match (discovered, managed) {
+                (Ok(discovered), Ok(managed)) => {
+                    set_state.set(SystemState {
+                        interfaces: merge_interfaces(discovered.interfaces, &managed),
+                    });
+                    set_managed_interfaces.set(managed);
+                    set_error.set(None);
+                }
+                (Err(e), _) | (_, Err(e)) => {
+                    if e == "Unauthorized" {
+                        on_unauthorized.run(());
+                    } else {
+                        set_error.set(Some(format!("Failed to load interfaces: {e}")));
                     }
                 }
             }
             set_loading.set(false);
         });
-    }
+    });
 
     // Get current managed state for an interface (checking pending changes first)
     let get_interface_role = move |name: &str| -> Option<InterfaceRole> {
@@ -297,6 +310,11 @@ pub fn InterfacesPage(
                                 }
                             }
                         />
+                        <Show when=move || state.get().interfaces.is_empty()>
+                            <p class="text-yellow-300 text-sm p-2">
+                                "No interfaces were returned by the system. Check the system status and interface discovery service."
+                            </p>
+                        </Show>
                     </div>
                 </div>
 
@@ -341,5 +359,97 @@ pub fn InterfacesPage(
                 </div>
             </Show>
         </div>
+    }
+}
+
+/// Include configured interfaces even when runtime discovery omits them (for
+/// example, an interface without carrier or an unavailable kernel query).
+/// The live address list and link state win when an interface is discovered.
+fn merge_interfaces(
+    mut discovered: Vec<Interface>,
+    managed: &[ManagedInterface],
+) -> Vec<Interface> {
+    for managed_iface in managed.iter().filter(|iface| iface.enabled) {
+        if let Some(existing) = discovered
+            .iter_mut()
+            .find(|iface| iface.name == managed_iface.name)
+        {
+            existing.role = managed_iface.role;
+        } else {
+            let address = managed_iface.static_ip.clone();
+            let ipv4_addresses = address
+                .iter()
+                .filter(|addr| !addr.contains(':'))
+                .cloned()
+                .collect();
+            let ipv6_addresses = address
+                .iter()
+                .filter(|addr| addr.contains(':'))
+                .cloned()
+                .collect();
+            discovered.push(Interface {
+                name: managed_iface.name.clone(),
+                address,
+                ipv4_addresses,
+                ipv6_addresses,
+                dhcp_enabled: managed_iface.static_ip.is_none(),
+                role: managed_iface.role,
+                enabled: false,
+            });
+        }
+    }
+    discovered.sort_by(|left, right| left.name.cmp(&right.name));
+    discovered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_interfaces_are_shown_even_without_dashboard_or_runtime_state() {
+        let managed = [
+            ManagedInterface {
+                name: "enp2s0".into(),
+                role: InterfaceRole::LAN,
+                static_ip: Some("192.168.1.1/24".into()),
+                enabled: true,
+            },
+            ManagedInterface {
+                name: "enp3s0".into(),
+                role: InterfaceRole::WAN,
+                static_ip: None,
+                enabled: true,
+            },
+        ];
+        let found = merge_interfaces(vec![], &managed);
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].address.as_deref(), Some("192.168.1.1/24"));
+        assert_eq!(found[1].role, InterfaceRole::WAN);
+        assert!(found[1].dhcp_enabled);
+    }
+
+    #[test]
+    fn discovered_live_addresses_are_preserved_and_managed_role_wins() {
+        let discovered = vec![Interface {
+            name: "enp3s0".into(),
+            address: Some("103.187.6.32/32".into()),
+            ipv4_addresses: vec!["103.187.6.32/32".into()],
+            ipv6_addresses: vec!["fe80::1/64".into()],
+            dhcp_enabled: true,
+            role: InterfaceRole::LAN,
+            enabled: true,
+        }];
+        let managed = [ManagedInterface {
+            name: "enp3s0".into(),
+            role: InterfaceRole::WAN,
+            static_ip: None,
+            enabled: true,
+        }];
+        let merged = merge_interfaces(discovered, &managed);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].role, InterfaceRole::WAN);
+        assert_eq!(merged[0].ipv6_addresses, vec!["fe80::1/64"]);
+        assert_eq!(merged[0].address.as_deref(), Some("103.187.6.32/32"));
     }
 }

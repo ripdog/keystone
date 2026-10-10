@@ -115,7 +115,6 @@ pub fn App() -> impl IntoView {
                                 view=move || view! {
                                     <InterfacesPage
                                         auth_token=auth_token
-                                        state=state
                                         on_unauthorized=on_unauthorized
                                     />
                                 }

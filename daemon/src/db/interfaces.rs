@@ -20,66 +20,76 @@ impl<'a> InterfacesDb<'a> {
     }
 
     // ========================================================================
-    // Managed Interfaces (legacy)
+    // Managed Interfaces (projection of authoritative networkd configurations)
     // ========================================================================
 
-    /// Get all managed interfaces
+    /// The wizard and networkd use interface_config; never read the old
+    /// managed_interfaces table here, or the UI disagrees with applied settings.
     pub async fn get_managed_interfaces(&self) -> Result<Vec<ManagedInterface>> {
-        let rows = sqlx::query_as::<_, (String, String, Option<String>, bool)>(
-            "SELECT name, role, static_ip, enabled FROM managed_interfaces ORDER BY name",
-        )
-        .fetch_all(self.pool)
-        .await
-        .context("Failed to fetch managed interfaces")?;
-
-        let interfaces = rows
+        Ok(self
+            .get_interface_configs()
+            .await?
             .into_iter()
-            .filter_map(|(name, role, static_ip, enabled)| {
-                let role: InterfaceRole = role.parse().ok()?;
-                Some(ManagedInterface {
-                    name,
-                    role,
-                    static_ip,
-                    enabled,
-                })
+            .filter(|config| config.enabled)
+            .map(|config| ManagedInterface {
+                name: config.name,
+                role: config.role,
+                static_ip: config.addresses.iter().find_map(|addr| {
+                    addr.address.parse::<ipnet::IpNet>().ok().and_then(|ip| {
+                        if ip.addr().is_ipv4() {
+                            Some(addr.address.clone())
+                        } else {
+                            None
+                        }
+                    })
+                }),
+                enabled: true,
             })
-            .collect();
-
-        Ok(interfaces)
+            .collect())
     }
 
-    /// Save managed interfaces (replaces all existing)
+    /// Enable/disable managed interfaces and update roles without clobbering
+    /// their existing DHCP, IPv6-PD, address or forwarding configuration.
     pub async fn save_managed_interfaces(&self, interfaces: &[ManagedInterface]) -> Result<()> {
         keystone_core::validation::single_line_fields(&interfaces).map_err(anyhow::Error::msg)?;
+        let mut names = std::collections::HashSet::new();
         for interface in interfaces {
             keystone_core::validation::interface_name(&interface.name)
                 .map_err(anyhow::Error::msg)?;
+            anyhow::ensure!(
+                names.insert(&interface.name),
+                "Duplicate managed interface: {}",
+                interface.name
+            );
         }
+
         let mut tx = self.pool.begin().await?;
-
-        // Clear existing
-        sqlx::query("DELETE FROM managed_interfaces")
+        // Keep disabled configs (and their settings) for later re-enabling.
+        sqlx::query("UPDATE interface_config SET enabled = 0 WHERE enabled = 1")
             .execute(&mut *tx)
-            .await
-            .context("Failed to clear managed interfaces")?;
+            .await?;
 
-        // Insert new
-        for iface in interfaces {
+        for iface in interfaces.iter().filter(|i| i.enabled) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs() as i64;
             sqlx::query(
-                "INSERT INTO managed_interfaces (name, role, static_ip, enabled) VALUES (?, ?, ?, ?)",
+                "INSERT INTO interface_config (interface_name, role, enabled, dhcp_mode, created_at, updated_at)
+                 VALUES (?, ?, 1, ?, ?, ?)
+                 ON CONFLICT(interface_name) DO UPDATE SET role = excluded.role, enabled = 1, updated_at = excluded.updated_at",
             )
             .bind(&iface.name)
             .bind(iface.role.to_string())
-            .bind(&iface.static_ip)
-            .bind(iface.enabled)
+            .bind(if iface.static_ip.is_some() { "no" } else if iface.role == InterfaceRole::WAN { "ipv4" } else { "no" })
+            .bind(now)
+            .bind(now)
             .execute(&mut *tx)
-            .await
-            .context("Failed to insert managed interface")?;
+            .await?;
         }
-
-        tx.commit().await.context("Failed to commit transaction")?;
-
-        info!("Saved {} managed interfaces", interfaces.len());
+        tx.commit()
+            .await
+            .context("Failed to save managed interfaces")?;
+        info!("Updated management for {} interfaces", interfaces.len());
         Ok(())
     }
 
@@ -279,6 +289,15 @@ impl<'a> InterfacesDb<'a> {
         keystone_core::validation::interface_name(&config.name).map_err(anyhow::Error::msg)?;
         for name in &config.vlans {
             keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
+        }
+        if let Some(dhcpv6) = &config.dhcpv6_client {
+            anyhow::ensure!(
+                matches!(
+                    dhcpv6.without_ra.as_str(),
+                    "no" | "solicit" | "information-request"
+                ),
+                "Unsupported DHCPv6 WithoutRA mode"
+            );
         }
         let mut tx = self.pool.begin().await?;
         let now = std::time::SystemTime::now()
@@ -764,5 +783,51 @@ impl<'a> InterfacesDb<'a> {
         .context("Failed to fetch VLAN names")?;
 
         Ok(rows.into_iter().map(|(name,)| name).collect())
+    }
+}
+
+#[cfg(test)]
+mod managed_interface_tests {
+    use super::*;
+    use crate::db::Database;
+    use keystone_core::{Dhcpv4ClientIdentifier, Dhcpv6ClientConfig};
+
+    #[tokio::test]
+    async fn managed_interfaces_reflect_authoritative_configs_without_overwriting_them() {
+        let db = Database::new_in_memory().await.unwrap();
+        let wan = InterfaceConfig {
+            name: "wan0".into(),
+            role: InterfaceRole::WAN,
+            dhcp_mode: DhcpMode::Yes,
+            dhcpv4_client: Some(Dhcpv4ClientConfig {
+                client_identifier: Some(Dhcpv4ClientIdentifier::Mac),
+                ..Default::default()
+            }),
+            dhcpv6_client: Some(Dhcpv6ClientConfig {
+                without_ra: "solicit".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        db.save_interface_config(&wan).await.unwrap();
+
+        let managed = db.get_managed_interfaces().await.unwrap();
+        assert_eq!(managed.len(), 1);
+        assert_eq!(managed[0].name, "wan0");
+        assert_eq!(managed[0].role, InterfaceRole::WAN);
+        db.save_managed_interfaces(&managed).await.unwrap();
+        let saved = db.get_interface_config("wan0").await.unwrap().unwrap();
+        assert_eq!(saved.dhcp_mode, DhcpMode::Yes);
+        assert_eq!(
+            saved.dhcpv4_client.unwrap().client_identifier,
+            Some(Dhcpv4ClientIdentifier::Mac)
+        );
+        assert_eq!(saved.dhcpv6_client.unwrap().without_ra, "solicit");
+
+        db.save_managed_interfaces(&[]).await.unwrap();
+        assert!(db.get_managed_interfaces().await.unwrap().is_empty());
+        let disabled = db.get_interface_config("wan0").await.unwrap().unwrap();
+        assert!(!disabled.enabled);
+        assert!(disabled.dhcpv6_client.is_some());
     }
 }

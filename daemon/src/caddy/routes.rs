@@ -133,7 +133,7 @@ async fn validate_caddy(
         })),
         Err(e) => Ok(Json(CaddyValidateResponse {
             valid: false,
-            message: format!("Validation error: {}", e),
+            message: format!("Validation error: {e:#}"),
             output: String::new(),
         })),
     }
@@ -164,7 +164,7 @@ async fn apply_caddy(
         })),
         Err(e) => Ok(Json(CaddyApplyResponse {
             success: false,
-            message: format!("Failed to apply Caddy configuration: {}", e),
+            message: format!("Failed to apply Caddy configuration: {e:#}"),
         })),
     }
 }

@@ -618,6 +618,17 @@ mod tests {
         assert!(parse_interface_global_ipv4("inet 169.254.41.250/16 scope link enp2s0").is_none());
     }
 
+    // Run with the installed daemon unit's hardening options (see systemd-run
+    // integration smoke check). This catches process-launch failures that a
+    // normal unconfined root test would miss.
+    #[test]
+    #[ignore = "requires the caddy system user and a sandboxed root process"]
+    fn caddy_validator_runs_with_service_identity() {
+        let content = "http://127.0.0.1:18080 {\n    respond \"ok\"\n    log {\n        output file /var/log/caddy/keystone-access.log\n    }\n}\n";
+        let (valid, message) = validate_caddyfile(content).unwrap();
+        assert!(valid, "{message}");
+    }
+
     #[test]
     fn packaged_sandbox_supports_caddy_validation_and_configuration() {
         let unit = include_str!("../../../packaging/arch/keystone-daemon.service");
@@ -644,12 +655,19 @@ mod tests {
                         .any(|d| d == "caddy/Caddyfile.d")
                 })
         }));
-        let caps = unit
-            .lines()
-            .find_map(|line| line.strip_prefix("CapabilityBoundingSet="))
-            .unwrap();
-        for cap in ["CAP_SETUID", "CAP_SETGID"] {
-            assert!(caps.split_ascii_whitespace().any(|c| c == cap));
+        // Rust's CommandExt::gid/uid needs these in both sets. Bounding
+        // without ambient capabilities fails at setuid() with EPERM.
+        for directive in ["CapabilityBoundingSet=", "AmbientCapabilities="] {
+            let caps = unit
+                .lines()
+                .find_map(|line| line.strip_prefix(directive))
+                .unwrap();
+            for cap in ["CAP_SETUID", "CAP_SETGID"] {
+                assert!(
+                    caps.split_ascii_whitespace().any(|c| c == cap),
+                    "{directive} missing {cap}"
+                );
+            }
         }
     }
 

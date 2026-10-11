@@ -31,7 +31,9 @@ ConfigurationDirectoryMode=0755
 # Restrict capabilities
 # CAP_SETUID/SETGID let Caddy validation drop to the caddy service identity.
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_SETUID CAP_SETGID
-AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN
+# Both capabilities must also be ambient: subprocesses otherwise lose
+# CAP_SETUID during Caddy's setgid/setgroups/setuid sequence.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_SETUID CAP_SETGID
 
 # Filesystem restrictions
 ProtectHome=yes

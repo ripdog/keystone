@@ -556,6 +556,25 @@ pub fn routes() -> Router<Arc<AppState>> {
 mod tests {
     use super::*;
     #[test]
+    fn packaged_daemon_can_write_ssh_drop_in() {
+        // ProtectSystem=strict makes /etc read-only. Keep the SSH exception
+        // and the directory provisioning together to avoid an EROFS at apply.
+        let unit = include_str!("../../packaging/arch/keystone-daemon.service");
+        assert!(unit.lines().any(|line| {
+            line.strip_prefix("ReadWritePaths=").is_some_and(|paths| {
+                paths
+                    .split_whitespace()
+                    .any(|path| path == "/etc/ssh/sshd_config.d")
+            })
+        }));
+        let tmpfiles = include_str!("../../packaging/arch/tmpfiles.conf");
+        assert!(tmpfiles.lines().any(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next() == Some("d") && fields.next() == Some("/etc/ssh/sshd_config.d")
+        }));
+    }
+
+    #[test]
     fn defaults_are_lan_only_and_root_is_not_configurable() {
         let config = SshConfig::default();
         assert!(!config.wan_access);

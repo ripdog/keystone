@@ -37,6 +37,7 @@ ProtectHome=yes
 ProtectSystem=strict
 # Keystone generates these files; the rest of /etc remains read-only.
 ReadWritePaths=/etc/systemd/network /etc/systemd/networkd.conf.d /etc/sysctl.d /etc/nftables.conf /var/lib/keystone /run/keystone
+ReadWritePaths=/etc/ssh/sshd_config.d
 ReadWritePaths=-/etc/dnsmasq.conf -/var/lib/dnsmasq -/etc/caddy -/var/log/caddy
 PrivateTmp=yes
 

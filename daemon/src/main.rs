@@ -603,8 +603,10 @@ fn read_dashboard(
     gateways: Vec<keystone_core::GatewayStatus>,
     traffic: Vec<keystone_core::InterfaceTraffic>,
 ) -> anyhow::Result<DashboardResponse> {
-    let state = read_system_state(configs).unwrap_or_default();
-    let interface_counters = read_interface_counters()?;
+    let mut state = read_system_state(configs).unwrap_or_default();
+    let mut interface_counters = read_interface_counters()?;
+    let mut traffic = traffic;
+    restrict_dashboard_to_managed(configs, &mut state, &mut interface_counters, &mut traffic);
 
     let timestamp_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -618,6 +620,36 @@ fn read_dashboard(
         traffic,
         timestamp_ms,
     })
+}
+
+/// The system discovery endpoint deliberately includes unmanaged hardware so it
+/// can be configured. Dashboard visibility, unlike discovery, must follow only
+/// the enabled, persisted networkd configurations (not inferred fallback roles).
+fn restrict_dashboard_to_managed(
+    configs: &[keystone_core::InterfaceConfig],
+    state: &mut SystemState,
+    counters: &mut Vec<InterfaceCounters>,
+    traffic: &mut Vec<keystone_core::InterfaceTraffic>,
+) {
+    use std::collections::HashMap;
+
+    let roles: HashMap<&str, keystone_core::InterfaceRole> = configs
+        .iter()
+        .filter(|config| config.enabled)
+        .map(|config| (config.name.as_str(), config.role))
+        .collect();
+
+    state
+        .interfaces
+        .retain(|iface| roles.contains_key(iface.name.as_str()));
+    for iface in &mut state.interfaces {
+        iface.role = roles[iface.name.as_str()];
+    }
+    counters.retain(|counter| roles.contains_key(counter.name.as_str()));
+    traffic.retain(|entry| roles.contains_key(entry.name.as_str()));
+    for entry in traffic {
+        entry.role = roles.get(entry.name.as_str()).copied();
+    }
 }
 
 fn read_interface_counters() -> anyhow::Result<Vec<InterfaceCounters>> {
@@ -1481,5 +1513,88 @@ mod tests {
         assert!(is_blocked_before_setup("/dashboard"));
         assert!(is_blocked_before_setup("/apply-all"));
         assert!(is_blocked_before_setup("/interfaces/enp3s0/renew"));
+    }
+
+    #[test]
+    fn dashboard_excludes_unmanaged_and_disabled_interfaces() {
+        use super::restrict_dashboard_to_managed;
+        use keystone_core::{
+            Interface, InterfaceConfig, InterfaceCounters, InterfaceRole, InterfaceTraffic,
+            SystemState,
+        };
+
+        let configs = [
+            InterfaceConfig {
+                name: "enp2s0".into(),
+                role: InterfaceRole::LAN,
+                enabled: true,
+                ..Default::default()
+            },
+            InterfaceConfig {
+                name: "enp3s0".into(),
+                role: InterfaceRole::WAN,
+                enabled: true,
+                ..Default::default()
+            },
+            InterfaceConfig {
+                name: "enp4s0".into(),
+                role: InterfaceRole::LAN,
+                enabled: false,
+                ..Default::default()
+            },
+        ];
+        let names = ["wlp4s0bl", "enp2s0", "enp3s0", "enp4s0"];
+        let mut state = SystemState {
+            interfaces: names
+                .iter()
+                .map(|name| Interface {
+                    name: (*name).into(),
+                    address: None,
+                    ipv4_addresses: vec![],
+                    ipv6_addresses: vec![],
+                    dhcp_enabled: false,
+                    role: InterfaceRole::LAN,
+                    enabled: true,
+                })
+                .collect(),
+        };
+        let mut counters = names
+            .iter()
+            .map(|name| InterfaceCounters {
+                name: (*name).into(),
+                ..Default::default()
+            })
+            .collect();
+        let mut traffic = names
+            .iter()
+            .map(|name| InterfaceTraffic {
+                name: (*name).into(),
+                role: None,
+                samples: vec![],
+            })
+            .collect();
+
+        restrict_dashboard_to_managed(&configs, &mut state, &mut counters, &mut traffic);
+
+        let expected = ["enp2s0", "enp3s0"];
+        assert_eq!(
+            state
+                .interfaces
+                .iter()
+                .map(|i| i.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            counters.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(
+            traffic.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(state.interfaces[1].role, InterfaceRole::WAN);
+        assert_eq!(traffic[0].role, Some(InterfaceRole::LAN));
+        assert_eq!(traffic[1].role, Some(InterfaceRole::WAN));
     }
 }

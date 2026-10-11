@@ -2401,6 +2401,9 @@ pub struct TrafficSample {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InterfaceTraffic {
     pub name: String,
+    /// Set in dashboard responses using Keystone's configured interface role.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<InterfaceRole>,
     pub samples: Vec<TrafficSample>,
 }
 
@@ -3236,6 +3239,7 @@ mod tests {
             gateways: vec![],
             traffic: vec![InterfaceTraffic {
                 name: "eth0".into(),
+                role: Some(InterfaceRole::WAN),
                 samples: vec![TrafficSample {
                     timestamp_ms: 100,
                     rx_bytes_per_sec: 20,

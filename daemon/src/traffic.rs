@@ -74,6 +74,7 @@ impl Sampler {
             .iter()
             .map(|(name, samples)| InterfaceTraffic {
                 name: name.clone(),
+                role: None,
                 samples: samples.iter().cloned().collect(),
             })
             .collect();

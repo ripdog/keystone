@@ -138,6 +138,15 @@ pub fn App() -> impl IntoView {
                                 }
                             />
                             <Route
+                                path=path!("/firewall/:tab")
+                                view=move || view! {
+                                    <FirewallPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
                                 path=path!("/vlans")
                                 view=move || view! {
                                     <VlansPage
@@ -165,7 +174,25 @@ pub fn App() -> impl IntoView {
                                 }
                             />
                             <Route
+                                path=path!("/dnsmasq/:tab")
+                                view=move || view! {
+                                    <DnsmasqPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
                                 path=path!("/caddy")
+                                view=move || view! {
+                                    <CaddyPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
+                                path=path!("/caddy/:tab")
                                 view=move || view! {
                                     <CaddyPage
                                         auth_token=auth_token

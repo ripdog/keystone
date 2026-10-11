@@ -1,6 +1,6 @@
 //! Caddy reverse proxy configuration page
 //!
-//! Tabbed interface for:
+//! Routed sections:
 //! - Settings (enabled, server address, interface binding, HTTPS mode)
 //! - Preview (generated Caddyfile)
 //! - Status (service status, validation)
@@ -9,8 +9,9 @@ use crate::api;
 use keystone_core::{CaddyConfig, CaddyHttpsMode};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::hooks::use_location;
 
-/// Active tab in the Caddy UI
+/// Active Caddy section selected by URL
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum CaddyTab {
     #[default]
@@ -19,13 +20,45 @@ enum CaddyTab {
     Status,
 }
 
+impl CaddyTab {
+    fn from_path(path: &str) -> Self {
+        match path.rsplit('/').next().unwrap_or_default() {
+            "preview" => Self::Preview,
+            "status" => Self::Status,
+            _ => Self::Settings,
+        }
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    #[test]
+    fn selects_each_section_from_its_url() {
+        assert!(matches!(
+            CaddyTab::from_path("/caddy/settings"),
+            CaddyTab::Settings
+        ));
+        assert!(matches!(
+            CaddyTab::from_path("/caddy/preview"),
+            CaddyTab::Preview
+        ));
+        assert!(matches!(
+            CaddyTab::from_path("/caddy/status"),
+            CaddyTab::Status
+        ));
+        assert!(matches!(CaddyTab::from_path("/caddy"), CaddyTab::Settings));
+    }
+}
+
 #[component]
 pub fn CaddyPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let token = Signal::derive(move || auth_token.get().unwrap_or_default());
-    let active_tab = RwSignal::new(CaddyTab::Settings);
+    let location = use_location();
 
     // Global state
     let config = RwSignal::new(CaddyConfig::default());
@@ -66,14 +99,6 @@ pub fn CaddyPage(
         });
     });
 
-    let tab_class = move |tab: CaddyTab| {
-        if active_tab.get() == tab {
-            "px-4 py-2 text-blue-300 border-b-2 border-blue-400 font-medium"
-        } else {
-            "px-4 py-2 text-gray-400 hover:text-gray-200 border-b-2 border-transparent"
-        }
-    };
-
     view! {
         <div class="space-y-6">
             <div class="flex justify-between items-start">
@@ -105,33 +130,9 @@ pub fn CaddyPage(
             </Show>
 
             <Show when=move || !loading.get()>
-                // Tab bar
-                <div class="border-b border-gray-700">
-                    <nav class="flex -mb-px">
-                        <button
-                            class=move || tab_class(CaddyTab::Settings)
-                            on:click=move |_| active_tab.set(CaddyTab::Settings)
-                        >
-                            "Settings"
-                        </button>
-                        <button
-                            class=move || tab_class(CaddyTab::Preview)
-                            on:click=move |_| active_tab.set(CaddyTab::Preview)
-                        >
-                            "Preview"
-                        </button>
-                        <button
-                            class=move || tab_class(CaddyTab::Status)
-                            on:click=move |_| active_tab.set(CaddyTab::Status)
-                        >
-                            "Status"
-                        </button>
-                    </nav>
-                </div>
-
                 // Tab content
                 <div class="bg-gray-800 rounded-lg shadow-lg p-6">
-                    {move || match active_tab.get() {
+                    {move || match CaddyTab::from_path(&location.pathname.get()) {
                         CaddyTab::Settings => view! {
                             <SettingsTab
                                 token=token

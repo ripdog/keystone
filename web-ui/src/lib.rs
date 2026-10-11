@@ -23,6 +23,8 @@ pub fn main() {
         && let Some(body) = document.body()
     {
         body.set_inner_html("");
+        // The static error fallback centers its content; the SPA uses a full-width shell.
+        body.set_class_name("bg-slate-950 text-slate-100 min-h-screen");
     }
 
     leptos::mount::mount_to_body(App);

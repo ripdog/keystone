@@ -1,13 +1,13 @@
 //! Dnsmasq DNS & DHCP configuration page
 //!
-//! Tabbed interface for:
+//! Routed sections:
 //! - Overview (status, quick stats)
 //! - DNS Settings (upstream mode, cache, local domain)
 //! - DHCP Ranges (per-interface DHCP pools)
 //! - Static Leases (MAC-to-IP reservations)
 //! - Active Leases (current DHCP leases from lease file)
 //! - DHCP Options (custom DHCP options)
-//! - DNS Records (host records and CNAMEs)
+//! - Host Records and CNAME Records (separate pages)
 //! - Address Overrides (domain blocking/redirects)
 //! - Preview (generated config file)
 
@@ -19,8 +19,9 @@ use keystone_core::{
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::hooks::use_location;
 
-/// Active tab in the dnsmasq UI
+/// Active DNS & DHCP section selected by URL
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum DnsmasqTab {
     #[default]
@@ -30,9 +31,84 @@ enum DnsmasqTab {
     StaticLeases,
     ActiveLeases,
     DhcpOptions,
-    DnsRecords,
+    HostRecords,
+    CnameRecords,
     AddressOverrides,
     Preview,
+}
+
+impl DnsmasqTab {
+    fn from_path(path: &str) -> Self {
+        match path.rsplit('/').next().unwrap_or_default() {
+            "dns-settings" => Self::DnsSettings,
+            "dhcp-ranges" => Self::DhcpRanges,
+            "static-leases" => Self::StaticLeases,
+            "active-leases" => Self::ActiveLeases,
+            "dhcp-options" => Self::DhcpOptions,
+            "host-records" | "dns-records" => Self::HostRecords,
+            "cname-records" => Self::CnameRecords,
+            "address-overrides" => Self::AddressOverrides,
+            "preview" => Self::Preview,
+            _ => Self::Overview,
+        }
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    #[test]
+    fn selects_each_section_from_its_url() {
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/overview"),
+            DnsmasqTab::Overview
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/dns-settings"),
+            DnsmasqTab::DnsSettings
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/dhcp-ranges"),
+            DnsmasqTab::DhcpRanges
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/static-leases"),
+            DnsmasqTab::StaticLeases
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/active-leases"),
+            DnsmasqTab::ActiveLeases
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/dhcp-options"),
+            DnsmasqTab::DhcpOptions
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/dns-records"),
+            DnsmasqTab::HostRecords
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/host-records"),
+            DnsmasqTab::HostRecords
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/cname-records"),
+            DnsmasqTab::CnameRecords
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/address-overrides"),
+            DnsmasqTab::AddressOverrides
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq/preview"),
+            DnsmasqTab::Preview
+        ));
+        assert!(matches!(
+            DnsmasqTab::from_path("/dnsmasq"),
+            DnsmasqTab::Overview
+        ));
+    }
 }
 
 #[component]
@@ -41,7 +117,7 @@ pub fn DnsmasqPage(
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let token = Signal::derive(move || auth_token.get().unwrap_or_default());
-    let active_tab = RwSignal::new(DnsmasqTab::Overview);
+    let location = use_location();
 
     // Global state
     let config = RwSignal::new(DnsmasqConfig::default());
@@ -108,14 +184,6 @@ pub fn DnsmasqPage(
         });
     });
 
-    let tab_class = move |tab: DnsmasqTab| {
-        if active_tab.get() == tab {
-            "px-4 py-2 text-blue-300 border-b-2 border-blue-400 font-medium"
-        } else {
-            "px-4 py-2 text-gray-400 hover:text-gray-200 border-b-2 border-transparent"
-        }
-    };
-
     view! {
         <div class="space-y-6">
             <div class="flex justify-between items-start">
@@ -147,69 +215,9 @@ pub fn DnsmasqPage(
             </Show>
 
             <Show when=move || !loading.get()>
-                // Tab bar
-                <div class="border-b border-gray-700">
-                    <nav class="flex -mb-px flex-wrap">
-                        <button
-                            class=move || tab_class(DnsmasqTab::Overview)
-                            on:click=move |_| active_tab.set(DnsmasqTab::Overview)
-                        >
-                            "Overview"
-                        </button>
-                        <button
-                            class=move || tab_class(DnsmasqTab::DnsSettings)
-                            on:click=move |_| active_tab.set(DnsmasqTab::DnsSettings)
-                        >
-                            "DNS Settings"
-                        </button>
-                        <button
-                            class=move || tab_class(DnsmasqTab::DhcpRanges)
-                            on:click=move |_| active_tab.set(DnsmasqTab::DhcpRanges)
-                        >
-                            "DHCP Ranges"
-                        </button>
-                        <button
-                            class=move || tab_class(DnsmasqTab::StaticLeases)
-                            on:click=move |_| active_tab.set(DnsmasqTab::StaticLeases)
-                        >
-                            "Static Leases"
-                        </button>
-                        <button
-                            class=move || tab_class(DnsmasqTab::ActiveLeases)
-                            on:click=move |_| active_tab.set(DnsmasqTab::ActiveLeases)
-                        >
-                            "Active Leases"
-                        </button>
-                        <button
-                            class=move || tab_class(DnsmasqTab::DhcpOptions)
-                            on:click=move |_| active_tab.set(DnsmasqTab::DhcpOptions)
-                        >
-                            "DHCP Options"
-                        </button>
-                        <button
-                            class=move || tab_class(DnsmasqTab::DnsRecords)
-                            on:click=move |_| active_tab.set(DnsmasqTab::DnsRecords)
-                        >
-                            "DNS Records"
-                        </button>
-                        <button
-                            class=move || tab_class(DnsmasqTab::AddressOverrides)
-                            on:click=move |_| active_tab.set(DnsmasqTab::AddressOverrides)
-                        >
-                            "Address Overrides"
-                        </button>
-                        <button
-                            class=move || tab_class(DnsmasqTab::Preview)
-                            on:click=move |_| active_tab.set(DnsmasqTab::Preview)
-                        >
-                            "Preview"
-                        </button>
-                    </nav>
-                </div>
-
                 // Tab content
                 <div class="bg-gray-800 rounded-lg shadow-lg p-6">
-                    {move || match active_tab.get() {
+                    {move || match DnsmasqTab::from_path(&location.pathname.get()) {
                         DnsmasqTab::Overview => view! {
                             <OverviewTab
                                 config=config
@@ -264,10 +272,18 @@ pub fn DnsmasqPage(
                                 reload_trigger=reload_trigger
                             />
                         }.into_any(),
-                        DnsmasqTab::DnsRecords => view! {
-                            <DnsRecordsTab
+                        DnsmasqTab::HostRecords => view! {
+                            <HostRecordsSection
                                 token=token
                                 host_records=host_records
+                                success_msg=success_msg
+                                error_msg=error_msg
+                                reload_trigger=reload_trigger
+                            />
+                        }.into_any(),
+                        DnsmasqTab::CnameRecords => view! {
+                            <CnameRecordsSection
+                                token=token
                                 cname_records=cname_records
                                 success_msg=success_msg
                                 error_msg=error_msg
@@ -1768,71 +1784,6 @@ fn DhcpOptionsTab(
                         </form>
                     </div>
                 </div>
-            </Show>
-        </div>
-    }
-}
-
-// ============================================================================
-// DNS Records Tab (Host Records + CNAMEs)
-// ============================================================================
-
-#[component]
-fn DnsRecordsTab(
-    token: Signal<String>,
-    host_records: RwSignal<Vec<DnsmasqHostRecord>>,
-    cname_records: RwSignal<Vec<DnsmasqCnameRecord>>,
-    success_msg: RwSignal<Option<String>>,
-    error_msg: RwSignal<Option<String>>,
-    reload_trigger: RwSignal<u32>,
-) -> impl IntoView {
-    // Sub-tab state
-    let show_hosts = RwSignal::new(true);
-
-    view! {
-        <div class="space-y-4">
-            // Sub-tab buttons
-            <div class="flex gap-2 border-b border-gray-700 pb-2">
-                <button
-                    class=move || if show_hosts.get() {
-                        "px-4 py-2 bg-blue-600 text-white rounded-t"
-                    } else {
-                        "px-4 py-2 bg-gray-700 text-gray-300 rounded-t hover:bg-gray-600"
-                    }
-                    on:click=move |_| show_hosts.set(true)
-                >
-                    "Host Records"
-                </button>
-                <button
-                    class=move || if !show_hosts.get() {
-                        "px-4 py-2 bg-blue-600 text-white rounded-t"
-                    } else {
-                        "px-4 py-2 bg-gray-700 text-gray-300 rounded-t hover:bg-gray-600"
-                    }
-                    on:click=move |_| show_hosts.set(false)
-                >
-                    "CNAME Records"
-                </button>
-            </div>
-
-            <Show when=move || show_hosts.get()>
-                <HostRecordsSection
-                    token=token
-                    host_records=host_records
-                    success_msg=success_msg
-                    error_msg=error_msg
-                    reload_trigger=reload_trigger
-                />
-            </Show>
-
-            <Show when=move || !show_hosts.get()>
-                <CnameRecordsSection
-                    token=token
-                    cname_records=cname_records
-                    success_msg=success_msg
-                    error_msg=error_msg
-                    reload_trigger=reload_trigger
-                />
             </Show>
         </div>
     }

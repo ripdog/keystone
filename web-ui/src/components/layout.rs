@@ -1,9 +1,9 @@
 //! Main application layout with navigation
 
 use crate::api;
+use crate::components::SidebarNavigation;
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
-use leptos_router::components::A;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
@@ -158,125 +158,98 @@ pub fn AppLayout(
         });
     };
 
-    // Desktop sidebar content (extracted to avoid duplication)
-    let nav_links = move || {
-        view! {
-            <A href="/" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Dashboard"</A>
-            <A href="/interfaces" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Interfaces"</A>
-            <A href="/vlans" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"VLANs"</A>
-            <A href="/bridges" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Bridges"</A>
-            <A href="/dnsmasq" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"DNS & DHCP"</A>
-            <A href="/caddy" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Web Server"</A>
-            <A href="/networkd-preview" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Networkd Preview"</A>
-            <A href="/firewall" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Firewall"</A>
-            <A href="/ssh" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"SSH Server"</A>
-            <A href="/services" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Services"</A>
-            <A href="/settings" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Settings"</A>
-        }
-    };
+    let location = leptos_router::hooks::use_location();
+    let on_navigate = Callback::new(move |()| set_sidebar_open.set(false));
 
     view! {
-        <div class="min-h-screen bg-gray-900 text-white w-full mx-auto" style="max-width: 1000px;">
-            // Mobile header
-            <header class="lg:hidden bg-gray-800 p-4 flex justify-between items-center">
-                <div class="text-xl font-semibold text-blue-400">"Keystone"</div>
-                <button
-                    class="text-gray-300 hover:text-white"
-                    on:click=move |_| set_sidebar_open.update(|v| *v = !*v)
+        <div class="min-h-screen w-full bg-slate-950 text-slate-100">
+            // Permanent desktop navigation
+            <aside class="hidden lg:flex fixed inset-y-0 left-0 z-30 w-72 flex-col border-r border-slate-800/80 bg-[#0d1727]">
+                <div class="h-[88px] px-6 flex items-center gap-3 shrink-0 border-b border-white/5">
+                    <div class="h-10 w-10 rounded-xl bg-gradient-to-br from-sky-400 to-blue-700 flex items-center justify-center shadow-lg shadow-sky-900/30">
+                        <svg class="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M12 2 3 7v5c0 5 3.5 8 9 10 5.5-2 9-5 9-10V7l-9-5Z"/>
+                            <path d="m8 12 3 3 5-6"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="text-lg font-bold tracking-tight text-white">"Keystone"</div>
+                        <div class="text-[11px] tracking-widest uppercase text-slate-500">"Router management"</div>
+                    </div>
+                </div>
+                <div class="flex-1 min-h-0 overflow-y-auto px-4 py-6">
+                    <SidebarNavigation on_navigate=on_navigate />
+                </div>
+                <div class="p-4 border-t border-white/5 shrink-0">
+                    <div class="mb-3 flex items-center gap-2 px-3 text-xs text-slate-500">
+                        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+                        "Local administration"
+                    </div>
+                    <button type="button"
+                        class="w-full text-left px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:text-rose-300 hover:bg-rose-400/10 transition-colors"
+                        on:click=logout_click
+                    >
+                        "Sign out"
+                    </button>
+                </div>
+            </aside>
+
+            // Mobile title bar and navigation drawer
+            <header class="lg:hidden sticky top-0 z-30 bg-[#0d1727] border-b border-slate-800 px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-2.5">
+                    <span class="h-8 w-8 rounded-lg bg-gradient-to-br from-sky-400 to-blue-700 flex items-center justify-center font-bold">"K"</span>
+                    <span class="font-semibold tracking-tight">"Keystone"</span>
+                </div>
+                <button type="button" aria-label="Open navigation"
+                    class="p-2 rounded-lg text-slate-300 hover:bg-white/10"
+                    on:click=move |_| set_sidebar_open.set(true)
                 >
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 6h16M4 12h16M4 18h16"/>
                     </svg>
                 </button>
             </header>
+            <Show when=move || sidebar_open.get()>
+                <div class="fixed inset-0 z-40 bg-black/70 lg:hidden" on:click=move |_| set_sidebar_open.set(false)></div>
+                <aside class="fixed inset-y-0 left-0 z-50 w-72 max-w-[88vw] lg:hidden flex flex-col bg-[#0d1727] border-r border-slate-700 shadow-2xl">
+                    <div class="h-[72px] flex justify-between items-center px-5 border-b border-white/5">
+                        <div class="font-bold text-lg">"Keystone"</div>
+                        <button type="button" aria-label="Close navigation"
+                            class="p-2 rounded-lg text-slate-400 hover:bg-white/10"
+                            on:click=move |_| set_sidebar_open.set(false)
+                        >"✕"</button>
+                    </div>
+                    <div class="flex-1 min-h-0 overflow-y-auto px-4 py-5">
+                        <SidebarNavigation on_navigate=on_navigate />
+                    </div>
+                    <div class="shrink-0 p-4 border-t border-white/5">
+                        <button type="button" class="w-full text-left px-3 py-2 rounded-lg text-rose-300 hover:bg-rose-400/10" on:click=logout_click>"Sign out"</button>
+                    </div>
+                </aside>
+            </Show>
 
-            <div class="flex">
-                // Desktop sidebar
-                <aside class="hidden lg:block w-64 bg-gray-800 min-h-screen p-4 fixed">
-                    <div class="h-full flex flex-col">
-                        <div class="mb-6">
-                            <div class="text-xl font-semibold text-blue-400">"Keystone"</div>
-                            <div class="text-sm text-gray-400">"Router Manager"</div>
-                        </div>
-
-                        // Apply All button
-                        <div class="mb-4">
-                            <button
-                                class="w-full px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            <div class="lg:pl-72 min-w-0 w-full">
+                <div class="min-h-screen flex flex-col">
+                    // Shared workspace bar
+                    <div class="border-b border-slate-800/80 bg-[#101b2b]/80">
+                        <div class="px-5 sm:px-7 xl:px-10 2xl:px-12 py-5 flex flex-wrap items-center justify-between gap-4">
+                            <div class="min-w-0">
+                                <div class="text-[10px] uppercase tracking-[0.24em] text-slate-500 font-semibold mb-1">"Network control"</div>
+                                <div class="text-sm font-medium text-slate-200">{move || crate::components::breadcrumb(&location.pathname.get())}</div>
+                            </div>
+                            <button type="button"
+                                class="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold shadow-lg shadow-emerald-950/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                                 on:click=on_apply_all
                                 disabled=move || applying.get() || pending_session.get().is_some()
                             >
+                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d="M5 12l5 5L20 7"/>
+                                </svg>
                                 {move || if applying.get() { "Applying..." } else { "Apply All Changes" }}
                             </button>
                         </div>
-
-                        <nav class="space-y-1">
-                            {nav_links()}
-                        </nav>
-
-                        <div class="mt-auto pt-4 border-t border-gray-700">
-                            <button
-                                class="w-full text-left px-3 py-2 rounded hover:bg-red-900 text-red-400"
-                                on:click=logout_click
-                            >
-                                "Logout"
-                            </button>
-                        </div>
                     </div>
-                </aside>
-
-                // Mobile sidebar overlay
-                <Show when=move || sidebar_open.get()>
-                    <div
-                        class="fixed inset-0 bg-black/50 z-40 lg:hidden"
-                        on:click=move |_| set_sidebar_open.set(false)
-                    />
-                    <aside class="fixed left-0 top-0 w-64 h-full bg-gray-800 p-4 z-50 lg:hidden">
-                        <div class="h-full flex flex-col">
-                            <div class="mb-6">
-                                <div class="text-xl font-semibold text-blue-400">"Keystone"</div>
-                                <div class="text-sm text-gray-400">"Router Manager"</div>
-                            </div>
-
-                            // Apply All button (mobile)
-                            <div class="mb-4">
-                                <button
-                                    class="w-full px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                                    on:click=on_apply_all
-                                    disabled=move || applying.get() || pending_session.get().is_some()
-                                >
-                                    {move || if applying.get() { "Applying..." } else { "Apply All Changes" }}
-                                </button>
-                            </div>
-
-                            <nav class="space-y-1">
-                                <A href="/" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Dashboard"</A>
-                                <A href="/interfaces" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Interfaces"</A>
-                                <A href="/vlans" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"VLANs"</A>
-                                <A href="/bridges" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Bridges"</A>
-                                <A href="/dnsmasq" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"DNS & DHCP"</A>
-                                <A href="/caddy" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Web Server"</A>
-                                <A href="/networkd-preview" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Networkd Preview"</A>
-                                <A href="/firewall" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Firewall"</A>
-                                <A href="/ssh" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"SSH Server"</A>
-                                <A href="/services" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Services"</A>
-                                <A href="/settings" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Settings"</A>
-                            </nav>
-
-                            <div class="mt-auto pt-4 border-t border-gray-700">
-                                <button
-                                    class="w-full text-left px-3 py-2 rounded hover:bg-red-900 text-red-400"
-                                    on:click=logout_click
-                                >
-                                    "Logout"
-                                </button>
-                            </div>
-                        </div>
-                    </aside>
-                </Show>
-
-                // Main content area
-                <main class="flex-1 lg:ml-64 p-4 lg:p-8">
+                    <main class="flex-1 min-w-0 w-full p-5 sm:p-7 xl:p-10 2xl:p-12">
                     // Global status messages and confirmation banner
                     <div class="space-y-4 mb-4">
                         // Apply result message
@@ -340,8 +313,10 @@ pub fn AppLayout(
                         }}
                     </div>
 
-                    {children()}
-                </main>
+
+                        {children()}
+                    </main>
+                </div>
             </div>
         </div>
     }

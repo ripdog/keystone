@@ -1,6 +1,6 @@
 //! Firewall configuration page
 //!
-//! Zone-based firewall UI with tabs for:
+//! Zone-based firewall section routes:
 //! - Zones (define interface groups with default policies)
 //! - Zone Forwards (zone-to-zone forwarding policies)
 //! - Port Forwards (DNAT rules)
@@ -15,6 +15,7 @@ use keystone_core::{
     RuleProtocol, ZoneForwardPolicy,
 };
 use leptos::prelude::*;
+use leptos_router::hooks::use_location;
 use wasm_bindgen::prelude::*;
 
 // JS binding to get current time
@@ -24,7 +25,7 @@ extern "C" {
     fn now() -> f64;
 }
 
-/// Active tab in the firewall UI
+/// Active firewall section selected by URL
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum FirewallTab {
     #[default]
@@ -37,6 +38,61 @@ enum FirewallTab {
     Preview,
 }
 
+impl FirewallTab {
+    fn from_path(path: &str) -> Self {
+        match path.rsplit('/').next().unwrap_or_default() {
+            "zone-forwards" => Self::ZoneForwards,
+            "port-forwards" => Self::PortForwards,
+            "input-rules" => Self::InputRules,
+            "forward-rules" => Self::ForwardRules,
+            "settings" => Self::Settings,
+            "preview" => Self::Preview,
+            _ => Self::Zones,
+        }
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+
+    #[test]
+    fn selects_each_section_from_its_url() {
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/zones"),
+            FirewallTab::Zones
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/zone-forwards"),
+            FirewallTab::ZoneForwards
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/port-forwards"),
+            FirewallTab::PortForwards
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/input-rules"),
+            FirewallTab::InputRules
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/forward-rules"),
+            FirewallTab::ForwardRules
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/settings"),
+            FirewallTab::Settings
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/preview"),
+            FirewallTab::Preview
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall"),
+            FirewallTab::Zones
+        ));
+    }
+}
+
 #[component]
 pub fn FirewallPage(
     auth_token: ReadSignal<Option<String>>,
@@ -45,7 +101,7 @@ pub fn FirewallPage(
     // Get the token as a derived signal that returns empty string if not set
     let token = Signal::derive(move || auth_token.get().unwrap_or_default());
 
-    let active_tab = RwSignal::new(FirewallTab::Zones);
+    let location = use_location();
 
     // Status message for apply/confirm workflow
     let status_message = RwSignal::new(String::new());
@@ -54,15 +110,6 @@ pub fn FirewallPage(
 
     // Trigger for reloading data
     let reload_trigger = RwSignal::new(0);
-
-    // Tab button helper
-    let tab_class = move |tab: FirewallTab| {
-        if active_tab.get() == tab {
-            "px-4 py-2 text-blue-300 border-b-2 border-blue-400 font-medium"
-        } else {
-            "px-4 py-2 text-gray-400 hover:text-gray-200 border-b-2 border-transparent"
-        }
-    };
 
     view! {
         <div class="space-y-6">
@@ -130,57 +177,9 @@ pub fn FirewallPage(
                 }
             }}
 
-            // Tab bar
-            <div class="border-b border-gray-700">
-                <nav class="flex -mb-px flex-wrap">
-                    <button
-                        class=move || tab_class(FirewallTab::Zones)
-                        on:click=move |_| active_tab.set(FirewallTab::Zones)
-                    >
-                        "Zones"
-                    </button>
-                    <button
-                        class=move || tab_class(FirewallTab::ZoneForwards)
-                        on:click=move |_| active_tab.set(FirewallTab::ZoneForwards)
-                    >
-                        "Zone Forwards"
-                    </button>
-                    <button
-                        class=move || tab_class(FirewallTab::PortForwards)
-                        on:click=move |_| active_tab.set(FirewallTab::PortForwards)
-                    >
-                        "Port Forwards"
-                    </button>
-                    <button
-                        class=move || tab_class(FirewallTab::InputRules)
-                        on:click=move |_| active_tab.set(FirewallTab::InputRules)
-                    >
-                        "Input Rules"
-                    </button>
-                    <button
-                        class=move || tab_class(FirewallTab::ForwardRules)
-                        on:click=move |_| active_tab.set(FirewallTab::ForwardRules)
-                    >
-                        "Forward Rules"
-                    </button>
-                    <button
-                        class=move || tab_class(FirewallTab::Settings)
-                        on:click=move |_| active_tab.set(FirewallTab::Settings)
-                    >
-                        "Settings"
-                    </button>
-                    <button
-                        class=move || tab_class(FirewallTab::Preview)
-                        on:click=move |_| active_tab.set(FirewallTab::Preview)
-                    >
-                        "Preview"
-                    </button>
-                </nav>
-            </div>
-
             // Tab content
             <div class="bg-gray-800 rounded-lg shadow-lg p-6">
-                {move || match active_tab.get() {
+                {move || match FirewallTab::from_path(&location.pathname.get()) {
                     FirewallTab::Zones => view! { <ZonesTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
                     FirewallTab::ZoneForwards => view! { <ZoneForwardsTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
                     FirewallTab::PortForwards => view! { <SimpleForwardsTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),

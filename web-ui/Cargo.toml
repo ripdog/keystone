@@ -23,6 +23,7 @@ http-body-util = { version = "0.1", optional = true }
 leptos.workspace = true
 leptos_meta.workspace = true
 leptos_router.workspace = true
+forge-charts = "0.3.7"
 
 # Serialization
 serde.workspace = true

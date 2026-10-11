@@ -70,7 +70,7 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
         )
         .route(
             "/firewall/simple-forwards/{id}",
-            delete(super::simple::remove),
+            delete(super::simple::remove).put(super::simple::update),
         )
         .route("/firewall/lan-devices", get(super::simple::devices))
         // Legacy DNAT-only endpoints (advanced clients)

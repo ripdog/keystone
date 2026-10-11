@@ -2035,17 +2035,22 @@ pub struct LanDevicesResponse {
     pub devices: Vec<LanDevice>,
 }
 
-/// One effective WAN exposure, derived from firewall allow rules (and DNAT for IPv4).
+/// One logical WAN exposure. Both families may belong to the same forward.
+/// The underlying firewall rule IDs remain the source of truth.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SimplePortForward {
+    /// ID to use when editing or deleting this logical forward.
     pub rule_id: i64,
-    pub nat_id: Option<i64>,
+    pub ipv4_rule_id: Option<i64>,
+    pub ipv6_rule_id: Option<i64>,
     pub name: String,
+    pub description: Option<String>,
     pub protocol: RuleProtocol,
     pub external_port: u16,
-    pub destination: String,
     pub destination_port: u16,
-    /// Optional source CIDR restriction from the matching firewall/NAT rules.
+    pub ipv4: Option<String>,
+    pub ipv6: Option<String>,
+    pub source_zone: Option<String>,
     pub source_ip: Option<String>,
     pub enabled: bool,
 }
@@ -2055,7 +2060,7 @@ pub struct SimplePortForwardsResponse {
     pub forwards: Vec<SimplePortForward>,
 }
 
-/// Create one IPv4 and/or IPv6 exposure, for TCP and/or UDP.
+/// Create or replace a logical dual-stack exposure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSimplePortForwardRequest {
     pub tcp: bool,
@@ -2064,6 +2069,8 @@ pub struct CreateSimplePortForwardRequest {
     pub ipv6: Option<String>,
     pub port: u16,
     pub destination_port: Option<u16>,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

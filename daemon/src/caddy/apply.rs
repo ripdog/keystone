@@ -5,8 +5,9 @@ use keystone_core::{CaddyConfig, CaddyHttpsMode};
 use sqlx::SqlitePool;
 use std::fs;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tracing::{info, warn};
 
 use super::db::{load_caddy_config, update_validation_status};
@@ -307,29 +308,33 @@ pub fn ensure_caddy_import() -> Result<()> {
     Ok(())
 }
 
-/// Validate a Caddyfile using `caddy validate`
+/// Validate as the Caddy service user, with the same data/config paths as
+/// Arch's caddy.service. Validation provisions modules (including log writers
+/// and TLS storage), which must not be accessed as Keystone's restricted root.
+/// Feed the Caddyfile over stdin to avoid leaving TLS credentials on disk.
 pub fn validate_caddyfile(content: &str) -> Result<(bool, String)> {
-    // Write to a temporary file for validation
-    use std::os::unix::fs::OpenOptionsExt;
-    let temp_path = std::env::temp_dir().join(format!(
-        "keystone-caddy-validate-{}.conf",
-        uuid::Uuid::new_v4()
-    ));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temp_path)?;
-    file.write_all(content.as_bytes())?;
-    drop(file);
-
-    let output = Command::new("caddy")
-        .args(["validate", "--config"])
-        .arg(&temp_path)
-        .args(["--adapter", "caddyfile"])
-        .output();
-    let _ = fs::remove_file(&temp_path);
-    let output = output.context("Failed to execute caddy validate")?;
+    let caddy = nix::unistd::User::from_name("caddy")?
+        .context("Caddy service account is missing; install the caddy package")?;
+    let mut child = Command::new("caddy")
+        .args(["validate", "--config", "-", "--adapter", "caddyfile"])
+        .env("XDG_DATA_HOME", "/var/lib")
+        .env("XDG_CONFIG_HOME", "/etc")
+        .uid(caddy.uid.as_raw())
+        .gid(caddy.gid.as_raw())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to execute caddy validate as the caddy user")?;
+    child
+        .stdin
+        .take()
+        .context("Caddy validator stdin unavailable")?
+        .write_all(content.as_bytes())
+        .context("Failed to pass Caddyfile to validator")?;
+    let output = child
+        .wait_with_output()
+        .context("Failed to wait for caddy validate")?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -611,6 +616,41 @@ mod tests {
             Some("192.168.1.1")
         );
         assert!(parse_interface_global_ipv4("inet 169.254.41.250/16 scope link enp2s0").is_none());
+    }
+
+    #[test]
+    fn packaged_sandbox_supports_caddy_validation_and_configuration() {
+        let unit = include_str!("../../../packaging/arch/keystone-daemon.service");
+        let configured_paths: Vec<&str> = unit
+            .lines()
+            .filter_map(|line| line.strip_prefix("ReadWritePaths="))
+            .flat_map(str::split_ascii_whitespace)
+            .collect();
+        for path in [
+            "/etc/caddy",
+            "-/var/log/caddy",
+            "-/var/lib/caddy",
+            "-/run/caddy",
+        ] {
+            assert!(
+                configured_paths.contains(&path),
+                "missing {path} sandbox access"
+            );
+        }
+        assert!(unit.lines().any(|line| {
+            line.strip_prefix("ConfigurationDirectory=")
+                .is_some_and(|dirs| {
+                    dirs.split_ascii_whitespace()
+                        .any(|d| d == "caddy/Caddyfile.d")
+                })
+        }));
+        let caps = unit
+            .lines()
+            .find_map(|line| line.strip_prefix("CapabilityBoundingSet="))
+            .unwrap();
+        for cap in ["CAP_SETUID", "CAP_SETGID"] {
+            assert!(caps.split_ascii_whitespace().any(|c| c == cap));
+        }
     }
 
     #[test]

@@ -23,13 +23,14 @@ RuntimeDirectoryMode=0755
 StateDirectory=keystone
 StateDirectoryMode=0700
 
-# Ensure generated networkd and dnsmasq directories exist before the
-# read-only filesystem sandbox is constructed.
-ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d
+# Ensure managed configuration directories exist before the read-only
+# filesystem sandbox is constructed (Caddy itself remains optional).
+ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d
 ConfigurationDirectoryMode=0755
 
 # Restrict capabilities
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN
+# CAP_SETUID/SETGID let Caddy validation drop to the caddy service identity.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_SETUID CAP_SETGID
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN
 
 # Filesystem restrictions
@@ -38,7 +39,10 @@ ProtectSystem=strict
 # Keystone generates these files; the rest of /etc remains read-only.
 ReadWritePaths=/etc/systemd/network /etc/systemd/networkd.conf.d /etc/sysctl.d /etc/nftables.conf /var/lib/keystone /run/keystone
 ReadWritePaths=/etc/ssh/sshd_config.d
-ReadWritePaths=-/etc/dnsmasq.conf -/var/lib/dnsmasq -/etc/caddy -/var/log/caddy
+# Match Caddy's packaged service storage paths. The daemon's validator runs
+# as the caddy user, so the caddy-owned log/state directories remain private.
+ReadWritePaths=-/etc/dnsmasq.conf -/var/lib/dnsmasq
+ReadWritePaths=/etc/caddy -/var/log/caddy -/var/lib/caddy -/run/caddy
 PrivateTmp=yes
 
 # Additional hardening

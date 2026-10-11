@@ -1,6 +1,6 @@
 //! A device-oriented WAN forwarding editor. It writes ordinary firewall rules.
 use crate::api;
-use keystone_core::{CreateSimplePortForwardRequest, LanDevice};
+use keystone_core::{CreateSimplePortForwardRequest, LanDevice, RuleProtocol};
 use leptos::prelude::*;
 
 #[component]
@@ -20,6 +20,7 @@ pub(super) fn SimpleForwardsTab(
         async move { api::fetch_lan_devices(&token).await }
     });
     let editing = RwSignal::new(false);
+    let edit_id = RwSignal::new(None::<i64>);
     let manual = RwSignal::new(false);
     let selected = RwSignal::new(String::new());
     let ipv4 = RwSignal::new(String::new());
@@ -28,6 +29,7 @@ pub(super) fn SimpleForwardsTab(
     let udp = RwSignal::new(false);
     let port = RwSignal::new(String::new());
     let destination_port = RwSignal::new(String::new());
+    let description = RwSignal::new(String::new());
     let saving = RwSignal::new(false);
     let error = RwSignal::new(String::new());
     let notice = RwSignal::new(String::new());
@@ -91,11 +93,18 @@ pub(super) fn SimpleForwardsTab(
             ipv6: (!addresses.1.trim().is_empty()).then_some(addresses.1),
             port: external,
             destination_port: internal,
+            description: (!description.get_untracked().trim().is_empty())
+                .then(|| description.get_untracked().trim().to_owned()),
         };
         leptos::task::spawn_local(async move {
-            match api::create_simple_forward(&token, req).await {
+            let outcome = match edit_id.get_untracked() {
+                Some(id) => api::update_simple_forward(&token, id, req).await,
+                None => api::create_simple_forward(&token, req).await,
+            };
+            match outcome {
                 Ok(()) => {
                     editing.set(false);
+                    edit_id.set(None);
                     notice.set("Forward saved. Click Apply Changes above to activate it.".into());
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -118,7 +127,17 @@ pub(super) fn SimpleForwardsTab(
                     <p class="text-gray-400 text-sm">"WAN access to LAN devices — IPv4 DNAT + firewall allow, or native IPv6 routing."</p>
                 </div>
                 <button class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"
-                    on:click=move |_| { error.set(String::new()); editing.set(!editing.get_untracked()); }>
+                    on:click=move |_| {
+                        error.set(String::new());
+                        if editing.get_untracked() { editing.set(false); edit_id.set(None); }
+                        else {
+                            edit_id.set(None); manual.set(false); selected.set(String::new());
+                            ipv4.set(String::new()); ipv6.set(String::new());
+                            tcp.set(true); udp.set(false); port.set(String::new());
+                            destination_port.set(String::new()); description.set(String::new());
+                            editing.set(true);
+                        }
+                    }>
                     {move || if editing.get() { "Cancel" } else { "+ Add Port Forward" }}
                 </button>
             </div>
@@ -129,7 +148,7 @@ pub(super) fn SimpleForwardsTab(
 
             {move || editing.get().then(|| view! {
                 <div class="bg-gray-700 p-4 rounded-lg space-y-4">
-                    <h3 class="font-medium text-gray-100">"New Port Forward"</h3>
+                    <h3 class="font-medium text-gray-100">{move || if edit_id.get().is_some() { "Edit Port Forward" } else { "New Port Forward" }}</h3>
                     <div class="flex gap-5">
                         <label class="flex gap-2 items-center text-gray-200">
                             <input type="checkbox" prop:checked=move || tcp.get() on:change=move |ev| tcp.set(event_target_checked(&ev)) />"TCP"
@@ -164,7 +183,7 @@ pub(super) fn SimpleForwardsTab(
                         view! {
                             <div>
                                 <select class="w-full px-3 py-2 bg-gray-600 text-gray-100 rounded border border-gray-500"
-                                    on:change=move |ev| selected.set(event_target_value(&ev))>
+                                    prop:value=move || selected.get() on:change=move |ev| selected.set(event_target_value(&ev))>
                                     <option value="">"Select a discovered LAN device"</option>
                                     {move || devices.get().map(|res| match res {
                                         Ok(items) => view! {
@@ -182,8 +201,9 @@ pub(super) fn SimpleForwardsTab(
                                 <p class="text-xs text-gray-400 mt-1">
                                     "Devices found via LAN neighbours and DHCP leases. Only known IPv6 global/ULA addresses are offered; a device may have more than one address."
                                 </p>
-                                <button class="text-sm text-blue-300 hover:text-blue-200 mt-2" on:click=move |_| reload_trigger.update(|v| *v += 1)>
-                                    "Refresh device list"
+                                <button class="text-xs px-2 py-1 mt-2 bg-gray-600 hover:bg-gray-500 text-gray-200 rounded border border-gray-500"
+                                    on:click=move |_| reload_trigger.update(|v| *v += 1)>
+                                    "↻ Refresh devices"
                                 </button>
                             </div>
                         }.into_any()
@@ -202,6 +222,12 @@ pub(super) fn SimpleForwardsTab(
                                 prop:value=move || destination_port.get() on:input=move |ev| destination_port.set(event_target_value(&ev)) />
                         </div>
                     </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">"Comment (optional)"</label>
+                        <input type="text" placeholder="e.g. Game server, Nextcloud, remote access"
+                            class="w-full px-3 py-2 bg-gray-600 text-gray-100 rounded border border-gray-500"
+                            prop:value=move || description.get() on:input=move |ev| description.set(event_target_value(&ev)) />
+                    </div>
                     <button on:click=save disabled=move || saving.get()
                         class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50">
                         {move || if saving.get() { "Saving..." } else { "Save" }}
@@ -218,29 +244,57 @@ pub(super) fn SimpleForwardsTab(
                                 <table class="w-full text-sm">
                                     <thead class="text-gray-400 border-b border-gray-600">
                                         <tr>
-                                            <th class="text-left px-2 py-2">"Rule"</th>
-                                            <th class="text-left px-2 py-2">"Family"</th>
+                                            <th class="text-left px-2 py-2">"Forward / Comment"</th>
+                                            <th class="text-left px-2 py-2">"Families"</th>
                                             <th class="text-left px-2 py-2">"Protocol"</th>
                                             <th class="text-left px-2 py-2">"WAN port"</th>
                                             <th class="text-left px-2 py-2">"Source"</th>
-                                            <th class="text-left px-2 py-2">"Destination"</th>
+                                            <th class="text-left px-2 py-2">"Destination(s)"</th>
                                             <th class="text-left px-2 py-2">"Enabled"</th>
                                             <th class="text-right px-2 py-2">"Action"</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <For each=move || items.clone() key=|f| (f.rule_id, f.nat_id) children=move |f| {
+                                        <For each=move || items.clone() key=|f| f.rule_id children=move |f| {
                                             let id = f.rule_id;
+                                            let to_edit = f.clone();
                                             view! {
                                                 <tr class="border-b border-gray-700 text-gray-200">
-                                                    <td class="px-2 py-2">{f.name}</td>
-                                                    <td class="px-2 py-2">{if f.nat_id.is_some() { "IPv4" } else { "IPv6" }}</td>
+                                                    <td class="px-2 py-2">
+                                                        <div>{format!("{} {}:{}", f.source_zone.as_deref().unwrap_or("WAN"), f.protocol, f.external_port)}</div>
+                                                        {f.description.clone().map(|s| view! { <div class="text-xs text-gray-400 mt-1">{s}</div> })}
+                                                    </td>
+                                                    <td class="px-2 py-2">{match (f.ipv4.is_some(), f.ipv6.is_some()) {
+                                                        (true, true) => "IPv4 + IPv6 (paired)",
+                                                        (true, false) => "IPv4",
+                                                        (false, true) => "IPv6",
+                                                        _ => "—",
+                                                    }}</td>
                                                     <td class="px-2 py-2">{f.protocol.to_string()}</td>
                                                     <td class="px-2 py-2">{f.external_port}</td>
                                                     <td class="px-2 py-2">{f.source_ip.unwrap_or_else(|| "Any".into())}</td>
-                                                    <td class="px-2 py-2">{format!("{}:{}", f.destination, f.destination_port)}</td>
+                                                    <td class="px-2 py-2">
+                                                        {f.ipv4.clone().map(|ip| view! { <div>{format!("IPv4: {ip}:{}", f.destination_port)}</div> })}
+                                                        {f.ipv6.clone().map(|ip| view! { <div>{format!("IPv6: [{ip}]:{}", f.destination_port)}</div> })}
+                                                    </td>
                                                     <td class="px-2 py-2">{if f.enabled { "Yes" } else { "No" }}</td>
-                                                    <td class="px-2 py-2 text-right">
+                                                    <td class="px-2 py-2 text-right whitespace-nowrap">
+                                                        <button class="text-blue-300 hover:text-blue-200 mr-3" on:click=move |_| {
+                                                            edit_id.set(Some(id));
+                                                            tcp.set(matches!(to_edit.protocol, RuleProtocol::Tcp | RuleProtocol::TcpUdp));
+                                                            udp.set(matches!(to_edit.protocol, RuleProtocol::Udp | RuleProtocol::TcpUdp));
+                                                            ipv4.set(to_edit.ipv4.clone().unwrap_or_default());
+                                                            ipv6.set(to_edit.ipv6.clone().unwrap_or_default());
+                                                            port.set(to_edit.external_port.to_string());
+                                                            destination_port.set(if to_edit.destination_port == to_edit.external_port { String::new() } else { to_edit.destination_port.to_string() });
+                                                            description.set(to_edit.description.clone().unwrap_or_default());
+                                                            // Show both addresses explicitly even when the discovery list has changed.
+                                                            manual.set(true);
+                                                            selected.set(String::new());
+                                                            notice.set(String::new());
+                                                            error.set(String::new());
+                                                            editing.set(true);
+                                                        }>"Edit"</button>
                                                         <button class="text-red-400 hover:text-red-300" on:click=move |_| {
                                                             error.set(String::new());
                                                             let token = token.get_untracked();

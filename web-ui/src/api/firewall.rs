@@ -9,7 +9,7 @@ use keystone_core::{
     ZoneForwardPolicy,
 };
 
-use super::client::{SaveIdResponse, delete, extract_id, get, post, post_empty};
+use super::client::{SaveIdResponse, delete, extract_id, get, post, post_empty, put_no_response};
 
 // ============================================================================
 // Zones
@@ -113,6 +113,19 @@ pub async fn create_simple_forward(
 ) -> Result<(), String> {
     let _: SimplePortForwardsResponse = post("/api/firewall/simple-forwards", token, &req).await?;
     Ok(())
+}
+
+pub async fn update_simple_forward(
+    token: &str,
+    rule_id: i64,
+    req: CreateSimplePortForwardRequest,
+) -> Result<(), String> {
+    put_no_response(
+        &format!("/api/firewall/simple-forwards/{rule_id}"),
+        token,
+        &req,
+    )
+    .await
 }
 
 pub async fn delete_simple_forward(token: &str, rule_id: i64) -> Result<DeleteResponse, String> {

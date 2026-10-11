@@ -45,7 +45,7 @@ pub fn DashboardPage(
         });
     };
 
-    let renew_link = move |name: String| {
+    let renew_link = move |name: String, role: InterfaceRole| {
         let Some(token) = auth_token.get_untracked() else {
             return;
         };
@@ -54,6 +54,9 @@ pub fn DashboardPage(
         spawn_local(async move {
             let result = api::renew_interface(&token, &name).await;
             match result {
+                Ok(response) if response.success => {
+                    set_renew_message.set(Some(format!("Renewal requested for {role}")))
+                }
                 Ok(response) => set_renew_message.set(Some(response.message)),
                 Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
                 Err(e) => set_renew_message.set(Some(format!("Failed to renew {name}: {e}"))),
@@ -179,7 +182,7 @@ pub fn DashboardPage(
                                                 view! {
                                                     <div class="space-y-2">
                                                         <div class="flex justify-between items-baseline gap-2 flex-wrap">
-                                                            <span class="text-xs text-gray-400 break-all">{g.interface.clone()} ": " {g.gateway.clone()}</span>
+                                                            <span class="text-xs text-gray-400 break-all">"WAN gateway: " {g.gateway.clone()}</span>
                                                             <span class=format!("text-sm font-semibold {}", status_class)>{status_text}</span>
                                                         </div>
                                                         <div class="flex justify-between text-xs gap-3">
@@ -224,18 +227,18 @@ pub fn DashboardPage(
                             .filter(|iface| iface.role == role).collect::<Vec<_>>();
                         let ipv4 = relevant.iter().flat_map(|iface| iface.ipv4_addresses.iter()
                             .filter(|address| !address.starts_with("169.254."))
-                            .map(|address| (iface.name.clone(), address.clone())))
+                            .cloned())
                             .collect::<Vec<_>>();
                         let ipv6 = relevant.iter().flat_map(|iface| iface.ipv6_addresses.iter()
                             .filter(|address| !address.starts_with("fe80:"))
-                            .map(|address| (iface.name.clone(), address.clone())))
+                            .cloned())
                             .collect::<Vec<_>>();
                         let link_local = relevant.iter().flat_map(|iface| iface.ipv6_addresses.iter()
                             .filter(|address| address.starts_with("fe80:"))
-                            .map(|address| (iface.name.clone(), address.clone())))
+                            .cloned())
                             .collect::<Vec<_>>();
                         let link_local_text = link_local.into_iter()
-                            .map(|(name, address)| format!("{name}: {address} (link-local)"))
+                            .map(|address| format!("{address} (link-local)"))
                             .collect::<Vec<_>>().join(" · ");
                         view! {
                             <div class="bg-gray-800 rounded-lg p-5 shadow-lg space-y-4 min-w-0">
@@ -249,13 +252,13 @@ pub fn DashboardPage(
                                                 <button
                                                     class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-gray-200"
                                                     disabled=move || renewing.get().is_some()
-                                                    on:click=move |_| renew_link(name.clone())
+                                                    on:click=move |_| renew_link(name.clone(), role)
                                                     title="Renew interface via systemd-networkd"
                                                 >
                                                     {move || if renewing.get().as_deref() == Some(check_name.as_str()) {
-                                                        format!("Renewing {}...", check_name)
+                                                        format!("Renewing {role}...")
                                                     } else {
-                                                        format!("Renew {}", check_name)
+                                                        format!("Renew {role}")
                                                     }}
                                                 </button>
                                             }
@@ -265,15 +268,15 @@ pub fn DashboardPage(
                                 <div>
                                     <div class="text-sm text-gray-400 mb-1">"IPv4"</div>
                                     {if ipv4.is_empty() { view! { <div class="text-gray-500">"—"</div> }.into_any() }
-                                    else { view! { <div class="space-y-1">{ipv4.into_iter().map(|(name, address)| view! {
-                                        <div class="text-sm text-gray-200 break-all"><span class="text-gray-400">{name} ": "</span>{address}</div>
+                                    else { view! { <div class="space-y-1">{ipv4.into_iter().map(|address| view! {
+                                        <div class="text-sm text-gray-200 break-all">{address}</div>
                                     }).collect_view()}</div> }.into_any() }}
                                 </div>
                                 <div>
                                     <div class="text-sm text-gray-400 mb-1">"IPv6"</div>
                                     {if ipv6.is_empty() { view! { <div class="text-gray-500">"No global address"</div> }.into_any() }
-                                    else { view! { <div class="space-y-1">{ipv6.into_iter().map(|(name, address)| view! {
-                                        <div class="text-sm text-gray-200 break-all"><span class="text-gray-400">{name} ": "</span>{address}</div>
+                                    else { view! { <div class="space-y-1">{ipv6.into_iter().map(|address| view! {
+                                        <div class="text-sm text-gray-200 break-all">{address}</div>
                                     }).collect_view()}</div> }.into_any() }}
                                     <div class="text-xs text-gray-500 mt-1 break-all">{link_local_text}</div>
                                 </div>
@@ -286,14 +289,14 @@ pub fn DashboardPage(
             <div class="bg-gray-800 rounded-xl p-5 sm:p-6 shadow-lg space-y-4">
                 <div class="flex flex-wrap justify-between items-baseline gap-2">
                     <h2 class="text-xl font-semibold text-blue-300">"Network Activity"</h2>
-                    <span class="text-xs text-gray-400">"Live · one-minute rolling history · bytes per second"</span>
+                    <span class="text-xs text-gray-400">"Live · one-minute rolling history · bits per second"</span>
                 </div>
                 <div class="grid grid-cols-1 2xl:grid-cols-2 gap-4">
                     <For
-                        each=move || { traffic.get().into_iter().map(|entry| entry.name).collect::<Vec<String>>() }
-                        key=|name| name.clone()
-                        children=move |name| {
-                            view! { <TrafficGraph name=name history=traffic /> }
+                        each=move || { traffic.get().into_iter().filter_map(|entry| entry.role.map(|role| (entry.name, role))).collect::<Vec<_>>() }
+                        key=|(name, _)| name.clone()
+                        children=move |(name, role)| {
+                            view! { <TrafficGraph name=name role=role history=traffic /> }
                         }
                     />
                 </div>

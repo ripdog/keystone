@@ -97,7 +97,7 @@ pub fn App() -> impl IntoView {
                     when=move || auth_token.get().is_some()
                     fallback=move || view! { <LoginPage on_login=set_auth_token/> }
                 >
-                    <AppLayout auth_token=auth_token on_logout=logout on_unauthorized=on_unauthorized>
+                    <AppLayout on_logout=logout>
                         <Routes fallback=|| "Page not found">
                             <Route
                                 path=path!("/")

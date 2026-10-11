@@ -9,7 +9,14 @@ use crate::firewall::generate::{
 use keystone_core::{
     FirewallConfig, FirewallPolicy, ForwardRule, InputRule, PortForward, RuleProtocol,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, net::IpAddr};
+
+fn address_family(addr: &str) -> &'static str {
+    match addr.split('/').next().unwrap_or(addr).parse::<IpAddr>() {
+        Ok(IpAddr::V6(_)) => "ip6",
+        _ => "ip",
+    }
+}
 
 /// Generate a human-readable preview of the firewall rules
 pub fn generate_preview(
@@ -213,7 +220,7 @@ pub fn generate_preview(
     output.push_str("        # Port forwards\n");
 
     for pf in &config.port_forwards {
-        if pf.enabled {
+        if pf.enabled && pf.dest_ip.parse::<std::net::Ipv4Addr>().is_ok() {
             output.push_str(&format!(
                 "        {}\n",
                 format_port_forward(pf, zone_interfaces)
@@ -235,7 +242,7 @@ pub fn generate_preview(
             output.push_str("        \n");
             output.push_str("        # Hairpin NAT (NAT reflection for LAN clients)\n");
             for pf in &config.port_forwards {
-                if pf.enabled {
+                if pf.enabled && pf.dest_ip.parse::<std::net::Ipv4Addr>().is_ok() {
                     let ifaces = format_interface_set(&lan_interfaces_preview);
                     let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
                     output.push_str(&format!(
@@ -271,7 +278,7 @@ pub fn generate_preview(
         if !lan_interfaces_preview.is_empty() {
             output.push_str("        # Hairpin NAT SNAT (masquerade for hairpin traffic)\n");
             for pf in &config.port_forwards {
-                if pf.enabled {
+                if pf.enabled && pf.dest_ip.parse::<std::net::Ipv4Addr>().is_ok() {
                     let ifaces = format_interface_set(&lan_interfaces_preview);
                     let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
                     output.push_str(&format!(
@@ -324,7 +331,7 @@ fn format_input_rule(rule: &InputRule, zone_interfaces: &HashMap<String, Vec<Str
     }
 
     if let Some(ref src_ip) = rule.source_ip {
-        parts.push(format!("ip saddr {}", src_ip));
+        parts.push(format!("{} saddr {}", address_family(src_ip), src_ip));
     }
 
     if let Some(protocol) = &rule.protocol {
@@ -384,11 +391,11 @@ fn format_forward_rule(
     }
 
     if let Some(ref src_ip) = rule.source_ip {
-        parts.push(format!("ip saddr {}", src_ip));
+        parts.push(format!("{} saddr {}", address_family(src_ip), src_ip));
     }
 
     if let Some(ref dst_ip) = rule.dest_ip {
-        parts.push(format!("ip daddr {}", dst_ip));
+        parts.push(format!("{} daddr {}", address_family(dst_ip), dst_ip));
     }
 
     if let Some(protocol) = &rule.protocol {

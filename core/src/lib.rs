@@ -2021,6 +2021,51 @@ pub struct PortForwardsResponse {
     pub port_forwards: Vec<PortForward>,
 }
 
+/// A device discovered on a LAN interface, grouped by neighbour MAC address.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LanDevice {
+    pub mac: String,
+    pub hostname: Option<String>,
+    pub ipv4: Vec<String>,
+    pub ipv6: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LanDevicesResponse {
+    pub devices: Vec<LanDevice>,
+}
+
+/// One effective WAN exposure, derived from firewall allow rules (and DNAT for IPv4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SimplePortForward {
+    pub rule_id: i64,
+    pub nat_id: Option<i64>,
+    pub name: String,
+    pub protocol: RuleProtocol,
+    pub external_port: u16,
+    pub destination: String,
+    pub destination_port: u16,
+    /// Optional source CIDR restriction from the matching firewall/NAT rules.
+    pub source_ip: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimplePortForwardsResponse {
+    pub forwards: Vec<SimplePortForward>,
+}
+
+/// Create one IPv4 and/or IPv6 exposure, for TCP and/or UDP.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSimplePortForwardRequest {
+    pub tcp: bool,
+    pub udp: bool,
+    pub ipv4: Option<String>,
+    pub ipv6: Option<String>,
+    pub port: u16,
+    pub destination_port: Option<u16>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaveInputRuleRequest {
     pub rule: InputRule,

@@ -5,8 +5,8 @@
 //! - Postrouting chain for SNAT (masquerade)
 
 use crate::firewall::generate::statements::{
-    create_daddr_match, create_dport_match, create_iif_match, create_protocol_match,
-    create_saddr_match,
+    create_daddr_match, create_dport_match, create_iif_match, create_ipv4_match,
+    create_protocol_match, create_saddr_match,
 };
 use crate::firewall::generate::{NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones};
 use keystone_core::{FirewallConfig, PortForward, RuleProtocol};
@@ -103,7 +103,10 @@ fn create_port_forward_rule(
     zone_interfaces: &HashMap<String, Vec<String>>,
     protocol: &'static str,
 ) -> Option<Rule<'static>> {
-    let mut exprs: Vec<Statement> = Vec::new();
+    if pf.dest_ip.parse::<std::net::Ipv4Addr>().is_err() {
+        return None;
+    }
+    let mut exprs: Vec<Statement> = vec![create_ipv4_match()];
 
     // Match source zone (input interface)
     if let Some(ref zone_name) = pf.source_zone
@@ -161,11 +164,12 @@ fn create_hairpin_dnat_rule(
     lan_interfaces: &[String],
     protocol: &'static str,
 ) -> Option<Rule<'static>> {
-    if lan_interfaces.is_empty() {
+    if lan_interfaces.is_empty() || pf.dest_ip.parse::<std::net::Ipv4Addr>().is_err() {
         return None;
     }
 
     let mut exprs: Vec<Statement> = vec![
+        create_ipv4_match(),
         // Match input from LAN interfaces
         create_iif_match(lan_interfaces),
         // Match protocol
@@ -290,11 +294,11 @@ fn create_hairpin_snat_rule(
     lan_interfaces: &[String],
     protocol: &'static str,
 ) -> Option<Rule<'static>> {
-    if lan_interfaces.is_empty() {
+    if lan_interfaces.is_empty() || pf.dest_ip.parse::<std::net::Ipv4Addr>().is_err() {
         return None;
     }
 
-    let mut exprs: Vec<Statement> = Vec::new();
+    let mut exprs: Vec<Statement> = vec![create_ipv4_match()];
 
     // Match source from LAN interfaces (original source is LAN client)
     exprs.push(create_iif_match(lan_interfaces));

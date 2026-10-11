@@ -63,7 +63,17 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
             "/firewall/forward-rules/reorder",
             post(reorder_forward_rules),
         )
-        // Port forwards
+        // Convenience WAN forwards, derived from regular forward/NAT rules
+        .route(
+            "/firewall/simple-forwards",
+            get(super::simple::list).post(super::simple::create),
+        )
+        .route(
+            "/firewall/simple-forwards/{id}",
+            delete(super::simple::remove),
+        )
+        .route("/firewall/lan-devices", get(super::simple::devices))
+        // Legacy DNAT-only endpoints (advanced clients)
         .route("/firewall/port-forwards", get(get_port_forwards))
         .route("/firewall/port-forwards", post(save_port_forward))
         .route("/firewall/port-forwards/{id}", delete(delete_port_forward))

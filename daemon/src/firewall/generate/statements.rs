@@ -8,7 +8,26 @@ use nftables::{
     expr::{Expression, Meta, MetaKey, Payload, PayloadField},
     stmt::{Limit, Match, Operator, Statement},
 };
-use std::borrow::Cow;
+use std::{borrow::Cow, net::IpAddr};
+
+/// Pick the packet address family (also accepts CIDR strings).
+fn address_payload_family(addr: &str) -> &'static str {
+    match addr.split('/').next().unwrap_or(addr).parse::<IpAddr>() {
+        Ok(IpAddr::V6(_)) => "ip6",
+        _ => "ip",
+    }
+}
+
+/// NAT forwarding is IPv4-only; it must not accidentally match IPv6 traffic.
+pub fn create_ipv4_match() -> Statement<'static> {
+    Statement::Match(Match {
+        left: Expression::Named(nftables::expr::NamedExpression::Meta(Meta {
+            key: MetaKey::Nfproto,
+        })),
+        right: Expression::String(Cow::Borrowed("ipv4")),
+        op: Operator::EQ,
+    })
+}
 
 /// Create a match statement for input interface(s)
 pub fn create_iif_match(interfaces: &[String]) -> Statement<'static> {
@@ -57,7 +76,7 @@ pub fn create_saddr_match(addr: &str) -> Statement<'static> {
     Statement::Match(Match {
         left: Expression::Named(nftables::expr::NamedExpression::Payload(
             Payload::PayloadField(PayloadField {
-                protocol: Cow::Borrowed("ip"),
+                protocol: Cow::Borrowed(address_payload_family(addr)),
                 field: Cow::Borrowed("saddr"),
             }),
         )),
@@ -71,7 +90,7 @@ pub fn create_daddr_match(addr: &str) -> Statement<'static> {
     Statement::Match(Match {
         left: Expression::Named(nftables::expr::NamedExpression::Payload(
             Payload::PayloadField(PayloadField {
-                protocol: Cow::Borrowed("ip"),
+                protocol: Cow::Borrowed(address_payload_family(addr)),
                 field: Cow::Borrowed("daddr"),
             }),
         )),

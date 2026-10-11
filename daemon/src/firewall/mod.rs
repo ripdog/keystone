@@ -23,5 +23,6 @@
 mod apply;
 pub(crate) mod generate;
 pub mod routes;
+pub mod simple;
 
 pub use apply::*;

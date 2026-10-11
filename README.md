@@ -1,78 +1,84 @@
-# Keystone - Linux Router/Firewall Manager
+# Keystone
 
-A secure, split-privilege web interface for configuring an Arch Linux machine as a home router.
+Keystone is a web-based router and firewall manager for **Arch Linux**. It provides a browser UI and command-line tooling for managing a dedicated Linux router without exposing its privileged management daemon directly to the network.
 
-## Quick Start
-
-```bash
-# Build release
-just build-release
-
-# Terminal 1 (as root)
-just run-daemon
-
-# Terminal 2 (as user)
-just run-web
-
-# Open browser
-xdg-open http://localhost:8080
-```
+> **Status:** In development. Network and firewall changes can disconnect a router. Test on a spare machine or VM and maintain console access while configuring a real router.
 
 ## Features
 
-- 🔐 **Privilege Separation**: Unprivileged web UI communicates with root daemon via Unix socket
-- 🌐 **Network Management**: Configure interfaces, IP addresses, DHCP
-- 🛡️ **Firewall Control**: Manage nftables rules through clean web interface  
-- ⚡ **Modern Stack**: Rust + Axum + Leptos (WASM)
-- 🔒 **Secure by Default**: No network exposure for privileged daemon
+- **Networking:** Configure WAN and LAN interfaces using systemd-networkd, including IPv4, IPv6, DHCP, and IPv6 prefix delegation.
+- **Firewall:** Manage nftables rules, NAT, and IPv4/IPv6 port forwarding.
+- **Services:** Configure dnsmasq for DNS/DHCP, Caddy for HTTPS, and OpenSSH access on the router.
+- **Monitoring:** Inspect interface state, traffic counters, and WAN gateway reachability.
+- **First-run setup:** Interactive `keystonectl setup` wizard and local administrator creation.
 
-## Architecture
+## Security model
 
+Keystone has three components:
+
+```text
+Browser ──HTTP(S)──> keystone-web-ui (unprivileged)
+                                  │
+                       permission-restricted Unix socket
+                                  │
+                          keystone-daemon (root)
+                                  │
+                      networkd / nftables / services
 ```
-Browser (WASM) → Web UI (HTTP :8080) → Daemon (Unix Socket) → System
-                 [unprivileged]         [root only]             [nftables, networkd]
+
+The daemon listens on a Unix socket at `/run/keystone/keystone.sock`, **not** a public HTTP port. The web service listens on port **8080**, restricted to loopback and configured LAN addresses (never WAN). An optional Caddy reverse proxy can provide HTTPS.
+
+There is **no default administrator password or remote bootstrap account**. Create the initial administrator locally at the console.
+
+## Installation
+
+Keystone currently targets Arch Linux with systemd. Runtime services include **systemd-networkd, nftables, and dnsmasq**; Caddy and OpenSSH integration are optional. The repository contains an Arch `PKGBUILD`, service definitions in `packaging/arch/`, and an image-building script at `scripts/create-keystone-usb.sh` for a dedicated router.
+
+For a development build, install Rust (see `rust-toolchain.toml` when present), the `wasm32-unknown-unknown` target, [Trunk](https://trunkrs.dev/), and the system SQLite development library. Then build both the native binaries and the browser frontend:
+
+```bash
+cargo build --workspace
+(cd web-ui && trunk build)
 ```
+
+The three native executables are `target/debug/keystone-daemon`, `target/debug/keystone-web-ui`, and `target/debug/keystonectl`. The frontend is generated in `web-ui/dist/`.
+
+### Initial setup
+
+On a **dedicated test/router machine**, from the repository root:
+
+1. Create an administrator locally:
+   ```bash
+   sudo target/debug/keystonectl bootstrap-admin
+   ```
+2. Start the daemon (in a separate terminal):
+   ```bash
+   sudo target/debug/keystone-daemon
+   ```
+3. Run the interactive router configuration wizard:
+   ```bash
+   sudo target/debug/keystonectl setup
+   ```
+4. Start the unprivileged web server (in another terminal):
+   ```bash
+   KEYSTONE_DIST_DIR="$PWD/web-ui/dist" target/debug/keystone-web-ui
+   ```
+
+Open `http://127.0.0.1:8080` on the router, or `http://<router-LAN-address>:8080` from a LAN device, and log in with the account you created. For installed packages, use the supplied systemd services instead of starting processes manually.
+
+**Do not perform initial network configuration over your only SSH connection.** Apply networking and firewall changes with console access available.
 
 ## Development
 
 ```bash
-just check      # Run clippy
-just test       # Run tests
-just fmt        # Format code
-just ci         # Full CI pipeline
+just check       # Cargo compile checks
+just test        # Rust tests
+just fmt-check   # Rust formatting check
+just ci          # Formatting, Clippy, and tests
 ```
 
-### Vagrant Testing
-
-Isolated Arch Linux VM for safe testing:
-
-```bash
-just vagrant-up     # Start VM (auto-provisions)
-just vagrant-ssh    # SSH into VM
-just vagrant-build  # Build in VM
-just vagrant-test   # Test in VM
-```
-
-Access web UI at: http://192.168.56.10:8080
-
-See [VAGRANT.md](VAGRANT.md) for complete testing guide.
-
-See [AGENTS.md](AGENTS.md) for detailed development instructions.
-
-## Documentation
-
-- [README.md](README.md) - This file (overview)
-- [QUICKSTART.md](QUICKSTART.md) - Detailed setup guide
-- [AGENTS.md](AGENTS.md) - Technical documentation for developers/AI agents
-- [VAGRANT.md](VAGRANT.md) - Vagrant VM testing guide
-
-## Requirements
-
-- Arch Linux (or systemd-based distribution)
-- Rust 1.70+
-- systemd-networkd
-- nftables
+`just build` builds native binaries; building the frontend also requires `trunk build` in `web-ui/`. The `justfile` and [VAGRANT.md](VAGRANT.md) contain developer and VM-testing commands. [AGENTS.md](AGENTS.md) describes the repository layout and coding rules.
 
 ## License
 
-MIT
+Keystone is licensed under the **GNU General Public License version 3.0 only** (`GPL-3.0-only`). See [LICENSE](LICENSE) for the complete license.

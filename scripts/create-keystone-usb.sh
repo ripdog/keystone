@@ -553,6 +553,7 @@ install_base_system() {
         htop \
         nftables \
         iproute2 \
+        iputils \
         bridge-utils \
         tcpdump \
         ethtool \

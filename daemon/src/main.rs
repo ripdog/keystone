@@ -10,6 +10,7 @@ mod config;
 mod db;
 mod dnsmasq;
 mod firewall;
+mod gateway;
 mod networkd;
 mod soho;
 mod status;
@@ -31,7 +32,7 @@ use keystone_core::{
     ApplyConfigRequest, ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse,
     DashboardResponse, DeleteUserRequest, DeleteUserResponse, DeleteVlanResponse,
     GlobalSettingsResponse, InterfaceConfigResponse, InterfaceConfigsResponse, InterfaceCounters,
-    KeystoneError, LoginRequest, LoginResponse, ManagedInterfacesResponse,
+    KeystoneError, LoginRequest, LoginResponse, ManagedInterfacesResponse, RenewInterfaceResponse,
     SaveGlobalSettingsRequest, SaveGlobalSettingsResponse, SaveInterfaceConfigRequest,
     SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
     SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest, SaveVlanConfigResponse, SystemCheck,
@@ -52,6 +53,7 @@ struct AppState {
     auth: Arc<AuthManager>,
     db: Database,
     firewall_manager: Arc<firewall::FirewallApplyManager>,
+    gateways: gateway::GatewaySnapshot,
     login_slots: Arc<tokio::sync::Semaphore>,
     login_attempts:
         Arc<tokio::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u32)>>>,
@@ -65,6 +67,7 @@ impl AppState {
     ) -> Self {
         Self {
             auth,
+            gateways: gateway::start(db.clone()),
             db,
             firewall_manager,
             login_slots: Arc::new(tokio::sync::Semaphore::new(3)),
@@ -176,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/interface-config/{name}", get(get_interface_config))
         .route("/interface-config", post(save_interface_config))
         .route("/interface-config/{name}", delete(delete_interface_config))
+        .route("/interfaces/{name}/renew", post(renew_interface))
         .route("/vlans", get(get_vlans))
         .route("/vlans/{id}", get(get_vlan))
         .route("/vlans", post(save_vlan))
@@ -508,6 +512,7 @@ fn is_blocked_before_setup(path: &str) -> bool {
         || path == "/apply-networkd"
         || path == "/apply-all"
         || path == "/networkd-preview"
+        || (path.starts_with("/interfaces/") && path.ends_with("/renew"))
         || (path.starts_with("/firewall/") && !firewall_recovery_endpoint)
         || path.starts_with("/dnsmasq/")
         || path.starts_with("/caddy/")
@@ -580,10 +585,14 @@ async fn get_dashboard(
     info!("Retrieving dashboard");
 
     let configs = state.db.get_interface_configs().await?;
-    Ok(Json(read_dashboard(&configs).unwrap_or_default()))
+    let gateways = state.gateways.read().await.clone();
+    Ok(Json(read_dashboard(&configs, gateways).unwrap_or_default()))
 }
 
-fn read_dashboard(configs: &[keystone_core::InterfaceConfig]) -> anyhow::Result<DashboardResponse> {
+fn read_dashboard(
+    configs: &[keystone_core::InterfaceConfig],
+    gateways: Vec<keystone_core::GatewayStatus>,
+) -> anyhow::Result<DashboardResponse> {
     let state = read_system_state(configs).unwrap_or_default();
     let interface_counters = read_interface_counters()?;
 
@@ -595,6 +604,7 @@ fn read_dashboard(configs: &[keystone_core::InterfaceConfig]) -> anyhow::Result<
     Ok(DashboardResponse {
         state,
         interface_counters,
+        gateways,
         timestamp_ms,
     })
 }
@@ -898,6 +908,51 @@ async fn delete_interface_config(
         success: true,
         message: format!("Interface configuration '{}' deleted", name),
         config_id: None,
+    }))
+}
+
+/// POST /interfaces/:name/renew - Ask networkd to renew dynamic settings.
+///
+/// The selected interface must be a real, enabled, Keystone-managed link.
+/// Execute fixed arguments directly, never through a shell.
+async fn renew_interface(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<RenewInterfaceResponse>, AppError> {
+    keystone_core::validation::interface_name(&name)
+        .map_err(|err| AppError(anyhow::anyhow!(err)))?;
+    let config = state.db.get_interface_config(&name).await?;
+    if !config.is_some_and(|config| config.enabled) {
+        return Err(AppError(anyhow::anyhow!(
+            "Interface is not managed or is disabled"
+        )));
+    }
+    if !Path::new("/sys/class/net").join(&name).exists() {
+        return Err(AppError(anyhow::anyhow!(
+            "Interface does not exist on this system"
+        )));
+    }
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        tokio::process::Command::new("/usr/bin/networkctl")
+            .arg("renew")
+            .arg(&name)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("networkctl renew timed out"))??;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError(anyhow::anyhow!(
+            "networkctl renew failed: {}",
+            error.trim()
+        )));
+    }
+    Ok(Json(RenewInterfaceResponse {
+        success: true,
+        message: format!("Renewal requested for {name}"),
     }))
 }
 
@@ -1414,5 +1469,6 @@ mod tests {
         assert!(!is_blocked_before_setup("/state"));
         assert!(is_blocked_before_setup("/dashboard"));
         assert!(is_blocked_before_setup("/apply-all"));
+        assert!(is_blocked_before_setup("/interfaces/enp3s0/renew"));
     }
 }

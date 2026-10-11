@@ -2337,11 +2337,48 @@ pub struct InterfaceCounters {
     pub tx_packets: u64,
 }
 
+/// Address family of a WAN default gateway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GatewayFamily {
+    Ipv4,
+    Ipv6,
+}
+
+/// One daemon-collected ICMP sample. None means a timeout or probe error.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GatewaySample {
+    pub timestamp_ms: u64,
+    pub latency_ms: Option<f64>,
+}
+
+/// Rolling statistics for one active or recently disappeared WAN gateway.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GatewayStatus {
+    pub interface: String,
+    pub family: GatewayFamily,
+    pub gateway: String,
+    pub active_route: bool,
+    pub latest_latency_ms: Option<f64>,
+    pub average_latency_ms: Option<f64>,
+    pub packet_loss_percent: f64,
+    pub history: Vec<GatewaySample>,
+}
+
+/// Result of asking networkd to renew an interface's dynamic configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenewInterfaceResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 /// Dashboard payload (polled by the web UI).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DashboardResponse {
     pub state: SystemState,
     pub interface_counters: Vec<InterfaceCounters>,
+    #[serde(default)]
+    pub gateways: Vec<GatewayStatus>,
     pub timestamp_ms: u64,
 }
 
@@ -3080,6 +3117,7 @@ mod tests {
                 rx_packets: 3,
                 tx_packets: 4,
             }],
+            gateways: vec![],
             timestamp_ms: 123,
         };
 

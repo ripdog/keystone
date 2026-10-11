@@ -24,6 +24,7 @@ pub fn InterfacesPage(
     let (loading, set_loading) = signal(true);
     let (saving, set_saving) = signal(false);
     let (applying, set_applying) = signal(false);
+    let (renewing, set_renewing) = signal::<Option<String>>(None);
     let (error, set_error) = signal::<Option<String>>(None);
     let (success, set_success) = signal::<Option<String>>(None);
 
@@ -196,6 +197,24 @@ pub fn InterfacesPage(
         });
     };
 
+    let renew_link = move |name: String| {
+        let Some(token) = auth_token.get_untracked() else {
+            return;
+        };
+        set_renewing.set(Some(name.clone()));
+        set_error.set(None);
+        set_success.set(None);
+        spawn_local(async move {
+            match api::renew_interface(&token, &name).await {
+                Ok(result) if result.success => set_success.set(Some(result.message)),
+                Ok(result) => set_error.set(Some(result.message)),
+                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
+                Err(e) => set_error.set(Some(format!("Failed to renew {name}: {e}"))),
+            }
+            set_renewing.set(None);
+        });
+    };
+
     view! {
         <div class="space-y-6">
             <div>
@@ -242,6 +261,8 @@ pub fn InterfacesPage(
                                 let name6 = iface.name.clone();
                                 let name7 = iface.name.clone();
                                 let name8 = iface.name.clone();
+                                let name9 = iface.name.clone();
+                                let name10 = iface.name.clone();
                                 let address = iface.address.clone().unwrap_or_else(|| "No IP".to_string());
 
                                 let is_managed = move || get_interface_role(&name3).is_some();
@@ -299,6 +320,16 @@ pub fn InterfacesPage(
                                                 </option>
                                             </select>
 
+                                            <button
+                                                class="bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+                                                disabled=move || renewing.get().is_some()
+                                                on:click=move |_| renew_link(name9.clone())
+                                                title="Ask systemd-networkd to renew DHCP and other dynamic configuration"
+                                            >
+                                                {move || if renewing.get().as_deref() == Some(name10.as_str()) {
+                                                    "Renewing..."
+                                                } else { "Renew" }}
+                                            </button>
                                             <A
                                                 href=move || format!("/interfaces/{}", name8)
                                                 attr:class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm"

@@ -89,6 +89,7 @@ fn is_keystone_related(name: &str) -> bool {
             | "nftables.service"
             | "dnsmasq.service"
             | "caddy.service"
+            | "sshd.service"
     )
 }
 

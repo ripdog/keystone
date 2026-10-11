@@ -2808,6 +2808,53 @@ impl std::str::FromStr for SystemdLoadState {
     }
 }
 
+/// Settings for Keystone's SSH listener. These do not govern administrator-owned
+/// OpenSSH configuration outside Keystone's own drop-in.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SshConfig {
+    pub enabled: bool,
+    pub port: u16,
+    pub ipv4: bool,
+    pub ipv6: bool,
+    /// Explicitly extend the listener to WAN interfaces; off by default.
+    pub wan_access: bool,
+    pub password_authentication: bool,
+    pub public_key_authentication: bool,
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            port: 22,
+            ipv4: true,
+            ipv6: true,
+            wan_access: false,
+            // Do not lock an existing system out of SSH on first adoption.
+            password_authentication: true,
+            public_key_authentication: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshStateResponse {
+    pub config: SshConfig,
+    pub managed: bool,
+    pub running: bool,
+    pub interface_addresses: Vec<String>,
+    pub listening_addresses: Vec<String>,
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshApplyResponse {
+    pub success: bool,
+    pub message: String,
+    /// Firewall changes require confirmation before the rollback deadline.
+    pub firewall_session_id: Option<String>,
+}
+
 /// A systemd unit summary for listing
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SystemdUnit {

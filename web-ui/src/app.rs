@@ -7,8 +7,8 @@ use crate::api;
 use crate::components::{AppLayout, LoginPage, clear_stored_token, get_stored_token};
 use crate::pages::{
     BridgesPage, CaddyPage, DashboardPage, DnsmasqPage, FirewallPage, InterfaceEditPage,
-    InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage, SettingsPage, StatusPage,
-    VlansPage, WizardPage,
+    InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage, SettingsPage, SshPage,
+    StatusPage, VlansPage, WizardPage,
 };
 use keystone_core::SystemState;
 use leptos::prelude::*;
@@ -186,6 +186,15 @@ pub fn App() -> impl IntoView {
                                 path=path!("/settings")
                                 view=move || view! {
                                     <SettingsPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
+                                path=path!("/ssh")
+                                view=move || view! {
+                                    <SshPage
                                         auth_token=auth_token
                                         on_unauthorized=on_unauthorized
                                     />

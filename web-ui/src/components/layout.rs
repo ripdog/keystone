@@ -169,6 +169,7 @@ pub fn AppLayout(
             <A href="/caddy" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Web Server"</A>
             <A href="/networkd-preview" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Networkd Preview"</A>
             <A href="/firewall" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Firewall"</A>
+            <A href="/ssh" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"SSH Server"</A>
             <A href="/services" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Services"</A>
             <A href="/settings" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200">"Settings"</A>
         }
@@ -257,6 +258,7 @@ pub fn AppLayout(
                                 <A href="/caddy" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Web Server"</A>
                                 <A href="/networkd-preview" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Networkd Preview"</A>
                                 <A href="/firewall" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Firewall"</A>
+                                <A href="/ssh" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"SSH Server"</A>
                                 <A href="/services" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Services"</A>
                                 <A href="/settings" attr:class="block w-full text-left px-3 py-2 rounded hover:bg-gray-700 text-gray-200" on:click=move |_| set_sidebar_open.set(false)>"Settings"</A>
                             </nav>

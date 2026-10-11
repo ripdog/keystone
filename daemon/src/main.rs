@@ -13,6 +13,7 @@ mod firewall;
 mod gateway;
 mod networkd;
 mod soho;
+mod ssh;
 mod status;
 mod systemd;
 mod wizard;
@@ -146,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize firewall manager (check for pending rollbacks from previous run)
     firewall_apply_manager.init().await?;
     info!("Firewall apply manager initialized");
+    ssh::start_reconciler(db.clone());
 
     let state = Arc::new(AppState::new(
         auth_manager,
@@ -202,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(caddy::routes::caddy_routes(caddy_state))
         // Merge systemd routes
         .merge(systemd::routes::systemd_routes())
+        .merge(ssh::routes())
         // Merge wizard routes
         .merge(wizard::wizard_routes())
         .layer(middleware::from_fn_with_state(

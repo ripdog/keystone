@@ -1,0 +1,279 @@
+//! A device-oriented WAN forwarding editor. It writes ordinary firewall rules.
+use crate::api;
+use keystone_core::{CreateSimplePortForwardRequest, LanDevice};
+use leptos::prelude::*;
+
+#[component]
+pub(super) fn SimpleForwardsTab(
+    token: Signal<String>,
+    reload_trigger: RwSignal<i32>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
+    let forwards = LocalResource::new(move || {
+        let token = token.get();
+        let _ = reload_trigger.get();
+        async move { api::fetch_simple_forwards(&token).await }
+    });
+    let devices = LocalResource::new(move || {
+        let token = token.get();
+        let _ = reload_trigger.get();
+        async move { api::fetch_lan_devices(&token).await }
+    });
+    let editing = RwSignal::new(false);
+    let manual = RwSignal::new(false);
+    let selected = RwSignal::new(String::new());
+    let ipv4 = RwSignal::new(String::new());
+    let ipv6 = RwSignal::new(String::new());
+    let tcp = RwSignal::new(true);
+    let udp = RwSignal::new(false);
+    let port = RwSignal::new(String::new());
+    let destination_port = RwSignal::new(String::new());
+    let saving = RwSignal::new(false);
+    let error = RwSignal::new(String::new());
+    let notice = RwSignal::new(String::new());
+
+    let save = move |_| {
+        if saving.get_untracked() {
+            return;
+        }
+        let external = port.get_untracked().parse::<u16>().ok().filter(|p| *p > 0);
+        let internal = if destination_port.get_untracked().is_empty() {
+            Some(None)
+        } else {
+            destination_port
+                .get_untracked()
+                .parse::<u16>()
+                .ok()
+                .filter(|p| *p > 0)
+                .map(Some)
+        };
+        let (Some(external), Some(internal)) = (external, internal) else {
+            error.set("Enter valid port numbers between 1 and 65535".into());
+            return;
+        };
+        if !tcp.get_untracked() && !udp.get_untracked() {
+            error.set("Select TCP and/or UDP".into());
+            return;
+        }
+        let addresses = if manual.get_untracked() {
+            (ipv4.get_untracked(), ipv6.get_untracked())
+        } else {
+            let device = devices
+                .get_untracked()
+                .and_then(|res| res.ok())
+                .and_then(|items| {
+                    items
+                        .into_iter()
+                        .find(|d| d.mac == selected.get_untracked())
+                });
+            match device {
+                Some(d) => (
+                    d.ipv4.first().cloned().unwrap_or_default(),
+                    d.ipv6.first().cloned().unwrap_or_default(),
+                ),
+                None => {
+                    error.set("Choose a LAN device, or use Advanced to enter addresses".into());
+                    return;
+                }
+            }
+        };
+        if addresses.0.is_empty() && addresses.1.is_empty() {
+            error.set("Enter at least one destination address".into());
+            return;
+        }
+        error.set(String::new());
+        saving.set(true);
+        let token = token.get_untracked();
+        let req = CreateSimplePortForwardRequest {
+            tcp: tcp.get_untracked(),
+            udp: udp.get_untracked(),
+            ipv4: (!addresses.0.trim().is_empty()).then_some(addresses.0),
+            ipv6: (!addresses.1.trim().is_empty()).then_some(addresses.1),
+            port: external,
+            destination_port: internal,
+        };
+        leptos::task::spawn_local(async move {
+            match api::create_simple_forward(&token, req).await {
+                Ok(()) => {
+                    editing.set(false);
+                    notice.set("Forward saved. Click Apply Changes above to activate it.".into());
+                    reload_trigger.update(|v| *v += 1);
+                }
+                Err(e) => {
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    }
+                    error.set(e);
+                }
+            }
+            saving.set(false);
+        });
+    };
+
+    view! {
+        <div class="space-y-4">
+            <div class="flex flex-wrap justify-between items-center gap-3">
+                <div>
+                    <h2 class="text-lg font-medium text-gray-200">"Port Forwards"</h2>
+                    <p class="text-gray-400 text-sm">"WAN access to LAN devices — IPv4 DNAT + firewall allow, or native IPv6 routing."</p>
+                </div>
+                <button class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"
+                    on:click=move |_| { error.set(String::new()); editing.set(!editing.get_untracked()); }>
+                    {move || if editing.get() { "Cancel" } else { "+ Add Port Forward" }}
+                </button>
+            </div>
+            {move || (!notice.get().is_empty()).then(|| view! { <p class="text-blue-300 text-sm">{notice.get()}</p> })}
+            {move || (!error.get().is_empty()).then(|| view! {
+                <div class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{error.get()}</div>
+            })}
+
+            {move || editing.get().then(|| view! {
+                <div class="bg-gray-700 p-4 rounded-lg space-y-4">
+                    <h3 class="font-medium text-gray-100">"New Port Forward"</h3>
+                    <div class="flex gap-5">
+                        <label class="flex gap-2 items-center text-gray-200">
+                            <input type="checkbox" prop:checked=move || tcp.get() on:change=move |ev| tcp.set(event_target_checked(&ev)) />"TCP"
+                        </label>
+                        <label class="flex gap-2 items-center text-gray-200">
+                            <input type="checkbox" prop:checked=move || udp.get() on:change=move |ev| udp.set(event_target_checked(&ev)) />"UDP"
+                        </label>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <label class="block text-sm text-gray-300">"Destination"</label>
+                        <label class="flex gap-2 items-center text-sm text-gray-300">
+                            <input type="checkbox" prop:checked=move || manual.get() on:change=move |ev| manual.set(event_target_checked(&ev)) />
+                            "Advanced: enter addresses manually"
+                        </label>
+                    </div>
+                    {move || if manual.get() {
+                        view! {
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-sm text-gray-400 mb-1">"IPv4 (optional)"</label>
+                                    <input type="text" placeholder="192.168.1.100" class="w-full px-3 py-2 bg-gray-600 text-gray-100 rounded border border-gray-500"
+                                        prop:value=move || ipv4.get() on:input=move |ev| ipv4.set(event_target_value(&ev)) />
+                                </div>
+                                <div>
+                                    <label class="block text-sm text-gray-400 mb-1">"IPv6 (optional)"</label>
+                                    <input type="text" placeholder="2001:db8::100" class="w-full px-3 py-2 bg-gray-600 text-gray-100 rounded border border-gray-500"
+                                        prop:value=move || ipv6.get() on:input=move |ev| ipv6.set(event_target_value(&ev)) />
+                                </div>
+                            </div>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <div>
+                                <select class="w-full px-3 py-2 bg-gray-600 text-gray-100 rounded border border-gray-500"
+                                    on:change=move |ev| selected.set(event_target_value(&ev))>
+                                    <option value="">"Select a discovered LAN device"</option>
+                                    {move || devices.get().map(|res| match res {
+                                        Ok(items) => view! {
+                                            <For each=move || items.clone() key=|d| d.mac.clone() children=move |d: LanDevice| {
+                                                let label = format!("{} ({})  IPv4: {}  IPv6: {}",
+                                                    d.hostname.as_deref().unwrap_or("Unknown"),
+                                                    d.mac, if d.ipv4.is_empty() { "—".into() } else { d.ipv4.join(", ") },
+                                                    if d.ipv6.is_empty() { "—".into() } else { d.ipv6.join(", ") });
+                                                view! { <option value=d.mac.clone()>{label}</option> }
+                                            } />
+                                        }.into_any(),
+                                        Err(e) => view! { <option disabled=true>{format!("Neighbour scan failed: {e}")}</option> }.into_any(),
+                                    })}
+                                </select>
+                                <p class="text-xs text-gray-400 mt-1">
+                                    "Devices found via LAN neighbours and DHCP leases. Only known IPv6 global/ULA addresses are offered; a device may have more than one address."
+                                </p>
+                                <button class="text-sm text-blue-300 hover:text-blue-200 mt-2" on:click=move |_| reload_trigger.update(|v| *v += 1)>
+                                    "Refresh device list"
+                                </button>
+                            </div>
+                        }.into_any()
+                    }}
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">"Port"</label>
+                            <input type="number" min="1" max="65535" placeholder="443"
+                                class="w-full px-3 py-2 bg-gray-600 text-gray-100 rounded border border-gray-500"
+                                prop:value=move || port.get() on:input=move |ev| port.set(event_target_value(&ev)) />
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">"Destination Port (optional; IPv4 remapping only)"</label>
+                            <input type="number" min="1" max="65535" placeholder="Same as port"
+                                class="w-full px-3 py-2 bg-gray-600 text-gray-100 rounded border border-gray-500"
+                                prop:value=move || destination_port.get() on:input=move |ev| destination_port.set(event_target_value(&ev)) />
+                        </div>
+                    </div>
+                    <button on:click=save disabled=move || saving.get()
+                        class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50">
+                        {move || if saving.get() { "Saving..." } else { "Save" }}
+                    </button>
+                </div>
+            })}
+
+            <Suspense fallback=|| view! { <p class="text-gray-400">"Loading forwards..."</p> }>
+                {move || forwards.get().map(|res| match res {
+                    Ok(items) => {
+                        let empty = items.is_empty();
+                        view! {
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-sm">
+                                    <thead class="text-gray-400 border-b border-gray-600">
+                                        <tr>
+                                            <th class="text-left px-2 py-2">"Rule"</th>
+                                            <th class="text-left px-2 py-2">"Family"</th>
+                                            <th class="text-left px-2 py-2">"Protocol"</th>
+                                            <th class="text-left px-2 py-2">"WAN port"</th>
+                                            <th class="text-left px-2 py-2">"Source"</th>
+                                            <th class="text-left px-2 py-2">"Destination"</th>
+                                            <th class="text-left px-2 py-2">"Enabled"</th>
+                                            <th class="text-right px-2 py-2">"Action"</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <For each=move || items.clone() key=|f| (f.rule_id, f.nat_id) children=move |f| {
+                                            let id = f.rule_id;
+                                            view! {
+                                                <tr class="border-b border-gray-700 text-gray-200">
+                                                    <td class="px-2 py-2">{f.name}</td>
+                                                    <td class="px-2 py-2">{if f.nat_id.is_some() { "IPv4" } else { "IPv6" }}</td>
+                                                    <td class="px-2 py-2">{f.protocol.to_string()}</td>
+                                                    <td class="px-2 py-2">{f.external_port}</td>
+                                                    <td class="px-2 py-2">{f.source_ip.unwrap_or_else(|| "Any".into())}</td>
+                                                    <td class="px-2 py-2">{format!("{}:{}", f.destination, f.destination_port)}</td>
+                                                    <td class="px-2 py-2">{if f.enabled { "Yes" } else { "No" }}</td>
+                                                    <td class="px-2 py-2 text-right">
+                                                        <button class="text-red-400 hover:text-red-300" on:click=move |_| {
+                                                            error.set(String::new());
+                                                            let token = token.get_untracked();
+                                                            leptos::task::spawn_local(async move {
+                                                                match api::delete_simple_forward(&token, id).await {
+                                                                    Ok(resp) if resp.success => {
+                                                                        notice.set("Forward removed. Click Apply Changes to activate.".into());
+                                                                        reload_trigger.update(|v| *v += 1);
+                                                                    }
+                                                                    Ok(resp) => error.set(resp.message),
+                                                                    Err(e) => {
+                                                                        if e.contains("Unauthorized") { on_unauthorized.run(()); }
+                                                                        error.set(e);
+                                                                    }
+                                                                }
+                                                            });
+                                                        }>"Delete"</button>
+                                                    </td>
+                                                </tr>
+                                            }
+                                        } />
+                                    </tbody>
+                                </table>
+                                {empty.then(|| view! { <p class="text-gray-400 text-center py-4">"No WAN-to-host forwards configured."</p> })}
+                            </div>
+                        }.into_any()
+                    }
+                    Err(e) => {
+                        if e.contains("Unauthorized") { on_unauthorized.run(()); }
+                        view! { <p class="text-red-400">{format!("Failed to load forwards: {e}")}</p> }.into_any()
+                    }
+                })}
+            </Suspense>
+        </div>
+    }
+}

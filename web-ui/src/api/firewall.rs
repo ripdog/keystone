@@ -1,10 +1,11 @@
 //! Firewall configuration API functions
 
 use keystone_core::{
-    DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest, FirewallConfirmResponse,
-    FirewallGlobalSettings, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
-    FirewallRollbackResponse, FirewallZone, FirewallZonesResponse, ForwardRule, InputRule,
-    PortForward, SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
+    CreateSimplePortForwardRequest, DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest,
+    FirewallConfirmResponse, FirewallGlobalSettings, FirewallGlobalSettingsResponse,
+    FirewallPreviewResponse, FirewallRollbackResponse, FirewallZone, FirewallZonesResponse,
+    ForwardRule, InputRule, LanDevice, LanDevicesResponse, SaveFirewallGlobalSettingsRequest,
+    SaveFirewallGlobalSettingsResponse, SimplePortForward, SimplePortForwardsResponse,
     ZoneForwardPolicy,
 };
 
@@ -95,20 +96,27 @@ pub async fn delete_forward_rule(token: &str, id: i64) -> Result<DeleteResponse,
 // Port Forwards
 // ============================================================================
 
-/// Fetch port forwards
-pub async fn fetch_port_forwards(token: &str) -> Result<Vec<PortForward>, String> {
-    get("/api/firewall/port-forwards", token).await
+/// Effective WAN exposures, reconstructed from allow and NAT rules.
+pub async fn fetch_simple_forwards(token: &str) -> Result<Vec<SimplePortForward>, String> {
+    let response: SimplePortForwardsResponse = get("/api/firewall/simple-forwards", token).await?;
+    Ok(response.forwards)
 }
 
-/// Save a port forward
-pub async fn save_port_forward(token: &str, pf: PortForward) -> Result<i64, String> {
-    let response: SaveIdResponse = post("/api/firewall/port-forwards", token, &pf).await?;
-    extract_id(response)
+pub async fn fetch_lan_devices(token: &str) -> Result<Vec<LanDevice>, String> {
+    let response: LanDevicesResponse = get("/api/firewall/lan-devices", token).await?;
+    Ok(response.devices)
 }
 
-/// Delete a port forward
-pub async fn delete_port_forward(token: &str, id: i64) -> Result<DeleteResponse, String> {
-    delete(&format!("/api/firewall/port-forwards/{}", id), token).await
+pub async fn create_simple_forward(
+    token: &str,
+    req: CreateSimplePortForwardRequest,
+) -> Result<(), String> {
+    let _: SimplePortForwardsResponse = post("/api/firewall/simple-forwards", token, &req).await?;
+    Ok(())
+}
+
+pub async fn delete_simple_forward(token: &str, rule_id: i64) -> Result<DeleteResponse, String> {
+    delete(&format!("/api/firewall/simple-forwards/{rule_id}"), token).await
 }
 
 // ============================================================================

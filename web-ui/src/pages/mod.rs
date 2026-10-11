@@ -11,6 +11,7 @@ mod networkd_preview;
 mod service_detail;
 mod services;
 mod settings;
+mod simple_forwards;
 mod status;
 mod vlans;
 mod wizard;

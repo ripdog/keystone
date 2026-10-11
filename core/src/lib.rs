@@ -2389,6 +2389,21 @@ pub struct InterfaceCounters {
     pub tx_packets: u64,
 }
 
+/// One daemon-collected interface transfer-rate sample.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TrafficSample {
+    pub timestamp_ms: u64,
+    pub rx_bytes_per_sec: u64,
+    pub tx_bytes_per_sec: u64,
+}
+
+/// One interface's rolling 60-second traffic history.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InterfaceTraffic {
+    pub name: String,
+    pub samples: Vec<TrafficSample>,
+}
+
 /// Address family of a WAN default gateway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2429,6 +2444,8 @@ pub struct RenewInterfaceResponse {
 pub struct DashboardResponse {
     pub state: SystemState,
     pub interface_counters: Vec<InterfaceCounters>,
+    #[serde(default)]
+    pub traffic: Vec<InterfaceTraffic>,
     #[serde(default)]
     pub gateways: Vec<GatewayStatus>,
     pub timestamp_ms: u64,
@@ -3217,6 +3234,14 @@ mod tests {
                 tx_packets: 4,
             }],
             gateways: vec![],
+            traffic: vec![InterfaceTraffic {
+                name: "eth0".into(),
+                samples: vec![TrafficSample {
+                    timestamp_ms: 100,
+                    rx_bytes_per_sec: 20,
+                    tx_bytes_per_sec: 40,
+                }],
+            }],
             timestamp_ms: 123,
         };
 
@@ -3224,6 +3249,7 @@ mod tests {
         let deserialized: DashboardResponse = serde_json::from_str(&json).unwrap();
 
         assert_eq!(dashboard.timestamp_ms, deserialized.timestamp_ms);
+        assert_eq!(dashboard.traffic, deserialized.traffic);
         assert_eq!(
             dashboard.interface_counters,
             deserialized.interface_counters

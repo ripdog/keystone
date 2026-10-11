@@ -16,6 +16,7 @@ mod soho;
 mod ssh;
 mod status;
 mod systemd;
+mod traffic;
 mod wizard;
 
 use auth::AuthManager;
@@ -55,6 +56,7 @@ struct AppState {
     db: Database,
     firewall_manager: Arc<firewall::FirewallApplyManager>,
     gateways: gateway::GatewaySnapshot,
+    traffic: traffic::TrafficSnapshot,
     login_slots: Arc<tokio::sync::Semaphore>,
     login_attempts:
         Arc<tokio::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u32)>>>,
@@ -69,6 +71,7 @@ impl AppState {
         Self {
             auth,
             gateways: gateway::start(db.clone()),
+            traffic: traffic::start(),
             db,
             firewall_manager,
             login_slots: Arc::new(tokio::sync::Semaphore::new(3)),
@@ -589,12 +592,16 @@ async fn get_dashboard(
 
     let configs = state.db.get_interface_configs().await?;
     let gateways = state.gateways.read().await.clone();
-    Ok(Json(read_dashboard(&configs, gateways).unwrap_or_default()))
+    let traffic = state.traffic.read().await.clone();
+    Ok(Json(
+        read_dashboard(&configs, gateways, traffic).unwrap_or_default(),
+    ))
 }
 
 fn read_dashboard(
     configs: &[keystone_core::InterfaceConfig],
     gateways: Vec<keystone_core::GatewayStatus>,
+    traffic: Vec<keystone_core::InterfaceTraffic>,
 ) -> anyhow::Result<DashboardResponse> {
     let state = read_system_state(configs).unwrap_or_default();
     let interface_counters = read_interface_counters()?;
@@ -608,6 +615,7 @@ fn read_dashboard(
         state,
         interface_counters,
         gateways,
+        traffic,
         timestamp_ms,
     })
 }

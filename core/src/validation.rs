@@ -3,6 +3,15 @@
 use serde::Serialize;
 use serde_json::Value;
 
+/// True when `value` can sit on one line of a generated configuration file:
+/// it has no control characters (newlines, NUL, escapes, and so on) and no
+/// Unicode line or paragraph separators.
+pub fn is_single_line(value: &str) -> bool {
+    !value
+        .chars()
+        .any(|c| c.is_control() || c == '\u{2028}' || c == '\u{2029}')
+}
+
 /// Reject ASCII/Unicode control characters in any string that would become a
 /// networkd/dnsmasq configuration value. In particular, a newline must never
 /// introduce a second service directive.
@@ -10,10 +19,7 @@ pub fn single_line_fields<T: Serialize>(config: &T) -> Result<(), String> {
     fn inspect(value: &Value, location: &str) -> Result<(), String> {
         match value {
             Value::String(s) => {
-                if s.chars().any(char::is_control)
-                    || s.contains('\u{2028}')
-                    || s.contains('\u{2029}')
-                {
+                if !is_single_line(s) {
                     return Err(format!("{location} contains disallowed control characters"));
                 }
                 if s.len() > 4096 {

@@ -40,6 +40,13 @@ pub async fn load_caddy_config(pool: &SqlitePool) -> Result<CaddyConfig> {
 
 /// Save the Caddy configuration to the database
 pub async fn save_caddy_config(pool: &SqlitePool, config: &CaddyConfig) -> Result<()> {
+    // Checked even while disabled: the stored values are what a later enable
+    // or a restored snapshot will write into the Caddyfile.
+    anyhow::ensure!(
+        keystone_core::validation::is_single_line(&config.server_address)
+            && keystone_core::validation::is_single_line(&config.bind_interface),
+        "Caddy server address and bind interface must be single-line values"
+    );
     if config.enabled {
         super::apply::validate_config(config)?;
     }
@@ -78,4 +85,39 @@ pub async fn update_validation_status(pool: &SqlitePool, status: &str) -> Result
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+
+    #[tokio::test]
+    async fn newline_in_server_address_is_refused_even_when_disabled() {
+        let db = Database::new_in_memory().await.unwrap();
+        for enabled in [false, true] {
+            let config = CaddyConfig {
+                enabled,
+                server_address: "router.example\nsite.example {".into(),
+                ..Default::default()
+            };
+            let error = save_caddy_config(db.pool(), &config).await.unwrap_err();
+            assert!(error.to_string().contains("single-line"), "{error:#}");
+        }
+        let stored = load_caddy_config(db.pool()).await.unwrap();
+        assert!(
+            stored.server_address.is_empty(),
+            "rejected value was stored"
+        );
+    }
+
+    #[tokio::test]
+    async fn newline_in_bind_interface_is_refused() {
+        let db = Database::new_in_memory().await.unwrap();
+        let config = CaddyConfig {
+            bind_interface: "eth1\n".into(),
+            ..Default::default()
+        };
+        assert!(save_caddy_config(db.pool(), &config).await.is_err());
+    }
 }

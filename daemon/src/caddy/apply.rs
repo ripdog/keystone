@@ -57,7 +57,13 @@ fn validate_ports(config: &CaddyConfig, ssh_port: Option<u16>) -> Result<()> {
 
 /// Validate the subset of Caddy configuration that Keystone safely supports.
 pub fn validate_config(config: &CaddyConfig) -> Result<()> {
-    validate_ports(config, crate::ssh::enabled_port())?;
+    validate_settings(config, crate::ssh::enabled_port())
+}
+
+/// [`validate_config`] with the SSH port supplied by the caller instead of read
+/// from the system, so the same checks can run on stored configuration.
+pub fn validate_settings(config: &CaddyConfig, ssh_port: Option<u16>) -> Result<()> {
+    validate_ports(config, ssh_port)?;
     keystone_core::validation::hostname_or_ip(&config.server_address)
         .map_err(anyhow::Error::msg)?;
     keystone_core::validation::single_line_fields(&config.server_address)

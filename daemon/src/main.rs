@@ -6,6 +6,7 @@
 mod apply;
 mod auth;
 mod caddy;
+mod changes;
 mod config;
 mod config_validation;
 mod consistency;
@@ -208,6 +209,13 @@ async fn main() -> anyhow::Result<()> {
         firewall_apply_manager.clone(),
     ));
 
+    // Pending-change and snapshot routes share the firewall's pending state
+    // so they can refuse to run while an apply awaits confirmation.
+    let changes_state = changes::ChangesState {
+        db: db.clone(),
+        firewall: firewall_apply_manager.clone(),
+    };
+
     // Create firewall state for firewall routes
     let firewall_state = firewall::routes::FirewallState {
         db: db.clone(),
@@ -261,6 +269,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(dnsmasq::routes::dnsmasq_routes(dnsmasq_state))
         // Merge Caddy routes
         .merge(caddy::routes::caddy_routes(caddy_state))
+        // Merge pending-change and snapshot routes
+        .merge(changes::changes_routes(changes_state))
         // Merge systemd routes
         .merge(systemd::routes::systemd_routes())
         .merge(ssh::routes())

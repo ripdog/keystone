@@ -23,5 +23,6 @@ mod leases;
 pub mod routes;
 
 pub use apply::*;
+pub use config::DNSMASQ_CONFIG_PATH;
 pub use db::*;
 pub use leases::*;

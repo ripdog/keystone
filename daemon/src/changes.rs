@@ -1,0 +1,943 @@
+//! Pending configuration changes, discarding them, and the snapshot API.
+//!
+//! Configuration edits are saved to the database at once, and an apply turns
+//! the database into system files. A change is therefore pending when the files
+//! generated from the live database differ from the files generated from the
+//! newest applied snapshot of the same component.
+//!
+//! Both sides are generated with the same functions the apply uses, so the diff
+//! shows what the next apply would write.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
+use anyhow::{Context, Result, bail, ensure};
+use axum::body::{Body, Bytes};
+use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::{StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Extension, Json, Router};
+use keystone_core::api::{CreateSnapshot, DiscardChanges, Endpoint, Req, Res, RestoreSnapshot};
+use keystone_core::changes::{
+    Component, ComponentBaselines, ComponentDiff, DiscardChangesResponse, FileChangeStatus,
+    FileDiff, PendingChangesResponse, RestoreSnapshotResponse, SnapshotListResponse,
+    SnapshotResponse, SnapshotSummary,
+};
+use similar::TextDiff;
+use tracing::info;
+
+use crate::db::Database;
+use crate::firewall::FirewallApplyManager;
+use crate::snapshots::{self, NewSnapshot, SnapshotInfo, SnapshotKind, SnapshotStatus};
+use crate::{Actor, AppError, networkd_preview_files};
+
+/// Generated files of one component, keyed by the path they are written to.
+type Generated = BTreeMap<String, String>;
+
+/// Label for the nftables ruleset. The firewall is loaded with `nft` and has no
+/// file on disk, so the ruleset is compared under this name.
+const FIREWALL_RULESET_LABEL: &str = "keystone.nft";
+
+/// Longest note accepted on a manual snapshot.
+const MAX_NOTE_BYTES: usize = 500;
+
+#[derive(Clone)]
+pub struct ChangesState {
+    pub db: Database,
+    pub firewall: Arc<FirewallApplyManager>,
+}
+
+// ============================================================================
+// Generated configuration
+// ============================================================================
+
+/// The files `component` would write for the configuration in `db`.
+async fn generate(component: Component, db: &Database) -> Result<Generated> {
+    Ok(match component {
+        Component::Networkd => networkd_preview_files(db)
+            .await?
+            .into_iter()
+            .map(|file| (file.filename, file.content))
+            .collect(),
+        Component::Firewall => BTreeMap::from([(
+            FIREWALL_RULESET_LABEL.to_string(),
+            crate::firewall::generate_preview(db).await?,
+        )]),
+        Component::Dnsmasq => BTreeMap::from([(
+            crate::dnsmasq::DNSMASQ_CONFIG_PATH.to_string(),
+            crate::dnsmasq::preview_dnsmasq_config(db.pool()).await?,
+        )]),
+        Component::Caddy => BTreeMap::from([(
+            crate::caddy::CADDYFILE_PATH.to_string(),
+            crate::caddy::preview_caddyfile(db.pool()).await?,
+        )]),
+    })
+}
+
+/// Generate for one side of a comparison. Errors are kept as text so that they
+/// can be reported per component.
+async fn generate_side(component: Component, db: &Database) -> Result<Generated, String> {
+    generate(component, db)
+        .await
+        .map_err(|error| format!("{error:#}"))
+}
+
+/// Build the diff of one component. `old` is the baseline side and `new` the
+/// side being compared against it. Labels name each side in the unified diff.
+fn component_diff(
+    component: Component,
+    old: Result<Generated, String>,
+    new: Result<Generated, String>,
+    old_label: &str,
+    new_label: &str,
+) -> ComponentDiff {
+    match (old, new) {
+        (Ok(old), Ok(new)) => {
+            let files = compare_files(&old, &new, old_label, new_label);
+            ComponentDiff {
+                component,
+                changed: !files.is_empty(),
+                files,
+                error: None,
+            }
+        }
+        (old, new) => {
+            // A side that cannot be generated is a difference, unless both
+            // sides fail the same way and nothing else is known.
+            let message = match (&old, &new) {
+                (Err(old), Err(new)) if old == new => old.clone(),
+                (old, new) => [
+                    old.as_ref().err().map(|e| format!("{old_label}: {e}")),
+                    new.as_ref().err().map(|e| format!("{new_label}: {e}")),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("; "),
+            };
+            let changed = match (&old, &new) {
+                (Err(old), Err(new)) => old != new,
+                _ => true,
+            };
+            ComponentDiff {
+                component,
+                changed,
+                files: Vec::new(),
+                error: Some(message),
+            }
+        }
+    }
+}
+
+fn compare_files(
+    old: &Generated,
+    new: &Generated,
+    old_label: &str,
+    new_label: &str,
+) -> Vec<FileDiff> {
+    let mut files = Vec::new();
+    for (path, new_content) in new {
+        match old.get(path) {
+            None => files.push(file_diff(
+                path,
+                FileChangeStatus::Added,
+                "",
+                new_content,
+                old_label,
+                new_label,
+            )),
+            Some(old_content) if old_content != new_content => files.push(file_diff(
+                path,
+                FileChangeStatus::Modified,
+                old_content,
+                new_content,
+                old_label,
+                new_label,
+            )),
+            Some(_) => {}
+        }
+    }
+    for (path, old_content) in old {
+        if !new.contains_key(path) {
+            files.push(file_diff(
+                path,
+                FileChangeStatus::Removed,
+                old_content,
+                "",
+                old_label,
+                new_label,
+            ));
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files
+}
+
+fn file_diff(
+    path: &str,
+    status: FileChangeStatus,
+    old: &str,
+    new: &str,
+    old_label: &str,
+    new_label: &str,
+) -> FileDiff {
+    let unified_diff = TextDiff::from_lines(old, new)
+        .unified_diff()
+        .context_radius(3)
+        .header(
+            &format!("{old_label}/{path}"),
+            &format!("{new_label}/{path}"),
+        )
+        .to_string();
+    FileDiff {
+        path: path.to_string(),
+        status,
+        unified_diff,
+    }
+}
+
+// ============================================================================
+// Pending changes and snapshot diffs
+// ============================================================================
+
+/// Compare the live configuration with the newest applied snapshot of each
+/// component. A component with no applied snapshot is compared with nothing,
+/// so every file it generates counts as added.
+pub(crate) async fn pending_changes(db: &Database) -> Result<PendingChangesResponse> {
+    let mut opened: HashMap<i64, Result<snapshots::OpenedSnapshot, String>> = HashMap::new();
+    let mut baselines = ComponentBaselines::default();
+    let mut components = Vec::with_capacity(Component::ALL.len());
+
+    for component in Component::ALL {
+        let baseline = snapshots::latest_applied_for(db, component)
+            .await?
+            .map(|snapshot| snapshot.id);
+        baselines.set(component, baseline);
+
+        let old = match baseline {
+            None => Ok(Generated::new()),
+            Some(id) => baseline_generated(&mut opened, db, id, component).await,
+        };
+        let new = generate_side(component, db).await;
+        components.push(component_diff(component, old, new, "applied", "live"));
+    }
+
+    Ok(PendingChangesResponse {
+        components,
+        baseline_ids: baselines,
+    })
+}
+
+/// Generate `component` from snapshot `id`. Each snapshot is opened once per
+/// request, however many components use it.
+async fn baseline_generated(
+    opened: &mut HashMap<i64, Result<snapshots::OpenedSnapshot, String>>,
+    db: &Database,
+    id: i64,
+    component: Component,
+) -> Result<Generated, String> {
+    if !opened.contains_key(&id) {
+        let result = snapshots::open_snapshot(db, id)
+            .await
+            .map_err(|error| format!("{error:#}"));
+        opened.insert(id, result);
+    }
+    match opened.get(&id).expect("snapshot was opened above") {
+        Ok(snapshot) => generate_side(component, snapshot.database()).await,
+        Err(error) => Err(format!("snapshot {id} could not be opened: {error}")),
+    }
+}
+
+/// What restoring snapshot `id` would change in the live configuration. The
+/// live configuration is the old side and the snapshot the new side.
+pub(crate) async fn snapshot_diff(db: &Database, id: i64) -> Result<PendingChangesResponse> {
+    let snapshot = snapshots::open_snapshot(db, id).await?;
+    let label = format!("snapshot-{id}");
+    let mut components = Vec::with_capacity(Component::ALL.len());
+    for component in Component::ALL {
+        let old = generate_side(component, db).await;
+        let new = generate_side(component, snapshot.database()).await;
+        components.push(component_diff(component, old, new, "live", &label));
+    }
+
+    let mut baselines = ComponentBaselines::default();
+    for component in Component::ALL {
+        baselines.set(component, Some(id));
+    }
+    Ok(PendingChangesResponse {
+        components,
+        baseline_ids: baselines,
+    })
+}
+
+// ============================================================================
+// Discard and restore
+// ============================================================================
+
+/// Normalise a requested component list. Omitting it selects every component.
+fn selected_components(requested: Option<Vec<Component>>) -> Result<Vec<Component>> {
+    let Some(mut components) = requested else {
+        return Ok(Component::ALL.to_vec());
+    };
+    ensure!(!components.is_empty(), "choose at least one component");
+    components.sort();
+    components.dedup();
+    Ok(components)
+}
+
+/// Revert the selected components (default: every changed one) to their newest
+/// applied snapshot. Nothing is applied to the system. Each affected snapshot
+/// is read once, and the whole change is one transaction.
+pub(crate) async fn discard_changes(
+    db: &Database,
+    requested: Option<Vec<Component>>,
+    actor: Option<&str>,
+) -> Result<DiscardChangesResponse> {
+    let components = match requested {
+        Some(list) => selected_components(Some(list))?,
+        None => pending_changes(db)
+            .await?
+            .components
+            .iter()
+            .filter(|diff| diff.changed)
+            .map(|diff| diff.component)
+            .collect(),
+    };
+    if components.is_empty() {
+        return Ok(DiscardChangesResponse {
+            success: true,
+            message: "There are no pending changes to discard.".to_string(),
+            pre_restore_snapshot_id: None,
+            components,
+        });
+    }
+
+    let mut by_snapshot: BTreeMap<i64, Vec<Component>> = BTreeMap::new();
+    for component in &components {
+        let baseline = snapshots::latest_applied_for(db, *component)
+            .await?
+            .with_context(|| {
+                format!(
+                    "{component} has no applied configuration to discard back to; nothing was changed"
+                )
+            })?;
+        by_snapshot.entry(baseline.id).or_default().push(*component);
+    }
+    let plan: Vec<(i64, Vec<Component>)> = by_snapshot.into_iter().collect();
+    let outcome = snapshots::restore_components(db, &plan, actor).await?;
+
+    Ok(DiscardChangesResponse {
+        success: true,
+        message: format!(
+            "Discarded pending changes for {}. The live configuration matches the last applied state; nothing was applied to the system. The replaced configuration was saved as snapshot {}.",
+            join_components(&outcome.components),
+            outcome.pre_restore.id
+        ),
+        pre_restore_snapshot_id: Some(outcome.pre_restore.id),
+        components: outcome.components,
+    })
+}
+
+fn join_components(components: &[Component]) -> String {
+    components
+        .iter()
+        .map(|component| component.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Fails when a change is awaiting confirmation or configuration changes are
+/// locked. Discarding or restoring then would race with the pending apply.
+async fn ensure_changes_allowed(state: &ChangesState) -> Result<()> {
+    if state
+        .db
+        .get_global_settings()
+        .await?
+        .config_changes_disabled
+    {
+        bail!(
+            "Configuration changes are disabled. Unlock in Settings to change the configuration."
+        );
+    }
+    if state.firewall.status().await.pending_confirmation {
+        bail!(
+            "A configuration change is awaiting confirmation. Confirm or roll it back before discarding or restoring."
+        );
+    }
+    Ok(())
+}
+
+// ============================================================================
+// Snapshot listing, creation and export
+// ============================================================================
+
+async fn summarize(db: &Database, info: &SnapshotInfo) -> SnapshotSummary {
+    // A missing file reports zero bytes rather than failing the whole listing.
+    let size_bytes = match snapshots::snapshot_path(db, info.id).await {
+        Ok(path) => std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
+        Err(_) => 0,
+    };
+    SnapshotSummary {
+        id: info.id,
+        created_at: info.created_at,
+        kind: info.kind,
+        status: info.status,
+        actor: info.actor.clone(),
+        note: info.note.clone(),
+        components: info.components.clone(),
+        size_bytes,
+    }
+}
+
+/// `YYYYMMDD` in UTC, for export file names.
+fn utc_date(unix_secs: i64) -> String {
+    // Civil-from-days (Howard Hinnant's algorithm), with days since 1970-01-01.
+    let days = unix_secs.div_euclid(86_400) + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}{month:02}{day:02}")
+}
+
+// ============================================================================
+// HTTP routes
+// ============================================================================
+
+pub(crate) fn changes_routes(state: ChangesState) -> Router<Arc<crate::AppState>> {
+    Router::new()
+        .route("/changes/pending", get(get_pending_changes))
+        .route(DiscardChanges::PATH, post(discard_changes_route))
+        .route("/snapshots", get(list_snapshots_route))
+        .route(CreateSnapshot::PATH, post(create_snapshot_route))
+        .route(
+            "/snapshots/import",
+            post(import_snapshot_route).layer(DefaultBodyLimit::max(snapshots::MAX_IMPORT_BYTES)),
+        )
+        .route("/snapshots/{id}/diff", get(snapshot_diff_route))
+        .route("/snapshots/{id}/export", get(export_snapshot_route))
+        .route(RestoreSnapshot::PATH, post(restore_snapshot_route))
+        .with_state(state)
+}
+
+fn actor_name(actor: &Option<Extension<Actor>>) -> Option<&str> {
+    actor.as_ref().map(|Extension(actor)| actor.0.as_str())
+}
+
+async fn get_pending_changes(
+    State(state): State<ChangesState>,
+) -> Result<Json<PendingChangesResponse>, AppError> {
+    info!("Computing pending configuration changes");
+    Ok(Json(pending_changes(&state.db).await?))
+}
+
+async fn discard_changes_route(
+    State(state): State<ChangesState>,
+    actor: Option<Extension<Actor>>,
+    Json(request): Json<Req<DiscardChanges>>,
+) -> Result<Json<Res<DiscardChanges>>, AppError> {
+    info!("Discarding pending configuration changes");
+    ensure_changes_allowed(&state).await?;
+    let response = discard_changes(&state.db, request.components, actor_name(&actor)).await?;
+    Ok(Json(response))
+}
+
+async fn list_snapshots_route(
+    State(state): State<ChangesState>,
+) -> Result<Json<SnapshotListResponse>, AppError> {
+    let infos = snapshots::list_snapshots(&state.db).await?;
+    let mut summaries = Vec::with_capacity(infos.len());
+    for info in &infos {
+        summaries.push(summarize(&state.db, info).await);
+    }
+    Ok(Json(SnapshotListResponse {
+        snapshots: summaries,
+    }))
+}
+
+async fn create_snapshot_route(
+    State(state): State<ChangesState>,
+    actor: Option<Extension<Actor>>,
+    Json(request): Json<Req<CreateSnapshot>>,
+) -> Result<Json<Res<CreateSnapshot>>, AppError> {
+    let note = request
+        .note
+        .map(|note| note.trim().to_string())
+        .filter(|note| !note.is_empty());
+    if note
+        .as_ref()
+        .is_some_and(|note| note.len() > MAX_NOTE_BYTES)
+    {
+        return Err(anyhow::anyhow!("note must be at most {MAX_NOTE_BYTES} bytes").into());
+    }
+    // A manual snapshot may capture unapplied edits, so it has no components
+    // and never becomes an applied baseline.
+    let info = snapshots::create_snapshot(
+        &state.db,
+        NewSnapshot {
+            kind: SnapshotKind::Manual,
+            status: SnapshotStatus::Active,
+            session_id: None,
+            components: &[],
+            actor: actor_name(&actor),
+            note: note.as_deref(),
+        },
+    )
+    .await?;
+    Ok(Json(SnapshotResponse {
+        success: true,
+        message: format!(
+            "Saved snapshot {} of the current configuration. It is not an applied baseline.",
+            info.id
+        ),
+        snapshot: summarize(&state.db, &info).await,
+    }))
+}
+
+async fn import_snapshot_route(
+    State(state): State<ChangesState>,
+    actor: Option<Extension<Actor>>,
+    body: Bytes,
+) -> Result<Json<SnapshotResponse>, AppError> {
+    info!("Importing configuration snapshot ({} bytes)", body.len());
+    let info = snapshots::import_snapshot(&state.db, &body, actor_name(&actor)).await?;
+    Ok(Json(SnapshotResponse {
+        success: true,
+        message: format!(
+            "Imported snapshot {}. It is stored for restore only and is not an applied configuration.",
+            info.id
+        ),
+        snapshot: summarize(&state.db, &info).await,
+    }))
+}
+
+async fn snapshot_diff_route(
+    State(state): State<ChangesState>,
+    Path(id): Path<i64>,
+) -> Result<Json<PendingChangesResponse>, AppError> {
+    Ok(Json(snapshot_diff(&state.db, id).await?))
+}
+
+async fn restore_snapshot_route(
+    State(state): State<ChangesState>,
+    actor: Option<Extension<Actor>>,
+    Path(id): Path<i64>,
+    Json(request): Json<Req<RestoreSnapshot>>,
+) -> Result<Json<Res<RestoreSnapshot>>, AppError> {
+    info!("Restoring configuration snapshot {id}");
+    ensure_changes_allowed(&state).await?;
+    let components = selected_components(request.components)?;
+    let outcome =
+        snapshots::restore_components(&state.db, &[(id, components)], actor_name(&actor)).await?;
+    Ok(Json(RestoreSnapshotResponse {
+        success: true,
+        message: format!(
+            "Restored {} from snapshot {id} into the live configuration. The restored configuration is pending until it is applied. The replaced configuration was saved as snapshot {}.",
+            join_components(&outcome.components),
+            outcome.pre_restore.id
+        ),
+        pre_restore_snapshot_id: Some(outcome.pre_restore.id),
+        components: outcome.components,
+    }))
+}
+
+async fn export_snapshot_route(
+    State(state): State<ChangesState>,
+    Path(id): Path<i64>,
+) -> Result<Response, AppError> {
+    let info = snapshots::get_snapshot(&state.db, id)
+        .await?
+        .with_context(|| format!("snapshot {id} does not exist"))?;
+    let path = snapshots::snapshot_path(&state.db, id).await?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .with_context(|| format!("snapshot {id} has no file on disk"))?;
+    let filename = format!("keystone-config-{id}-{}.db", utc_date(info.created_at));
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/vnd.sqlite3")
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(bytes))
+        .context("Failed to build the export response")?;
+    Ok(response.into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AppState;
+    use crate::auth::AuthManager;
+    use crate::db::Database;
+    use crate::networkd::NetworkdApplyManager;
+    use crate::snapshots::tests::{Scratch, open};
+    use axum::http::Request;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    fn generated(files: &[(&str, &str)]) -> Generated {
+        files
+            .iter()
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn compare_reports_added_modified_and_removed_files() {
+        let old = generated(&[("a.conf", "one\n"), ("gone.conf", "x\n")]);
+        let new = generated(&[("a.conf", "two\n"), ("new.conf", "y\n")]);
+        let files = compare_files(&old, &new, "applied", "live");
+
+        let summary: Vec<(&str, FileChangeStatus)> = files
+            .iter()
+            .map(|file| (file.path.as_str(), file.status))
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                ("a.conf", FileChangeStatus::Modified),
+                ("gone.conf", FileChangeStatus::Removed),
+                ("new.conf", FileChangeStatus::Added),
+            ]
+        );
+        assert!(files[0].unified_diff.contains("-one"));
+        assert!(files[0].unified_diff.contains("+two"));
+        assert!(files[0].unified_diff.contains("applied/a.conf"));
+        assert!(compare_files(&new, &new, "applied", "live").is_empty());
+    }
+
+    #[test]
+    fn component_diff_treats_unreadable_sides_as_changes() {
+        let same = Generated::new();
+        let both_failing_alike = component_diff(
+            Component::Caddy,
+            Err("bad bind".into()),
+            Err("bad bind".into()),
+            "applied",
+            "live",
+        );
+        assert!(!both_failing_alike.changed);
+        assert_eq!(both_failing_alike.error.as_deref(), Some("bad bind"));
+
+        let live_only_fails = component_diff(
+            Component::Caddy,
+            Ok(same.clone()),
+            Err("bad bind".into()),
+            "applied",
+            "live",
+        );
+        assert!(live_only_fails.changed);
+        assert_eq!(live_only_fails.error.as_deref(), Some("live: bad bind"));
+    }
+
+    #[test]
+    fn export_dates_are_utc_calendar_dates() {
+        assert_eq!(utc_date(0), "19700101");
+        assert_eq!(utc_date(1_700_000_000), "20231114");
+        // Leap day of a century year divisible by 400.
+        assert_eq!(utc_date(951_782_400), "20000229");
+        assert_eq!(utc_date(1_709_251_199), "20240229");
+    }
+
+    #[test]
+    fn selection_defaults_to_every_component_and_rejects_empty_lists() {
+        assert_eq!(selected_components(None).unwrap(), Component::ALL.to_vec());
+        assert!(selected_components(Some(vec![])).is_err());
+        assert_eq!(
+            selected_components(Some(vec![Component::Caddy, Component::Caddy])).unwrap(),
+            vec![Component::Caddy]
+        );
+    }
+
+    /// Database with a dnsmasq baseline and no other edits.
+    async fn applied_baseline(scratch: &Scratch) -> Database {
+        let db = open(scratch).await;
+        snapshots::record_applied(&db, Some("admin"), None, &Component::ALL, "test apply").await;
+        db
+    }
+
+    async fn set_dnsmasq_cache_size(db: &Database, size: i64) {
+        sqlx::query("UPDATE dnsmasq_config SET cache_size = ? WHERE id = 1")
+            .bind(size)
+            .execute(db.pool())
+            .await
+            .unwrap();
+    }
+
+    fn changed(response: &PendingChangesResponse, component: Component) -> bool {
+        response
+            .components
+            .iter()
+            .find(|diff| diff.component == component)
+            .unwrap()
+            .changed
+    }
+
+    #[tokio::test]
+    async fn a_dnsmasq_edit_is_pending_only_for_dnsmasq_until_discarded() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+
+        let clean = pending_changes(&db).await.unwrap();
+        for component in Component::ALL {
+            assert!(
+                !changed(&clean, component),
+                "{component} changed with no edits: {clean:?}"
+            );
+        }
+        assert!(clean.baseline_ids.get(Component::Dnsmasq).is_some());
+
+        set_dnsmasq_cache_size(&db, 4321).await;
+        let pending = pending_changes(&db).await.unwrap();
+        assert!(changed(&pending, Component::Dnsmasq));
+        assert!(!changed(&pending, Component::Firewall));
+        assert!(!changed(&pending, Component::Networkd));
+        let dnsmasq = pending
+            .components
+            .iter()
+            .find(|diff| diff.component == Component::Dnsmasq)
+            .unwrap();
+        assert_eq!(dnsmasq.files.len(), 1);
+        assert_eq!(dnsmasq.files[0].status, FileChangeStatus::Modified);
+        assert!(dnsmasq.files[0].unified_diff.contains("+cache-size=4321"));
+
+        let outcome = discard_changes(&db, Some(vec![Component::Dnsmasq]), Some("admin"))
+            .await
+            .unwrap();
+        assert_eq!(outcome.components, vec![Component::Dnsmasq]);
+        assert!(outcome.pre_restore_snapshot_id.is_some());
+
+        let after = pending_changes(&db).await.unwrap();
+        assert!(!changed(&after, Component::Dnsmasq));
+    }
+
+    #[tokio::test]
+    async fn discard_without_components_reverts_only_changed_components() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        set_dnsmasq_cache_size(&db, 7).await;
+
+        let outcome = discard_changes(&db, None, None).await.unwrap();
+        assert_eq!(outcome.components, vec![Component::Dnsmasq]);
+        assert!(!changed(
+            &pending_changes(&db).await.unwrap(),
+            Component::Dnsmasq
+        ));
+
+        let nothing = discard_changes(&db, None, None).await.unwrap();
+        assert!(nothing.pre_restore_snapshot_id.is_none());
+        assert!(nothing.components.is_empty());
+    }
+
+    #[tokio::test]
+    async fn discard_refuses_a_component_that_was_never_applied() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        set_dnsmasq_cache_size(&db, 7).await;
+        let error = discard_changes(&db, Some(vec![Component::Dnsmasq]), None)
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("no applied configuration"),
+            "{error:#}"
+        );
+        assert_eq!(snapshots::list_snapshots(&db).await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn snapshot_diff_shows_what_restoring_would_change() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let baseline = snapshots::latest_applied_for(&db, Component::Dnsmasq)
+            .await
+            .unwrap()
+            .unwrap();
+        set_dnsmasq_cache_size(&db, 99).await;
+
+        let diff = snapshot_diff(&db, baseline.id).await.unwrap();
+        assert!(changed(&diff, Component::Dnsmasq));
+        assert!(!changed(&diff, Component::Caddy));
+        assert_eq!(diff.baseline_ids.get(Component::Caddy), Some(baseline.id));
+        let dnsmasq = diff
+            .components
+            .iter()
+            .find(|d| d.component == Component::Dnsmasq)
+            .unwrap();
+        // Live is the old side here, so the snapshot's value is the addition.
+        assert!(dnsmasq.files[0].unified_diff.contains("+cache-size=1000"));
+    }
+
+    fn app(db: &Database, firewall: Arc<FirewallApplyManager>) -> Router {
+        let state = Arc::new(AppState::new(
+            Arc::new(AuthManager::new(vec![7; 32])),
+            db.clone(),
+            firewall.clone(),
+        ));
+        changes_routes(ChangesState {
+            db: db.clone(),
+            firewall,
+        })
+        .with_state(state)
+    }
+
+    fn manager(db: &Database) -> Arc<FirewallApplyManager> {
+        Arc::new(FirewallApplyManager::new(
+            Arc::new(db.clone()),
+            Arc::new(NetworkdApplyManager::system()),
+        ))
+    }
+
+    async fn send(
+        app: &Router,
+        request: Request<Body>,
+    ) -> (StatusCode, Vec<u8>, axum::http::HeaderMap) {
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), 64 * 1024 * 1024)
+            .await
+            .unwrap()
+            .to_vec();
+        (status, body, headers)
+    }
+
+    #[tokio::test]
+    async fn routes_create_list_and_export_manual_snapshots() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let app = app(&db, manager(&db));
+
+        let create = Request::builder()
+            .method("POST")
+            .uri("/snapshots")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"note":"before the trip"}"#))
+            .unwrap();
+        let (status, body, _) = send(&app, create).await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let created: SnapshotResponse = serde_json::from_slice(&body).unwrap();
+        assert!(
+            created.snapshot.components.is_empty(),
+            "manual snapshots are never baselines"
+        );
+        assert_eq!(created.snapshot.kind, SnapshotKind::Manual);
+        assert_eq!(created.snapshot.note.as_deref(), Some("before the trip"));
+        assert!(created.snapshot.size_bytes > 0);
+
+        let (status, body, _) = send(
+            &app,
+            Request::builder()
+                .uri("/snapshots")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let listed: SnapshotListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(listed.snapshots.len(), 2);
+
+        let (status, bytes, headers) = send(
+            &app,
+            Request::builder()
+                .uri(format!("/snapshots/{}/export", created.snapshot.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/vnd.sqlite3");
+        let disposition = headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+        assert!(
+            disposition.starts_with("attachment; filename=\"keystone-config-"),
+            "{disposition}"
+        );
+        assert!(bytes.starts_with(b"SQLite format 3\0"));
+    }
+
+    #[tokio::test]
+    async fn import_route_rejects_garbage_with_an_error_message() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let app = app(&db, manager(&db));
+
+        let (status, body, _) = send(
+            &app,
+            Request::builder()
+                .method("POST")
+                .uri("/snapshots/import")
+                .body(Body::from("definitely not sqlite"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("not an SQLite"));
+    }
+
+    #[tokio::test]
+    async fn restore_and_discard_are_refused_while_changes_are_locked() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let app = app(&db, manager(&db));
+        let mut settings = db.get_global_settings().await.unwrap();
+        settings.config_changes_disabled = true;
+        db.save_global_settings(&settings).await.unwrap();
+
+        let (status, body, _) = send(
+            &app,
+            Request::builder()
+                .method("POST")
+                .uri("/changes/discard")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json["error"].as_str().unwrap().contains("disabled"));
+    }
+
+    #[tokio::test]
+    async fn restore_route_reports_the_components_it_restored() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let baseline = snapshots::latest_applied_for(&db, Component::Dnsmasq)
+            .await
+            .unwrap()
+            .unwrap();
+        set_dnsmasq_cache_size(&db, 5).await;
+        let app = app(&db, manager(&db));
+
+        let (status, body, _) = send(
+            &app,
+            Request::builder()
+                .method("POST")
+                .uri(format!("/snapshots/{}/restore", baseline.id))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"components":["dnsmasq"]}"#))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let restored: RestoreSnapshotResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(restored.components, vec![Component::Dnsmasq]);
+        assert!(restored.message.contains("pending until it is applied"));
+        assert!(!changed(
+            &pending_changes(&db).await.unwrap(),
+            Component::Dnsmasq
+        ));
+    }
+}

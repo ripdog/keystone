@@ -1916,6 +1916,7 @@ dependencies = [
  "rand 0.9.5",
  "serde",
  "serde_json",
+ "similar",
  "sqlx",
  "tokio",
  "toml",
@@ -3426,6 +3427,12 @@ dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
 ]
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "simple_asn1"

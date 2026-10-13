@@ -185,6 +185,22 @@ fn create_fib_daddr_local_match() -> Statement<'static> {
     })
 }
 
+/// Match packets whose destination is NOT an address of the ingress interface
+/// (`fib daddr . iif type != local`). The kernel only reports `local` for this
+/// lookup when the address is assigned to the ingress interface itself.
+fn create_fib_daddr_not_on_iif_match() -> Statement<'static> {
+    Statement::Match(Match {
+        left: Expression::Named(nftables::expr::NamedExpression::Fib(nftables::expr::Fib {
+            result: nftables::expr::FibResult::Type,
+            flags: [nftables::expr::FibFlag::Daddr, nftables::expr::FibFlag::Iif]
+                .into_iter()
+                .collect(),
+        })),
+        right: Expression::String(Cow::Borrowed("local")),
+        op: Operator::NEQ,
+    })
+}
+
 /// Create a hairpin NAT DNAT rule for LAN clients accessing port forwards via external IP
 ///
 /// Hairpin NAT allows LAN clients to access port-forwarded services using the router's
@@ -211,6 +227,9 @@ fn create_hairpin_dnat_rule(
         // Match packets destined to a local address (router's own IPs)
         // This catches traffic to any of the router's IPs, including WAN IP
         create_fib_daddr_local_match(),
+        // ...but never the router's own address on the ingress LAN interface:
+        // those connections (e.g. Caddy on the LAN IP) must reach the router.
+        create_fib_daddr_not_on_iif_match(),
         // Counter
         Statement::Counter(Counter::Anonymous(None)),
     ];
@@ -418,6 +437,15 @@ mod tests {
                 _ => None,
             })
             .expect("rule has a DNAT statement")
+    }
+
+    #[test]
+    fn hairpin_dnat_excludes_router_address_on_ingress_interface() {
+        let pf = forward(443, None, None);
+        let rule = create_hairpin_dnat_rule(&pf, &["lan0".to_string()], "tcp").unwrap();
+        let json = serde_json::to_string(&rule).unwrap();
+        assert!(json.contains("\"op\":\"!=\""), "{json}");
+        assert!(json.contains("\"iif\""), "{json}");
     }
 
     #[test]

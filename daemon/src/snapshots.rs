@@ -15,9 +15,6 @@
 //! apply anything to the system; applying the restored configuration is a
 //! separate step.
 
-// Read and restore entry points are consumed by the HTTP layer in a later phase.
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -451,19 +448,6 @@ pub async fn get_snapshot(db: &Database, id: i64) -> Result<Option<SnapshotInfo>
         "SELECT {SNAPSHOT_COLUMNS} FROM config_snapshots WHERE id = ?"
     )))
     .bind(id)
-    .fetch_optional(db.pool())
-    .await?
-    .as_ref()
-    .map(info_from_row)
-    .transpose()
-}
-
-/// The newest snapshot still marked active, if any.
-pub async fn latest_active_snapshot(db: &Database) -> Result<Option<SnapshotInfo>> {
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {SNAPSHOT_COLUMNS} FROM config_snapshots
-         WHERE status = 'active' ORDER BY id DESC LIMIT 1"
-    )))
     .fetch_optional(db.pool())
     .await?
     .as_ref()
@@ -1704,7 +1688,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn latest_active_snapshot_ignores_pending_and_rolled_back() {
+    async fn latest_applied_ignores_pending_and_rolled_back() {
         let scratch = Scratch::new();
         let db = open(&scratch).await;
         let active = create_snapshot(&db, applied_now()).await.unwrap();
@@ -1718,7 +1702,10 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!(
-            latest_active_snapshot(&db).await.unwrap().map(|s| s.id),
+            latest_applied_for(&db, Component::Firewall)
+                .await
+                .unwrap()
+                .map(|s| s.id),
             Some(active.id)
         );
         assert!(
@@ -1726,7 +1713,12 @@ pub(crate) mod tests {
                 .await
                 .unwrap()
         );
-        assert!(latest_active_snapshot(&db).await.unwrap().is_none());
+        assert!(
+            latest_applied_for(&db, Component::Firewall)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(status_of(&db, rolled.id).await, SnapshotStatus::RolledBack);
     }
 

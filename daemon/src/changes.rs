@@ -522,7 +522,7 @@ async fn restore_snapshot_route(
     ensure_changes_allowed(&state).await?;
     let components = selected_components(request.components)?;
     let outcome =
-        snapshots::restore_components(&state.db, &[(id, components)], actor_name(&actor)).await?;
+        snapshots::restore_snapshot(&state.db, id, actor_name(&actor), Some(&components)).await?;
     Ok(Json(RestoreSnapshotResponse {
         success: true,
         message: format!(

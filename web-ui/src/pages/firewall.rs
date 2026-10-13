@@ -1044,7 +1044,7 @@ fn InputRulesTab(
         enabled: true,
         position: 100,
         zone: None,
-        protocol: None,
+        protocol: Some(RuleProtocol::Tcp),
         port_start: None,
         port_end: None,
         source_ip: None,
@@ -1258,6 +1258,13 @@ fn InputRuleEditor(
     let protocol = RwSignal::new(rule.protocol);
     let port_start = RwSignal::new(rule.port_start.map(|p| p.to_string()).unwrap_or_default());
     let port_end = RwSignal::new(rule.port_end.map(|p| p.to_string()).unwrap_or_default());
+    // Ports only apply to TCP, UDP and TCP+UDP.
+    let ports_allowed = move || {
+        matches!(
+            protocol.get(),
+            Some(RuleProtocol::Tcp | RuleProtocol::Udp | RuleProtocol::TcpUdp)
+        )
+    };
     let source_ip = RwSignal::new(rule.source_ip.clone().unwrap_or_default());
     let action = RwSignal::new(rule.action);
     let log_enabled = RwSignal::new(rule.log_enabled);
@@ -1392,6 +1399,10 @@ fn InputRuleEditor(
                                 "icmpv6" => Some(RuleProtocol::Icmpv6),
                                 _ => None,
                             });
+                            if !ports_allowed() {
+                                port_start.set(String::new());
+                                port_end.set(String::new());
+                            }
                         }
                     >
                         <option value="" selected=move || protocol.get().is_none()>"Any"</option>
@@ -1429,6 +1440,7 @@ fn InputRuleEditor(
                         type="number"
                         class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
                         prop:value=move || port_start.get()
+                        prop:disabled=move || !ports_allowed()
                         on:input=move |ev| port_start.set(event_target_value(&ev))
                         placeholder="e.g., 22"
                     />
@@ -1439,6 +1451,7 @@ fn InputRuleEditor(
                         type="number"
                         class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
                         prop:value=move || port_end.get()
+                        prop:disabled=move || !ports_allowed()
                         on:input=move |ev| port_end.set(event_target_value(&ev))
                         placeholder="blank = single port"
                     />
@@ -1547,7 +1560,7 @@ fn ForwardRulesTab(
         position: 100,
         source_zone: None,
         dest_zone: None,
-        protocol: None,
+        protocol: Some(RuleProtocol::Tcp),
         dest_port_start: None,
         dest_port_end: None,
         source_ip: None,
@@ -1763,6 +1776,13 @@ fn ForwardRuleEditor(
             .map(|p| p.to_string())
             .unwrap_or_default(),
     );
+    // Ports only apply to TCP, UDP and TCP+UDP.
+    let ports_allowed = move || {
+        matches!(
+            protocol.get(),
+            Some(RuleProtocol::Tcp | RuleProtocol::Udp | RuleProtocol::TcpUdp)
+        )
+    };
     let source_ip = RwSignal::new(rule.source_ip.clone().unwrap_or_default());
     let dest_ip = RwSignal::new(rule.dest_ip.clone().unwrap_or_default());
     let action = RwSignal::new(rule.action);
@@ -1918,6 +1938,10 @@ fn ForwardRuleEditor(
                                 "icmpv6" => Some(RuleProtocol::Icmpv6),
                                 _ => None,
                             });
+                            if !ports_allowed() {
+                                dest_port_start.set(String::new());
+                                dest_port_end.set(String::new());
+                            }
                         }
                     >
                         <option value="" selected=move || protocol.get().is_none()>"Any"</option>
@@ -1955,6 +1979,7 @@ fn ForwardRuleEditor(
                         type="number"
                         class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
                         prop:value=move || dest_port_start.get()
+                        prop:disabled=move || !ports_allowed()
                         on:input=move |ev| dest_port_start.set(event_target_value(&ev))
                         placeholder="e.g., 80"
                     />
@@ -1965,6 +1990,7 @@ fn ForwardRuleEditor(
                         type="number"
                         class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
                         prop:value=move || dest_port_end.get()
+                        prop:disabled=move || !ports_allowed()
                         on:input=move |ev| dest_port_end.set(event_target_value(&ev))
                         placeholder="blank = single port"
                     />

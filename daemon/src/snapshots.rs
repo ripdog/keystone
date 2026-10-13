@@ -1059,6 +1059,17 @@ async fn precheck_read_only(path: &Path) -> Result<()> {
 
         let names = table_names(&pool).await?;
         check_classified(names.iter().map(String::as_str))?;
+        // Snapshots hold tables and their indexes only. Triggers and views
+        // have no place in an upload, so they are refused outright.
+        let other_objects: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type NOT IN ('table', 'index')",
+        )
+        .fetch_one(&pool)
+        .await?;
+        ensure!(
+            other_objects == 0,
+            "uploaded snapshot contains triggers or views, which snapshots never use"
+        );
         Ok(())
     }
     .await;
@@ -2104,6 +2115,40 @@ pub(crate) mod tests {
             before
         );
         assert_eq!(list_snapshots(&db).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn import_rejects_triggers_and_leaves_no_files() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        std::fs::create_dir_all(scratch.snapshot_dir()).unwrap();
+        let copy_path = scratch.snapshot_dir().join("trigger-copy.db");
+        sqlx::query("VACUUM INTO ?")
+            .bind(copy_path.to_str().unwrap())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let copy = open_sqlite(&copy_path, false).await.unwrap();
+        sqlx::query(
+            "CREATE TRIGGER exfiltrate AFTER DELETE ON users BEGIN
+                 INSERT INTO firewall_zones (name, created_at, updated_at) VALUES ('x', 0, 0);
+             END",
+        )
+        .execute(&copy)
+        .await
+        .unwrap();
+        copy.close().await;
+        let bytes = std::fs::read(&copy_path).unwrap();
+        std::fs::remove_file(&copy_path).unwrap();
+        let before = std::fs::read_dir(scratch.snapshot_dir()).unwrap().count();
+
+        let error = import_snapshot(&db, &bytes, None).await.unwrap_err();
+        assert!(error.to_string().contains("triggers"), "{error:#}");
+        assert_eq!(
+            std::fs::read_dir(scratch.snapshot_dir()).unwrap().count(),
+            before
+        );
+        assert!(list_snapshots(&db).await.unwrap().is_empty());
     }
 
     #[tokio::test]

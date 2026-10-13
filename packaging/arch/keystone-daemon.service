@@ -36,7 +36,8 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADM
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_SETUID CAP_SETGID
 
 # Filesystem restrictions
-ProtectHome=yes
+# Read-only (not hidden) so SSH lockout validation can see ~/.ssh/authorized_keys.
+ProtectHome=read-only
 ProtectSystem=strict
 # Keystone generates these files; the rest of /etc remains read-only.
 ReadWritePaths=/etc/systemd/network /etc/systemd/networkd.conf.d /etc/sysctl.d /etc/nftables.conf /var/lib/keystone /run/keystone

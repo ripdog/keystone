@@ -68,7 +68,62 @@ fn store_config(config: &SshConfig, addresses: &[IpAddr]) -> Result<()> {
     write_atomic(SETTINGS, &serde_json::to_vec_pretty(&record)?)
 }
 
+/// A login-capable local account found in passwd data.
+struct LoginUser {
+    home: std::path::PathBuf,
+}
+
+/// Non-root accounts (uid >= 1000) with a real login shell.
+fn parse_login_users(passwd: &str) -> Vec<LoginUser> {
+    passwd
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split(':').collect();
+            let [_name, _pw, uid, _gid, _gecos, home, shell] = fields[..] else {
+                return None;
+            };
+            let uid: u32 = uid.parse().ok()?;
+            let shell_name = shell.rsplit('/').next().unwrap_or(shell);
+            let no_login = shell.is_empty() || matches!(shell_name, "nologin" | "false");
+            (uid >= 1000 && !no_login && !home.is_empty()).then(|| LoginUser { home: home.into() })
+        })
+        .collect()
+}
+
+/// An authorized_keys file counts when it holds at least one non-comment line.
+fn has_authorized_key(contents: &str) -> bool {
+    contents.lines().any(|line| {
+        let line = line.trim();
+        !line.is_empty() && !line.starts_with('#')
+    })
+}
+
+/// Fail if disabling passwords would leave no account able to log in.
+/// `read` returns the contents of a file, or `None` if unreadable/missing.
+fn ensure_key_login_possible(passwd: &str, read: impl Fn(&Path) -> Option<String>) -> Result<()> {
+    let any_keys = parse_login_users(passwd).iter().any(|user| {
+        read(&user.home.join(".ssh/authorized_keys")).is_some_and(|c| has_authorized_key(&c))
+    });
+    ensure!(
+        any_keys,
+        "Public-key-only SSH would lock everyone out: no user has ~/.ssh/authorized_keys"
+    );
+    Ok(())
+}
+
 fn validate(config: &SshConfig) -> Result<()> {
+    validate_with(config, || {
+        let passwd = fs::read_to_string("/etc/passwd").context("Reading /etc/passwd")?;
+        Ok((passwd, |path: &Path| fs::read_to_string(path).ok()))
+    })
+}
+
+/// `users` supplies passwd data and a file reader; it is only evaluated when
+/// the key-only lockout check applies, so tests can inject both.
+fn validate_with<R: Fn(&Path) -> Option<String>>(
+    config: &SshConfig,
+    users: impl FnOnce() -> Result<(String, R)>,
+) -> Result<()> {
     ensure!(config.port != 0, "SSH port must be between 1 and 65535");
     ensure!(
         config.ipv4 || config.ipv6,
@@ -78,6 +133,10 @@ fn validate(config: &SshConfig) -> Result<()> {
         config.password_authentication || config.public_key_authentication,
         "Enable at least one authentication method"
     );
+    if !config.password_authentication {
+        let (passwd, read) = users()?;
+        ensure_key_login_possible(&passwd, read)?;
+    }
     Ok(())
 }
 
@@ -588,9 +647,9 @@ mod tests {
         assert!(conf.contains("ListenAddress 192.168.1.1\n"));
         assert!(!conf.contains("ListenAddress 0.0.0.0"));
         assert!(!conf.contains("ListenAddress ::\n"));
-        assert!(serde_json::from_str::<SshConfig>(&format!(
-            "{{\"enabled\":true,\"port\":22,\"ipv4\":true,\"ipv6\":true,\"wan_access\":false,\"password_authentication\":true,\"public_key_authentication\":true,\"permit_root_login\":true}}"
-        )).is_ok()); // unknown admin-supplied fields cannot influence generated policy
+        assert!(serde_json::from_str::<SshConfig>(
+            "{\"enabled\":true,\"port\":22,\"ipv4\":true,\"ipv6\":true,\"wan_access\":false,\"password_authentication\":true,\"public_key_authentication\":true,\"permit_root_login\":true}"
+        ).is_ok()); // unknown admin-supplied fields cannot influence generated policy
     }
 
     #[test]
@@ -618,6 +677,55 @@ mod tests {
         config.password_authentication = false;
         config.public_key_authentication = false;
         assert!(validate(&config).is_err());
+    }
+
+    #[test]
+    fn key_only_ssh_requires_a_user_with_authorized_keys() {
+        let passwd = "root:x:0:0::/root:/bin/bash\n\
+            daemon:x:2:2::/:/usr/bin/nologin\n\
+            svc:x:1001:1001::/home/svc:/usr/bin/false\n\
+            alice:x:1000:1000::/home/alice:/bin/bash\n";
+        let users = parse_login_users(passwd);
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].home, Path::new("/home/alice"));
+
+        let with_keys = |path: &Path| {
+            (path == Path::new("/home/alice/.ssh/authorized_keys"))
+                .then(|| "# comment\nssh-ed25519 AAAA alice\n".to_string())
+        };
+        assert!(ensure_key_login_possible(passwd, with_keys).is_ok());
+        let comments_only = |_: &Path| Some("# nothing\n\n".to_string());
+        assert!(ensure_key_login_possible(passwd, comments_only).is_err());
+        assert!(ensure_key_login_possible(passwd, |_: &Path| None).is_err());
+        // Keys on root (or a nologin account) do not count.
+        let root_only = |path: &Path| {
+            (path == Path::new("/root/.ssh/authorized_keys")).then(|| "ssh-ed25519 AAAA".into())
+        };
+        assert!(ensure_key_login_possible(passwd, root_only).is_err());
+    }
+
+    type Reader = fn(&Path) -> Option<String>;
+
+    #[test]
+    fn password_auth_skips_the_key_lookup() {
+        let config = SshConfig::default();
+        assert!(config.password_authentication);
+        let result = validate_with(&config, || -> Result<(String, Reader)> {
+            panic!("passwd must not be consulted while passwords are enabled")
+        });
+        assert!(result.is_ok());
+        let key_only = SshConfig {
+            password_authentication: false,
+            ..Default::default()
+        };
+        let err = validate_with(&key_only, || {
+            Ok((
+                String::from("alice:x:1000:1000::/home/alice:/bin/bash"),
+                |_: &Path| None,
+            ))
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("lock everyone out"));
     }
 
     #[test]

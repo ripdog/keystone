@@ -4,11 +4,11 @@
 //! generated, so that bad rows already in the database can never be applied
 //! as a rule that silently matches more traffic than intended.
 
-use crate::firewall::generate::statements::parse_rate_limit;
 use crate::firewall::groups::{
     Family, GroupIndex, family_variants, literal_family, side_families, validate_address_group,
     validate_group_names, validate_port_group,
 };
+use crate::firewall::rules::parse_rate_limit;
 use ipnet::IpNet;
 use keystone_core::{
     FirewallConfig, FirewallZone, ForwardRule, InputRule, PortForward, RuleProtocol,

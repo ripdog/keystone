@@ -22,9 +22,12 @@
 
 mod apply;
 pub mod counters;
+#[cfg(test)]
+mod fixtures;
 pub(crate) mod generate;
 pub mod groups;
 pub mod routes;
+pub(crate) mod rules;
 pub mod simple;
 pub mod validate;
 

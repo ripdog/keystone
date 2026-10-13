@@ -3,7 +3,6 @@
 //! This module generates a human-readable representation of the firewall
 //! configuration in nftables syntax format.
 
-use crate::firewall::generate::statements::Side;
 use crate::firewall::generate::{
     FILTER_TABLE, NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones, rule_comment,
 };
@@ -11,6 +10,7 @@ use crate::firewall::groups::{
     Family, GroupIndex, address_set_name, family_variants, normalized_networks, normalized_ports,
     port_set_name, side_families,
 };
+use crate::firewall::rules::Side;
 use keystone_core::{
     FirewallConfig, FirewallPolicy, ForwardRule, InputRule, PortForward, RuleProtocol,
 };

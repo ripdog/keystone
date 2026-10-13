@@ -5,19 +5,19 @@
 //!
 //! # Module Structure
 //!
-//! - `chains/` - Chain generation submodules (input, forward, output, nat)
-//! - `statements` - Helper functions for creating nftables statements
+//! - `chains/` - Chain objects; their rules come from `firewall::rules`
+//! - `emit` - Translation of the shared rule model into nftables JSON
 //! - `preview` - Human-readable preview generation
+//! - `sets` - Named sets for address and port groups
 
-mod chains;
+pub(crate) mod chains;
+pub(crate) mod emit;
 mod preview;
 pub mod sets;
-pub mod statements;
 
-use chains::{
-    generate_forward_chain, generate_input_chain, generate_output_chain,
-    generate_postrouting_chain, generate_prerouting_chain,
-};
+use crate::firewall::rules::{self, Ruleset};
+use chains::{add_chain, output::generate_output_chain};
+use nftables::types::{NfChainType, NfHook};
 use preview::generate_preview;
 
 use keystone_core::{FirewallConfig, FirewallZone};
@@ -74,14 +74,48 @@ pub fn generate_ruleset(config: &FirewallConfig) -> GeneratedRuleset<'static> {
         }
     }
 
-    // Generate filter chains
-    generate_input_chain(&mut batch, config, &zone_interfaces);
-    generate_forward_chain(&mut batch, config, &zone_interfaces);
-    generate_output_chain(&mut batch);
+    // Every chain's rules come from the shared model, so the preview and the
+    // packet tester see exactly what is emitted here.
+    let Ruleset {
+        prerouting,
+        input,
+        forward,
+        postrouting,
+    } = rules::build(config);
 
-    // Generate NAT chains
-    generate_prerouting_chain(&mut batch, config, &zone_interfaces);
-    generate_postrouting_chain(&mut batch, config, &zone_interfaces);
+    add_chain(
+        &mut batch,
+        FILTER_TABLE,
+        &input,
+        NfChainType::Filter,
+        NfHook::Input,
+        0,
+    );
+    add_chain(
+        &mut batch,
+        FILTER_TABLE,
+        &forward,
+        NfChainType::Filter,
+        NfHook::Forward,
+        0,
+    );
+    generate_output_chain(&mut batch);
+    add_chain(
+        &mut batch,
+        NAT_TABLE,
+        &prerouting,
+        NfChainType::NAT,
+        NfHook::Prerouting,
+        -100,
+    );
+    add_chain(
+        &mut batch,
+        NAT_TABLE,
+        &postrouting,
+        NfChainType::NAT,
+        NfHook::Postrouting,
+        100,
+    );
 
     let nftables = batch.to_nftables();
     let preview = generate_preview(config, &zone_interfaces);
@@ -736,6 +770,30 @@ mod tests {
             assert!(!rules.is_empty(), "no rule for {prefix}");
             for rule in rules {
                 assert!(rule["expr"].to_string().contains("\"counter\""), "{rule}");
+            }
+        }
+    }
+
+    #[test]
+    fn emitted_rules_follow_the_shared_model_in_order() {
+        use crate::firewall::fixtures::sample_configs;
+        for (name, config) in sample_configs() {
+            let model = crate::firewall::rules::build(&config);
+            let json = serde_json::to_value(generate_ruleset(&config).nftables).unwrap();
+            let objects = json["nftables"].as_array().unwrap();
+            for (chain, spec) in [
+                ("input", &model.input),
+                ("forward", &model.forward),
+                ("prerouting", &model.prerouting),
+                ("postrouting", &model.postrouting),
+            ] {
+                let emitted: Vec<&str> = objects
+                    .iter()
+                    .filter(|object| object["add"]["rule"]["chain"] == chain)
+                    .filter_map(|object| object["add"]["rule"]["comment"].as_str())
+                    .collect();
+                let modelled: Vec<&str> = spec.rules.iter().map(|r| r.comment.as_str()).collect();
+                assert_eq!(emitted, modelled, "{name}: chain {chain}");
             }
         }
     }

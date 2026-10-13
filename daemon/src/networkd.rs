@@ -229,10 +229,14 @@ fn networkd_global_config_path() -> PathBuf {
     Path::new(NETWORKD_CONFIG_DIR).join(NETWORKD_ROUTER_CONFIG)
 }
 
+/// Keystone-generated files are regular files named `50-keystone-*`. Directories
+/// such as `50-keystone-<if>.network.d/` hold user drop-ins and are never ours.
 fn is_keystone_networkd_file(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(KEYSTONE_PREFIX))
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_file())
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(KEYSTONE_PREFIX))
 }
 
 fn remove_all_keystone_networkd_files() -> Result<()> {
@@ -1191,5 +1195,22 @@ mod tests {
             get_bridge_netdev_filename("bridge-lan"),
             "50-keystone-bridge-lan.netdev"
         );
+    }
+
+    #[test]
+    fn user_dropin_directories_are_not_keystone_files() {
+        let dir = std::env::temp_dir().join(format!("keystone-test-{}", Uuid::new_v4()));
+        let dropins = dir.join("50-keystone-enp3s0.network.d");
+        std::fs::create_dir_all(&dropins).unwrap();
+        let file = dir.join("50-keystone-enp3s0.network");
+        std::fs::write(&file, "x").unwrap();
+        let other = dir.join("90-bootstrap-wan.network");
+        std::fs::write(&other, "x").unwrap();
+
+        assert!(is_keystone_networkd_file(&file));
+        assert!(!is_keystone_networkd_file(&dropins));
+        assert!(!is_keystone_networkd_file(&other));
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

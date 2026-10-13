@@ -1,5 +1,5 @@
 pkgname=keystone
-pkgver=0.1.6
+pkgver=$(awk '/^\[workspace\.package\]$/ { in_package = 1; next } /^\[/ { in_package = 0 } in_package && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.toml)
 pkgrel=1
 pkgdesc="Linux router/firewall manager with split-privilege web UI"
 arch=("x86_64")

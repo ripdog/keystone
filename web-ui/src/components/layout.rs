@@ -1,6 +1,9 @@
 //! Main application layout with navigation
 
-use crate::components::{ConfigRefresh, PendingChangesBar, SidebarNavigation};
+use crate::components::{
+    CommandPalette, ConfigRefresh, PendingChangesBar, SidebarNavigation, icon_path,
+    provide_pending_actions,
+};
 use leptos::prelude::*;
 
 /// Main layout wrapper with sidebar navigation
@@ -14,6 +17,9 @@ pub fn AppLayout(
     let (sidebar_open, set_sidebar_open) = signal(false);
     // Pages bump this after saving so the pending-changes bar refetches at once.
     provide_context(ConfigRefresh(RwSignal::new(0)));
+    // Shared by the pending bar, its review drawer and the command palette.
+    provide_pending_actions(auth_token, on_unauthorized);
+    let palette_open = RwSignal::new(false);
 
     let logout_click = move |_| on_logout.run(());
 
@@ -96,9 +102,27 @@ pub fn AppLayout(
                                 <div class="text-[10px] uppercase tracking-[0.24em] text-slate-500 font-semibold mb-1">"Network control"</div>
                                 <div class="text-sm font-medium text-slate-200">{move || crate::components::breadcrumb(&location.pathname.get())}</div>
                             </div>
+                            <button type="button"
+                                class="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-400 hover:bg-white/5 hover:text-white transition-colors"
+                                aria-label="Search pages, actions and devices"
+                                aria-haspopup="dialog"
+                                on:click=move |_| palette_open.set(true)
+                            >
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <path d=icon_path("search") />
+                                </svg>
+                                <span class="hidden sm:inline">"Search"</span>
+                                <kbd class="hidden sm:inline-flex rounded-md border border-slate-700 bg-slate-800 px-1.5 py-0.5 text-[11px] text-slate-400">"Ctrl K"</kbd>
+                            </button>
                         </div>
                     </div>
                     <PendingChangesBar auth_token=auth_token on_unauthorized=on_unauthorized />
+                    <CommandPalette
+                        open=palette_open
+                        auth_token=auth_token
+                        on_unauthorized=on_unauthorized
+                        on_logout=on_logout
+                    />
                     <main class="flex-1 min-w-0 w-full p-5 sm:p-7 xl:p-10 2xl:p-12">
                         {children()}
                     </main>

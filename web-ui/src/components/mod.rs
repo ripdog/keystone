@@ -1,6 +1,7 @@
 //! Reusable UI components
 
 mod auth;
+mod command_palette;
 pub mod form_utils;
 mod layout;
 mod login;
@@ -11,6 +12,7 @@ mod static_ip_settings;
 mod traffic_graph;
 
 pub use auth::*;
+pub use command_palette::CommandPalette;
 pub use layout::*;
 pub use login::*;
 pub use navigation::*;

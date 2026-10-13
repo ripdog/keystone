@@ -193,18 +193,47 @@ fn confirm(question: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// A one-line result shown under the bar.
 #[derive(Clone)]
-struct Feedback {
-    ok: bool,
-    text: String,
+pub struct Feedback {
+    pub ok: bool,
+    pub text: String,
 }
 
-/// Sticky bar above the page content, plus the review drawer it opens.
-#[component]
-pub fn PendingChangesBar(
+/// Pending-changes state and actions shared by the bar, its review drawer and
+/// the command palette. Every apply and discard goes through these callbacks,
+/// so the confirmation, busy flag and refresh happen in one place.
+#[derive(Clone, Copy)]
+pub struct PendingActions {
+    pub pending: RwSignal<Option<PendingChangesResponse>>,
+    pub feedback: RwSignal<Option<Feedback>>,
+    pub load_error: RwSignal<Option<String>>,
+    pub busy: RwSignal<bool>,
+    pub reviewing: RwSignal<bool>,
+    pub apply_result: RwSignal<Option<ApplyAllResponse>>,
+    /// Apply every component that has pending changes.
+    pub apply_all: Callback<()>,
+    /// Discard one component's changes, or every change when `None`. Asks first.
+    pub discard: Callback<Option<Component>>,
+}
+
+impl PendingActions {
+    /// Show a result on the feedback line under the bar.
+    pub fn notify(&self, ok: bool, text: impl Into<String>) {
+        self.feedback.set(Some(Feedback {
+            ok,
+            text: text.into(),
+        }));
+    }
+}
+
+/// Creates the pending-changes state and provides it to the page layout.
+/// Call after [`ConfigRefresh`] is provided, and before the bar and the
+/// command palette are built.
+pub fn provide_pending_actions(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
-) -> impl IntoView {
+) -> PendingActions {
     let refresh = expect_context::<ConfigRefresh>();
     let pending = RwSignal::new(None::<PendingChangesResponse>);
     let feedback = RwSignal::new(None::<Feedback>);
@@ -213,38 +242,7 @@ pub fn PendingChangesBar(
     let reviewing = RwSignal::new(false);
     let apply_result = RwSignal::new(None::<ApplyAllResponse>);
 
-    let fetch = move || {
-        let Some(token) = auth_token.get_untracked() else {
-            return;
-        };
-        spawn_local(async move {
-            match api::fetch_pending_changes(&token).await {
-                Ok(response) => {
-                    load_error.set(None);
-                    pending.set(Some(response));
-                }
-                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
-                // Keep the last known state through a transient daemon error.
-                Err(e) => load_error.set(Some(e)),
-            }
-        });
-    };
-
-    // The Effect owns the Interval and restarts it after every bump, so a
-    // save that triggers a refetch also pushes the next poll back.
-    Effect::new(move |_prev: Option<Option<Interval>>| {
-        let _ = refresh.0.get();
-        if auth_token.get().is_some() {
-            fetch();
-            Some(Interval::new(POLL_MS, fetch))
-        } else {
-            None
-        }
-    });
-
-    let summary = move || pending.get().and_then(|p| pending_summary(&p.components));
-
-    let apply_all = move || {
+    let apply_all = Callback::new(move |()| {
         if busy.get_untracked() {
             return;
         }
@@ -273,7 +271,7 @@ pub fn PendingChangesBar(
             busy.set(false);
             refresh.bump();
         });
-    };
+    });
 
     let discard = Callback::new(move |component: Option<Component>| {
         let question = match component {
@@ -312,6 +310,69 @@ pub fn PendingChangesBar(
         });
     });
 
+    let actions = PendingActions {
+        pending,
+        feedback,
+        load_error,
+        busy,
+        reviewing,
+        apply_result,
+        apply_all,
+        discard,
+    };
+    provide_context(actions);
+    actions
+}
+
+/// Sticky bar above the page content, plus the review drawer it opens.
+#[component]
+pub fn PendingChangesBar(
+    auth_token: ReadSignal<Option<String>>,
+    on_unauthorized: Callback<()>,
+) -> impl IntoView {
+    let refresh = expect_context::<ConfigRefresh>();
+    let PendingActions {
+        pending,
+        feedback,
+        load_error,
+        busy,
+        reviewing,
+        apply_result,
+        apply_all,
+        discard,
+    } = expect_context::<PendingActions>();
+
+    let fetch = move || {
+        let Some(token) = auth_token.get_untracked() else {
+            return;
+        };
+        spawn_local(async move {
+            match api::fetch_pending_changes(&token).await {
+                Ok(response) => {
+                    load_error.set(None);
+                    pending.set(Some(response));
+                }
+                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
+                // Keep the last known state through a transient daemon error.
+                Err(e) => load_error.set(Some(e)),
+            }
+        });
+    };
+
+    // The Effect owns the Interval and restarts it after every bump, so a
+    // save that triggers a refetch also pushes the next poll back.
+    Effect::new(move |_prev: Option<Option<Interval>>| {
+        let _ = refresh.0.get();
+        if auth_token.get().is_some() {
+            fetch();
+            Some(Interval::new(POLL_MS, fetch))
+        } else {
+            None
+        }
+    });
+
+    let summary = move || pending.get().and_then(|p| pending_summary(&p.components));
+
     view! {
         <Show when=move || summary().is_some()>
             <div
@@ -334,7 +395,7 @@ pub fn PendingChangesBar(
                         type="button"
                         class="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium disabled:opacity-50"
                         disabled=move || busy.get()
-                        on:click=move |_| apply_all()
+                        on:click=move |_| apply_all.run(())
                     >
                         {move || if busy.get() { "Working..." } else { "Apply all" }}
                     </button>
@@ -449,7 +510,7 @@ pub fn PendingChangesBar(
                             type="button"
                             class="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium disabled:opacity-50"
                             disabled=move || busy.get() || summary().is_none()
-                            on:click=move |_| apply_all()
+                            on:click=move |_| apply_all.run(())
                         >
                             {move || if busy.get() { "Working..." } else { "Apply all" }}
                         </button>

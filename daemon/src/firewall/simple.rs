@@ -300,6 +300,11 @@ fn validate(request: &CreateSimplePortForwardRequest) -> Result<Vec<IpAddr>, Str
     if !request.tcp && !request.udp {
         return Err("Select TCP and/or UDP".into());
     }
+    if let Some(description) = request.description.as_deref()
+        && !keystone_core::validation::is_single_line(description.trim())
+    {
+        return Err("Description contains control characters".into());
+    }
     if request.port == 0 || request.destination_port == Some(0) {
         return Err("Ports must be between 1 and 65535".into());
     }
@@ -663,6 +668,23 @@ mod tests {
             ..Default::default()
         }
     }
+
+    #[test]
+    fn description_must_be_single_line() {
+        let mut r = CreateSimplePortForwardRequest {
+            tcp: true,
+            udp: false,
+            ipv4: Some("192.168.1.3".into()),
+            ipv6: None,
+            port: 443,
+            destination_port: None,
+            description: Some("Media\nserver".into()),
+        };
+        assert!(validate(&r).is_err());
+        r.description = Some("  Media server  ".into());
+        assert!(validate(&r).is_ok());
+    }
+
     #[test]
     fn validates_protocols_and_families() {
         let mut r = CreateSimplePortForwardRequest {

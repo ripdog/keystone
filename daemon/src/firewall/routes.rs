@@ -12,7 +12,8 @@
 use crate::Actor;
 use crate::db::Database;
 use crate::firewall::validate::{
-    validate_forward_rule, validate_input_rule, validate_port_forward,
+    validate_forward_rule, validate_input_rule, validate_port_forward, validate_zone,
+    validate_zone_forward,
 };
 use crate::firewall::{FirewallApplyManager, generate_json, generate_preview};
 use crate::snapshots;
@@ -145,8 +146,11 @@ async fn save_zone(
         }));
     }
 
+    let mut errors = validate_zone(&zone);
     let zones = state.db.get_firewall_zones().await?;
-    let errors = crate::config_validation::zone_interface_conflicts(&zone, &zones);
+    errors.extend(crate::config_validation::zone_interface_conflicts(
+        &zone, &zones,
+    ));
     if !errors.is_empty() {
         return Ok(Json(SaveFirewallZoneResponse {
             success: false,
@@ -203,6 +207,15 @@ async fn save_zone_forward(
         "Saving zone forward: {} -> {}",
         forward.source_zone, forward.dest_zone
     );
+
+    let errors = validate_zone_forward(&forward);
+    if !errors.is_empty() {
+        return Ok(Json(SaveZoneForwardResponse {
+            success: false,
+            message: errors.join("; "),
+            forward_id: None,
+        }));
+    }
 
     let id = state.db.save_zone_forward(&forward).await?;
     Ok(Json(SaveZoneForwardResponse {

@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing::{info, warn};
 
@@ -38,10 +38,17 @@ pub fn ensure_lease_dir() -> Result<()> {
     Ok(())
 }
 
-/// Validate dnsmasq configuration using `dnsmasq --test`
-pub fn validate_dnsmasq_config() -> Result<()> {
+/// Directory for staging candidate configs. `/var/lib/keystone` is writable
+/// under the daemon's `ProtectSystem=strict` sandbox, whereas `/etc` (other than
+/// the single bind-mounted `/etc/dnsmasq.conf`) is not.
+const STAGING_DIR: &str = "/var/lib/keystone";
+
+/// Validate a candidate dnsmasq configuration file using
+/// `dnsmasq --test --conf-file=<path>`.
+pub fn validate_dnsmasq_config_file(path: &Path) -> Result<()> {
     let output = Command::new("dnsmasq")
         .arg("--test")
+        .arg(format!("--conf-file={}", path.display()))
         .output()
         .context("Failed to execute dnsmasq --test")?;
 
@@ -52,6 +59,53 @@ pub fn validate_dnsmasq_config() -> Result<()> {
 
     info!("dnsmasq configuration validated successfully");
     Ok(())
+}
+
+/// Previous contents of the Keystone-owned dnsmasq config, used for rollback.
+struct DnsmasqConfigSnapshot {
+    path: PathBuf,
+    /// `None` when the file did not exist.
+    content: Option<Vec<u8>>,
+}
+
+impl DnsmasqConfigSnapshot {
+    fn capture(path: &Path) -> Result<Self> {
+        let content = match fs::read(path) {
+            Ok(content) => Some(content),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to snapshot dnsmasq config {:?}", path));
+            }
+        };
+        Ok(Self {
+            path: path.to_path_buf(),
+            content,
+        })
+    }
+
+    fn restore(&self) -> Result<()> {
+        match &self.content {
+            Some(content) => fs::write(&self.path, content)
+                .with_context(|| format!("Failed to restore dnsmasq config {:?}", self.path)),
+            None => match fs::remove_file(&self.path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error)
+                    .with_context(|| format!("Failed to remove dnsmasq config {:?}", self.path)),
+                _ => Ok(()),
+            },
+        }
+    }
+}
+
+/// Write `content` to a staging file and validate it with `dnsmasq --test`
+/// before anything touches the live configuration.
+fn validate_candidate_config(content: &str) -> Result<()> {
+    let staging = Path::new(STAGING_DIR).join("dnsmasq.conf.candidate");
+    fs::write(&staging, content)
+        .with_context(|| format!("Failed to write candidate dnsmasq config {:?}", staging))?;
+    let result = validate_dnsmasq_config_file(&staging);
+    let _ = fs::remove_file(&staging);
+    result
 }
 
 /// Restart the dnsmasq service.
@@ -193,9 +247,9 @@ pub fn remove_dnsmasq_config() -> Result<()> {
 /// This function:
 /// 1. Loads configuration from database
 /// 2. Generates config file content
-/// 3. Writes to /etc/dnsmasq.conf (Keystone-owned)
-/// 4. Validates the configuration
-/// 5. Restarts dnsmasq service
+/// 3. Validates a staged candidate with `dnsmasq --test --conf-file`
+/// 4. Writes /etc/dnsmasq.conf (Keystone-owned), keeping a snapshot
+/// 5. Restarts dnsmasq, restoring the snapshot if that fails
 pub async fn apply_dnsmasq_config(pool: &SqlitePool) -> Result<()> {
     // Load complete state from database
     let state = load_dnsmasq_state(pool).await?;
@@ -223,18 +277,30 @@ pub async fn apply_dnsmasq_config(pool: &SqlitePool) -> Result<()> {
         return Ok(());
     }
 
-    // Generate configuration
+    // Generate configuration and validate it before touching the live file.
     let content = generate_dnsmasq_config(&state);
+    validate_candidate_config(&content)?;
 
-    // Write configuration file
-    write_dnsmasq_config(&content)?;
+    // Keep the previous config so a failed install or restart can be undone.
+    // `/etc/dnsmasq.conf` is a bind-mounted single-file ReadWritePath in the
+    // service sandbox, so it cannot be replaced by rename; it is rewritten in
+    // place after the candidate has passed validation.
+    let snapshot = DnsmasqConfigSnapshot::capture(Path::new(DNSMASQ_MAIN_CONFIG_PATH))?;
 
-    // Validate configuration
-    validate_dnsmasq_config()?;
+    let result = write_dnsmasq_config(&content)
+        .and_then(|()| enable_dnsmasq())
+        .and_then(|()| restart_dnsmasq());
 
-    // Enable and restart service
-    enable_dnsmasq()?;
-    restart_dnsmasq()?;
+    if let Err(error) = result {
+        return match snapshot.restore().and_then(|()| restart_dnsmasq()) {
+            Ok(()) => Err(anyhow::anyhow!(
+                "dnsmasq failed to apply the new configuration and the previous config was restored: {error:#}"
+            )),
+            Err(restore_error) => Err(anyhow::anyhow!(
+                "dnsmasq failed to apply the new configuration ({error:#}) and restoring the previous config also failed ({restore_error:#})"
+            )),
+        };
+    }
 
     info!("dnsmasq configuration applied successfully");
     Ok(())
@@ -270,5 +336,37 @@ pub fn get_dnsmasq_status() -> DnsmasqServiceStatus {
         running,
         enabled,
         config_exists,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("keystone-dnsmasq-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn snapshot_restores_previous_content() {
+        let path = temp_path("existing");
+        fs::write(&path, b"old config").unwrap();
+        let snapshot = DnsmasqConfigSnapshot::capture(&path).unwrap();
+        fs::write(&path, b"broken").unwrap();
+        snapshot.restore().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"old config");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn snapshot_removes_file_that_did_not_exist() {
+        let path = temp_path("missing");
+        let _ = fs::remove_file(&path);
+        let snapshot = DnsmasqConfigSnapshot::capture(&path).unwrap();
+        fs::write(&path, b"new").unwrap();
+        snapshot.restore().unwrap();
+        assert!(!path.exists());
+        // Restoring again when already absent is fine.
+        snapshot.restore().unwrap();
     }
 }

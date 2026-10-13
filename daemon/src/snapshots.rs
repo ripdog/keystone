@@ -84,6 +84,9 @@ pub const CONFIG_TABLES: &[&str] = &[
     "dnsmasq_address_overrides",
     "caddy_config",
     "sqm_config",
+    "upnp_config",
+    "upnp_lan_interfaces",
+    "upnp_allowed_subnets",
 ];
 
 /// Tables that are never captured into or restored from a snapshot: accounts
@@ -108,6 +111,9 @@ pub const NON_CONFIG_TABLES: &[&str] = &[
     // Shaping rules last applied with tc. Runtime state that the SQM
     // reconciler re-applies, not configuration.
     "sqm_applied",
+    // UPnP configuration last applied. Runtime state, like sqm_applied: the
+    // reconciler uses it to recreate the miniupnpd table after a reboot.
+    "upnp_applied",
 ];
 
 /// Tables that an earlier migration created and a later migration drops. A
@@ -129,7 +135,7 @@ pub const RETIRED_TABLES: &[&str] = &[
 /// Every table in [`CONFIG_TABLES`] maps to exactly one component, so a
 /// component's rows can be restored without touching the others.
 pub fn component_of(table: &str) -> Option<Component> {
-    use Component::{Caddy, Dnsmasq, Firewall, Networkd, Sqm};
+    use Component::{Caddy, Dnsmasq, Firewall, Networkd, Sqm, Upnp};
     Some(match table {
         "managed_interfaces"
         | "interface_config"
@@ -168,6 +174,7 @@ pub fn component_of(table: &str) -> Option<Component> {
         | "dnsmasq_cname_records"
         | "dnsmasq_address_overrides" => Dnsmasq,
         "sqm_config" => Sqm,
+        "upnp_config" | "upnp_lan_interfaces" | "upnp_allowed_subnets" => Upnp,
         "caddy_config" => Caddy,
         _ => return None,
     })

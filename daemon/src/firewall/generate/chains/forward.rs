@@ -13,6 +13,7 @@ use crate::firewall::generate::statements::{
 };
 use crate::firewall::generate::{FILTER_TABLE, resolve_zone_interfaces, rule_comment};
 use crate::firewall::groups::{Family, GroupIndex, family_variants, side_families};
+use keystone_core::upnp::UpnpForwardAccept;
 use keystone_core::{FirewallAction, FirewallConfig, ForwardRule, PortForward, ZoneForwardPolicy};
 use nftables::{
     batch::Batch,
@@ -61,6 +62,16 @@ pub fn generate_forward_chain(
         for nf_rule in create_port_forward_accept_rules(pf) {
             batch.add(NfListObject::Rule(nf_rule));
         }
+    }
+
+    // Priority 3b: DNATed traffic from UPnP / NAT-PMP mappings. miniupnpd's
+    // own rules live in a separate table, so this accept is what lets their
+    // DNATed packets through. It matches only packets already DNATed, arriving
+    // on the UPnP WAN and leaving for a UPnP LAN.
+    if let Some(upnp) = &config.upnp_forward
+        && let Some(nf_rule) = create_upnp_forward_accept_rule(upnp)
+    {
+        batch.add(NfListObject::Rule(nf_rule));
     }
 
     // Priority 4: User forward rules (position-ordered)
@@ -129,6 +140,36 @@ fn create_port_forward_accept_rules(pf: &PortForward) -> Vec<Rule<'static>> {
             ..Default::default()
         })
         .collect()
+}
+
+/// Accept packets that a UPnP mapping DNATed, from the WAN to the UPnP LANs.
+/// The `ct status dnat` match is what restricts the rule to DNATed traffic.
+fn create_upnp_forward_accept_rule(upnp: &UpnpForwardAccept) -> Option<Rule<'static>> {
+    if upnp.lan_interfaces.is_empty() {
+        return None;
+    }
+    Some(Rule {
+        family: NfFamily::INet,
+        table: Cow::Borrowed(FILTER_TABLE),
+        chain: Cow::Borrowed("forward"),
+        expr: vec![
+            create_iif_match(std::slice::from_ref(&upnp.wan_interface)),
+            create_oif_match(&upnp.lan_interfaces),
+            Statement::Match(Match {
+                left: Expression::Named(nftables::expr::NamedExpression::CT(nftables::expr::CT {
+                    key: Cow::Borrowed("status"),
+                    ..Default::default()
+                })),
+                right: Expression::String(Cow::Borrowed("dnat")),
+                op: Operator::IN,
+            }),
+            Statement::Counter(Counter::Anonymous(None)),
+            Statement::Accept(None),
+        ]
+        .into(),
+        comment: Some(Cow::Borrowed("ks:upnp")),
+        ..Default::default()
+    })
 }
 
 /// Create nftables rules from a ForwardRule.

@@ -9,6 +9,7 @@ use thiserror::Error;
 pub mod api;
 pub mod changes;
 pub mod sqm;
+pub mod upnp;
 pub mod validation;
 
 // ============================================================================
@@ -1944,6 +1945,10 @@ pub struct FirewallConfig {
     #[serde(default)]
     pub port_groups: Vec<PortGroup>,
     pub global_settings: FirewallGlobalSettings,
+    /// Set while UPnP / NAT-PMP is enabled. Loaded from the UPnP configuration,
+    /// not stored with the firewall rows, and kept out of API responses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upnp_forward: Option<upnp::UpnpForwardAccept>,
 }
 
 /// A named set of IPv4/IPv6 addresses and CIDR networks (may mix families).
@@ -2658,6 +2663,8 @@ pub struct ApplyComponentResults {
     pub firewall: ComponentResult,
     #[serde(default)]
     pub sqm: ComponentResult,
+    #[serde(default)]
+    pub upnp: ComponentResult,
     pub dnsmasq: ComponentResult,
     pub caddy: ComponentResult,
 }

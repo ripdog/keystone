@@ -169,6 +169,15 @@ pub fn generate_preview(
     output.push_str("        # Priority 2: Invalid\n");
     output.push_str("        ct state invalid drop\n");
     output.push_str("        \n");
+    if let Some(upnp) = &config.upnp_forward {
+        output.push_str("        # UPnP / NAT-PMP mappings (DNATed traffic, WAN to UPnP LANs)\n");
+        output.push_str(&format!(
+            "        iifname \"{}\" oifname {} ct status dnat accept comment \"ks:upnp\"\n",
+            upnp.wan_interface,
+            format_interface_set(&upnp.lan_interfaces)
+        ));
+        output.push_str("        \n");
+    }
     output.push_str("        # Priority 3: User Forward Rules\n");
 
     let mut sorted_forward_rules: Vec<_> =

@@ -78,6 +78,15 @@ async fn generate(component: Component, db: &Database) -> Result<Generated> {
                 BTreeMap::from([(SQM_PLAN_LABEL.to_string(), plan)])
             }
         }
+        // The miniupnpd configuration, or nothing while UPnP is disabled.
+        Component::Upnp => {
+            let config = crate::upnp::preview_upnp_config(db).await?;
+            if config.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(crate::upnp::config::MINIUPNPD_CONF_PATH.to_string(), config)])
+            }
+        }
         Component::Dnsmasq => BTreeMap::from([(
             crate::dnsmasq::DNSMASQ_CONFIG_PATH.to_string(),
             crate::dnsmasq::preview_dnsmasq_config(db.pool()).await?,
@@ -739,6 +748,68 @@ mod tests {
 
         let after = pending_changes(&db).await.unwrap();
         assert!(!changed(&after, Component::Dnsmasq));
+    }
+
+    #[tokio::test]
+    async fn a_upnp_edit_is_pending_for_upnp_and_the_firewall_accept_until_discarded() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+
+        sqlx::query("UPDATE upnp_config SET enabled = 1, wan_interface = 'eth0' WHERE id = 1")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO upnp_lan_interfaces (interface) VALUES ('eth1')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO upnp_allowed_subnets (subnet) VALUES ('192.168.1.0/24')")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let pending = pending_changes(&db).await.unwrap();
+        assert!(changed(&pending, Component::Upnp));
+        // The forward accept for DNATed mappings is part of the firewall ruleset.
+        assert!(changed(&pending, Component::Firewall));
+        assert!(!changed(&pending, Component::Dnsmasq));
+        assert!(!changed(&pending, Component::Sqm));
+
+        let upnp = pending
+            .components
+            .iter()
+            .find(|diff| diff.component == Component::Upnp)
+            .unwrap();
+        assert_eq!(upnp.files.len(), 1);
+        assert_eq!(upnp.files[0].path, crate::upnp::config::MINIUPNPD_CONF_PATH);
+        assert_eq!(upnp.files[0].status, FileChangeStatus::Added);
+        assert!(
+            upnp.files[0]
+                .unified_diff
+                .contains("+allow 1024-65535 192.168.1.0/24 1024-65535")
+        );
+        let firewall = pending
+            .components
+            .iter()
+            .find(|diff| diff.component == Component::Firewall)
+            .unwrap();
+        assert!(firewall.files[0].unified_diff.contains("ks:upnp"));
+
+        let outcome = discard_changes(
+            &db,
+            Some(vec![Component::Upnp, Component::Firewall]),
+            Some("admin"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome.components,
+            vec![Component::Firewall, Component::Upnp]
+        );
+
+        let after = pending_changes(&db).await.unwrap();
+        assert!(!changed(&after, Component::Upnp));
+        assert!(!changed(&after, Component::Firewall));
     }
 
     #[tokio::test]

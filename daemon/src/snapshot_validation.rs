@@ -24,6 +24,7 @@ use crate::dnsmasq;
 use crate::firewall::validate::validate_firewall_definitions;
 use crate::networkd::{validate_bridge_fields, validate_topology, validate_vlan_fields};
 use crate::snapshots::{CONFIG_TABLES, component_of};
+use crate::upnp;
 
 /// Every semantic error in the configuration the database holds, each prefixed
 /// with the component it belongs to. An empty result means the configuration
@@ -38,6 +39,7 @@ pub async fn validate_configuration(db: &Database) -> Vec<String> {
     }
     errors.extend(networkd_errors(db).await);
     errors.extend(firewall_errors(db).await);
+    errors.extend(upnp_errors(db).await);
     errors.extend(dnsmasq_errors(db).await);
     errors.extend(caddy_errors(db).await);
     errors
@@ -102,6 +104,22 @@ async fn firewall_errors(db: &Database) -> Vec<String> {
     match db.get_firewall_config().await {
         Ok(config) => prefixed(Component::Firewall, validate_firewall_definitions(&config)),
         Err(error) => load_failure(Component::Firewall, "firewall configuration", error),
+    }
+}
+
+async fn upnp_errors(db: &Database) -> Vec<String> {
+    const C: Component = Component::Upnp;
+    let config = match upnp::load_upnp_config(db.pool()).await {
+        Ok(config) => config,
+        Err(error) => return load_failure(C, "UPnP configuration", error),
+    };
+    let (lan, wan) = match upnp::interface_candidates(db).await {
+        Ok(candidates) => candidates,
+        Err(error) => return load_failure(C, "interface configuration", error),
+    };
+    match upnp::config::validate_config(&config, &lan, &wan) {
+        Ok(()) => Vec::new(),
+        Err(error) => prefixed(C, vec![error]),
     }
 }
 

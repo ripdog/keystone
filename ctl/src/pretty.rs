@@ -88,6 +88,7 @@ pub fn apply_all(response: &ApplyAllResponse) {
         ("networkd", &response.components.networkd),
         ("firewall", &response.components.firewall),
         ("sqm", &response.components.sqm),
+        ("upnp", &response.components.upnp),
         ("dnsmasq", &response.components.dnsmasq),
         ("caddy", &response.components.caddy),
     ];

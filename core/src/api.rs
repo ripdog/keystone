@@ -8,6 +8,7 @@
 
 use crate::changes::*;
 use crate::sqm::*;
+use crate::upnp::*;
 use crate::*;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -113,6 +114,8 @@ endpoints! {
     SaveCaddyConfig: Put "/caddy/config", SaveCaddyConfigRequest => SaveCaddyConfigResponse;
 
     SaveSqmConfig: Put "/sqm/config", SaveSqmConfigRequest => SaveSqmConfigResponse;
+
+    SaveUpnpConfig: Put "/upnp/config", SaveUpnpConfigRequest => SaveUpnpConfigResponse;
 
     ApplySsh: Post "/ssh/apply", SshConfig => SshApplyResponse;
 

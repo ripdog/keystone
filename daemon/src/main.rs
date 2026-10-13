@@ -24,6 +24,7 @@ mod ssh;
 mod status;
 mod systemd;
 mod traffic;
+mod upnp;
 mod wizard;
 
 use auth::AuthManager;
@@ -206,6 +207,7 @@ async fn main() -> anyhow::Result<()> {
     ssh::start_reconciler(db.clone());
     caddy::start_reconciler(db.pool().clone());
     sqm::start_reconciler(db.clone());
+    upnp::start_reconciler(db.clone());
 
     let state = Arc::new(AppState::new(
         auth_manager,
@@ -234,6 +236,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Create SQM state for traffic-shaping routes
     let sqm_state = sqm::routes::SqmState { db: db.clone() };
+
+    // Create UPnP state for port-mapping routes
+    let upnp_state = upnp::routes::UpnpState { db: db.clone() };
 
     // Build the router with protected routes
     let protected = Router::new()
@@ -280,6 +285,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(caddy::routes::caddy_routes(caddy_state))
         // Merge traffic shaping (SQM) routes
         .merge(sqm::routes::sqm_routes(sqm_state))
+        // Merge UPnP / NAT-PMP routes
+        .merge(upnp::routes::upnp_routes(upnp_state))
         // Merge pending-change and snapshot routes
         .merge(changes::changes_routes(changes_state))
         // Merge systemd routes
@@ -1536,7 +1543,7 @@ async fn networkd_status(
     Ok(Json(state.firewall_manager.status().await))
 }
 
-/// POST /apply-all - Apply all configuration (networkd, firewall, sqm, dnsmasq, caddy)
+/// POST /apply-all - Apply all configuration (networkd, firewall, sqm, upnp, dnsmasq, caddy)
 async fn apply_all(
     State(state): State<Arc<AppState>>,
     actor: Option<Extension<Actor>>,

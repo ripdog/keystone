@@ -17,16 +17,19 @@ pub enum Component {
     Firewall,
     /// Traffic shaping (SQM / CAKE) applied with `tc`.
     Sqm,
+    /// UPnP IGD and NAT-PMP / PCP port mapping served by miniupnpd.
+    Upnp,
     Dnsmasq,
     Caddy,
 }
 
 impl Component {
     /// Every component, in apply order.
-    pub const ALL: [Component; 5] = [
+    pub const ALL: [Component; 6] = [
         Component::Networkd,
         Component::Firewall,
         Component::Sqm,
+        Component::Upnp,
         Component::Dnsmasq,
         Component::Caddy,
     ];
@@ -36,6 +39,7 @@ impl Component {
             Component::Networkd => "networkd",
             Component::Firewall => "firewall",
             Component::Sqm => "sqm",
+            Component::Upnp => "upnp",
             Component::Dnsmasq => "dnsmasq",
             Component::Caddy => "caddy",
         }
@@ -61,7 +65,7 @@ impl FromStr for Component {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::parse(value).ok_or_else(|| {
             format!(
-                "unknown component {value:?}; expected one of networkd, firewall, sqm, dnsmasq, caddy"
+                "unknown component {value:?}; expected one of networkd, firewall, sqm, upnp, dnsmasq, caddy"
             )
         })
     }
@@ -250,6 +254,8 @@ pub struct ComponentBaselines {
     pub firewall: Option<i64>,
     #[serde(default)]
     pub sqm: Option<i64>,
+    #[serde(default)]
+    pub upnp: Option<i64>,
     pub dnsmasq: Option<i64>,
     pub caddy: Option<i64>,
 }
@@ -260,6 +266,7 @@ impl ComponentBaselines {
             Component::Networkd => self.networkd,
             Component::Firewall => self.firewall,
             Component::Sqm => self.sqm,
+            Component::Upnp => self.upnp,
             Component::Dnsmasq => self.dnsmasq,
             Component::Caddy => self.caddy,
         }
@@ -270,6 +277,7 @@ impl ComponentBaselines {
             Component::Networkd => self.networkd = id,
             Component::Firewall => self.firewall = id,
             Component::Sqm => self.sqm = id,
+            Component::Upnp => self.upnp = id,
             Component::Dnsmasq => self.dnsmasq = id,
             Component::Caddy => self.caddy = id,
         }

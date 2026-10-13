@@ -18,6 +18,7 @@ use crate::firewall::FirewallApplyManager;
 use crate::networkd::NetworkdApplyManager;
 use crate::snapshots;
 use crate::sqm;
+use crate::upnp;
 
 /// Re-export the result type for use by main.rs
 pub use keystone_core::ApplyAllResponse as ApplyAllResult;
@@ -54,8 +55,9 @@ fn component_skipped(message: impl Into<String>) -> ComponentResult {
 /// 2. Apply networkd configuration (interfaces, VLANs, bridges)
 /// 3. Apply firewall configuration (with rollback protection)
 /// 4. Apply traffic shaping (SQM / CAKE)
-/// 5. Apply dnsmasq configuration (DNS/DHCP)
-/// 6. Apply Caddy configuration (web server)
+/// 5. Apply UPnP / NAT-PMP (miniupnpd)
+/// 6. Apply dnsmasq configuration (DNS/DHCP)
+/// 7. Apply Caddy configuration (web server)
 ///
 /// If any component fails, subsequent components are still attempted to avoid
 /// leaving the system in an inconsistent state. A configuration snapshot is
@@ -174,6 +176,20 @@ pub async fn apply_all(
         }
     };
 
+    // Apply UPnP (miniupnpd configuration, its nftables table and service)
+    info!("Applying UPnP configuration...");
+    components.upnp = match upnp::apply_saved(db).await {
+        Ok(()) => {
+            info!("UPnP: applied successfully");
+            component_success("Applied successfully")
+        }
+        Err(e) => {
+            error!("UPnP failed: {e:#}");
+            all_success = false;
+            component_failure(format!("{e:#}"))
+        }
+    };
+
     // 5. Apply dnsmasq configuration
     info!("Applying dnsmasq configuration...");
     components.dnsmasq = match dnsmasq::apply_dnsmasq_config(db.pool()).await {
@@ -227,6 +243,7 @@ pub async fn apply_all(
         let mut applied = vec![
             Component::Networkd,
             Component::Sqm,
+            Component::Upnp,
             Component::Dnsmasq,
             Component::Caddy,
         ];
@@ -254,6 +271,7 @@ fn format_failed_components(components: &ApplyComponentResults) -> String {
         ("networkd", &components.networkd),
         ("firewall", &components.firewall),
         ("sqm", &components.sqm),
+        ("upnp", &components.upnp),
         ("dnsmasq", &components.dnsmasq),
         ("caddy", &components.caddy),
     ]
@@ -307,6 +325,7 @@ mod tests {
             networkd: component_failure("systemctl reload failed"),
             firewall: component_success("applied"),
             sqm: component_success("applied"),
+            upnp: component_success("applied"),
             dnsmasq: component_failure("address already in use"),
             caddy: component_skipped("not configured"),
         };

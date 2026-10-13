@@ -224,6 +224,7 @@ mod tests {
             address_groups: vec![],
             port_groups: vec![],
             global_settings: FirewallGlobalSettings::default(),
+            upnp_forward: None,
         }
     }
 
@@ -420,6 +421,68 @@ mod tests {
         // Translated port 80, not external 8080.
         assert!(text.contains("80") && !text.contains("8080"));
         assert_eq!(accept["add"]["rule"]["chain"], "forward");
+    }
+
+    /// Comments of the forward-chain rules, in evaluation order.
+    fn forward_rule_comments(config: &FirewallConfig) -> Vec<String> {
+        let json = serde_json::to_value(&generate_ruleset(config).nftables).unwrap();
+        json["nftables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["add"]["rule"]["chain"] == "forward")
+            .map(|r| {
+                r["add"]["rule"]["comment"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn upnp_accept_exists_only_while_upnp_is_enabled() {
+        let mut config = create_test_config();
+        assert!(
+            !forward_rule_comments(&config)
+                .iter()
+                .any(|c| c == "ks:upnp")
+        );
+
+        config.upnp_forward = Some(keystone_core::upnp::UpnpForwardAccept {
+            wan_interface: "eth0".to_string(),
+            lan_interfaces: vec!["eth1".to_string(), "eth2".to_string()],
+        });
+        let comments = forward_rule_comments(&config);
+        let upnp = comments
+            .iter()
+            .position(|c| c == "ks:upnp")
+            .expect("upnp accept rule");
+        let dnat = comments
+            .iter()
+            .position(|c| c == "Web Server DNAT accept (tcp)")
+            .expect("port forward accept rule");
+        assert!(
+            dnat < upnp,
+            "upnp accept must follow the port forward accepts: {comments:?}"
+        );
+
+        let json = serde_json::to_value(&generate_ruleset(&config).nftables).unwrap();
+        let rule = json["nftables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["add"]["rule"]["comment"] == "ks:upnp")
+            .unwrap()
+            .to_string();
+        assert!(rule.contains("\"dnat\""), "{rule}");
+        assert!(rule.contains("\"status\""), "{rule}");
+        assert!(rule.contains("\"accept\""), "{rule}");
+        assert!(rule.contains("\"eth0\""), "{rule}");
+        assert!(
+            rule.contains("\"eth1\"") && rule.contains("\"eth2\""),
+            "{rule}"
+        );
     }
 
     /// Comments of the input-chain rules, in evaluation order.

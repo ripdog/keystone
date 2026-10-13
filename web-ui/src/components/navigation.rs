@@ -626,16 +626,29 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_nests_grouped_pages_under_one_entry() {
-        let entries = sidebar_entries("Security & System");
-        let groups: Vec<usize> = entries
-            .iter()
-            .filter_map(|entry| match entry {
-                SidebarEntry::Group { items, .. } => Some(items.len()),
-                SidebarEntry::Page(_) => None,
-            })
-            .collect();
-        assert_eq!(groups, vec![7, 2]);
-        assert_eq!(entries.len(), 4);
+    fn sidebar_nests_each_group_once_and_keeps_page_order() {
+        for section in SECTIONS {
+            let mut seen_groups = HashSet::new();
+            let mut flattened = Vec::new();
+            for entry in sidebar_entries(section) {
+                match entry {
+                    SidebarEntry::Page(item) => {
+                        assert!(item.group.is_empty(), "{} not nested", item.href);
+                        flattened.push(item.href);
+                    }
+                    SidebarEntry::Group { title, items, .. } => {
+                        assert!(seen_groups.insert(title), "group {title} split");
+                        assert!(items.iter().all(|item| item.group == title));
+                        flattened.extend(items.iter().map(|item| item.href));
+                    }
+                }
+            }
+            let expected: Vec<_> = NAV_ITEMS
+                .iter()
+                .filter(|item| item.section == *section)
+                .map(|item| item.href)
+                .collect();
+            assert_eq!(flattened, expected, "section {section}");
+        }
     }
 }

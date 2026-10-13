@@ -2042,6 +2042,46 @@ pub struct LanDevicesResponse {
     pub devices: Vec<LanDevice>,
 }
 
+/// A device seen on the LAN, merged from the neighbour table, DHCP leases,
+/// static reservations, firewall zones and simple port forwards.
+/// One record per MAC address.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Client {
+    /// Lowercase colon-separated MAC address.
+    pub mac: String,
+    /// Hostname from an active DHCP lease, else from the static reservation.
+    pub hostname: Option<String>,
+    /// Manufacturer from the IEEE OUI registry, or "Private (randomized)" for
+    /// locally administered (randomized) MAC addresses.
+    pub vendor: Option<String>,
+    /// LAN interface the device was seen on (from the neighbour table).
+    pub interface: Option<String>,
+    /// Firewall zone containing `interface`, if any.
+    pub zone: Option<String>,
+    /// IPv4 addresses, including an enabled static reservation's address.
+    pub ipv4: Vec<String>,
+    /// IPv6 addresses, excluding link-local.
+    pub ipv6: Vec<String>,
+    /// True while the neighbour table lists the device as reachable or recently reachable.
+    pub online: bool,
+    /// Best neighbour-table state seen for the device (e.g. REACHABLE, STALE).
+    pub neighbour_state: Option<String>,
+    /// Unix time when the active DHCP lease expires. None when there is no
+    /// lease or the lease is infinite.
+    pub lease_expires_at: Option<u64>,
+    /// ID of an enabled static reservation whose MAC matches exactly.
+    pub static_lease_id: Option<i64>,
+    /// Address reserved by `static_lease_id`.
+    pub static_ip: Option<String>,
+    /// Simple port forwards whose destination is one of this device's addresses.
+    pub port_forward_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientsResponse {
+    pub clients: Vec<Client>,
+}
+
 /// One logical WAN exposure. Both families may belong to the same forward.
 /// The underlying firewall rule IDs remain the source of truth.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1,5 +1,6 @@
 //! Bridge configuration page
 
+use crate::components::use_toasts;
 use keystone_core::{BridgeConfig, ManagedInterface};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -12,12 +13,12 @@ pub fn BridgesPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let (bridges, set_bridges) = signal(Vec::<BridgeConfig>::new());
     let (managed_interfaces, set_managed_interfaces) = signal(Vec::<ManagedInterface>::new());
     let (loading, set_loading) = signal(true);
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
-    let (success_msg, set_success_msg) = signal(Option::<String>::None);
 
     // Modal state
     let (show_modal, set_show_modal) = signal(false);
@@ -153,7 +154,7 @@ pub fn BridgesPage(
                     if response.success {
                         config_changed.run(());
                         set_show_modal.set(false);
-                        set_success_msg.set(Some(response.message.clone()));
+                        toasts.success(response.message.clone());
                         // Reload bridges
                         if let Ok(bridge_list) = api::fetch_bridges(&token).await {
                             set_bridges.set(bridge_list);
@@ -194,7 +195,7 @@ pub fn BridgesPage(
                 Ok(response) => {
                     if response.success {
                         config_changed.run(());
-                        set_success_msg.set(Some(response.message.clone()));
+                        toasts.success(response.message.clone());
                         // Reload bridges
                         if let Ok(bridge_list) = api::fetch_bridges(&token).await {
                             set_bridges.set(bridge_list);
@@ -228,12 +229,6 @@ pub fn BridgesPage(
                     "+ Add Bridge"
                 </button>
             </div>
-
-            <Show when=move || success_msg.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200">
-                    {move || success_msg.get().unwrap_or_default()}
-                </div>
-            </Show>
 
             <Show when=move || error_msg.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">

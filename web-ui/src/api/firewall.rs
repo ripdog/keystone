@@ -270,13 +270,6 @@ pub async fn rollback_firewall(token: &str) -> Result<FirewallRollbackResponse, 
     post_empty("/api/firewall/rollback", token).await
 }
 
-/// Pending-confirmation status (covers networkd changes too)
-pub async fn fetch_pending_status(
-    token: &str,
-) -> Result<keystone_core::FirewallStatusResponse, String> {
-    get("/api/firewall/status", token).await
-}
-
 // ============================================================================
 // Packet Tester, Live Log and Connections
 // ============================================================================

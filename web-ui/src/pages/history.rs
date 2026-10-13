@@ -6,6 +6,7 @@
 
 use crate::api;
 use crate::components::form_utils::{event_target_checked, event_target_value};
+use crate::components::use_toasts;
 use crate::components::{
     FileDiffView, changed_components, component_display_name, use_config_changed,
 };
@@ -34,7 +35,6 @@ struct SnapshotRef {
 
 #[derive(Clone)]
 struct Notice {
-    ok: bool,
     text: String,
 }
 
@@ -48,6 +48,15 @@ pub fn HistoryPage(
     let config_changed = use_config_changed();
     let snapshots = RwSignal::new(None::<Result<Vec<SnapshotSummary>, String>>);
     let notice = RwSignal::new(None::<Notice>);
+    let toasts = use_toasts();
+    // Successes are brief toasts; failures stay until dismissed.
+    let report = move |ok: bool, text: String| {
+        if ok {
+            toasts.success(text);
+        } else {
+            notice.set(Some(Notice { text }));
+        }
+    };
     let busy = RwSignal::new(false);
     let note = RwSignal::new(String::new());
 
@@ -92,18 +101,12 @@ pub fn HistoryPage(
         spawn_local(async move {
             match api::create_snapshot(&token, text).await {
                 Ok(response) => {
-                    notice.set(Some(Notice {
-                        ok: response.success,
-                        text: response.message,
-                    }));
+                    report(response.success, response.message);
                     note.set(String::new());
                     reload();
                 }
                 Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
-                Err(e) => notice.set(Some(Notice {
-                    ok: false,
-                    text: format!("Could not create the snapshot: {e}"),
-                })),
+                Err(e) => report(false, format!("Could not create the snapshot: {e}")),
             }
             busy.set(false);
         });
@@ -169,10 +172,7 @@ pub fn HistoryPage(
             match api::restore_snapshot(&token, target.id, Some(selected)).await {
                 Ok(response) if response.success => {
                     restore_target.set(None);
-                    notice.set(Some(Notice {
-                        ok: true,
-                        text: response.message,
-                    }));
+                    report(true, response.message);
                     reload();
                     config_changed.run(());
                 }
@@ -195,21 +195,14 @@ pub fn HistoryPage(
                 Ok(bytes) => {
                     let filename = format!("keystone-config-{}.db", target.id);
                     match download_bytes(&filename, &bytes, "application/vnd.sqlite3") {
-                        Ok(()) => notice.set(Some(Notice {
-                            ok: true,
-                            text: format!("Downloaded {} as {filename}.", target.label),
-                        })),
-                        Err(e) => notice.set(Some(Notice {
-                            ok: false,
-                            text: format!("Download failed: {e}"),
-                        })),
+                        Ok(()) => {
+                            report(true, format!("Downloaded {} as {filename}.", target.label))
+                        }
+                        Err(e) => report(false, format!("Download failed: {e}")),
                     }
                 }
                 Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
-                Err(e) => notice.set(Some(Notice {
-                    ok: false,
-                    text: format!("Export failed: {e}"),
-                })),
+                Err(e) => report(false, format!("Export failed: {e}")),
             }
             busy.set(false);
         });
@@ -236,20 +229,17 @@ pub fn HistoryPage(
         spawn_local(async move {
             match api::import_snapshot(&token, file).await {
                 Ok(response) => {
-                    notice.set(Some(Notice {
-                        ok: response.success,
-                        text: format!(
+                    report(
+                        response.success,
+                        format!(
                             "{} Use Restore on it to bring it into the live configuration.",
                             response.message
                         ),
-                    }));
+                    );
                     reload();
                 }
                 Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
-                Err(e) => notice.set(Some(Notice {
-                    ok: false,
-                    text: format!("Import failed: {e}"),
-                })),
+                Err(e) => report(false, format!("Import failed: {e}")),
             }
             busy.set(false);
         });
@@ -265,11 +255,7 @@ pub fn HistoryPage(
             </div>
 
             {move || notice.get().map(|item| {
-                let class = if item.ok {
-                    "flex items-start justify-between gap-3 rounded-lg border border-green-600 bg-green-900/40 px-4 py-3 text-sm text-green-100"
-                } else {
-                    "flex items-start justify-between gap-3 rounded-lg border border-red-600 bg-red-900/40 px-4 py-3 text-sm text-red-100"
-                };
+                let class = "flex items-start justify-between gap-3 rounded-lg border border-red-600 bg-red-900/40 px-4 py-3 text-sm text-red-100";
                 view! {
                     <div class=class role="status">
                         <span class="min-w-0 break-words">{item.text}</span>
@@ -770,6 +756,8 @@ mod tests {
                 diff(Component::Caddy, true),
             ],
             baseline_ids: ComponentBaselines::default(),
+            awaiting_confirmation: None,
+            server_time: 0,
         };
         assert_eq!(
             default_restore_selection(&response),
@@ -782,6 +770,8 @@ mod tests {
         let response = PendingChangesResponse {
             components: Component::ALL.iter().map(|c| diff(*c, false)).collect(),
             baseline_ids: ComponentBaselines::default(),
+            awaiting_confirmation: None,
+            server_time: 0,
         };
         assert!(default_restore_selection(&response).is_empty());
     }

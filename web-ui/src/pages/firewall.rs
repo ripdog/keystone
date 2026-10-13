@@ -18,6 +18,7 @@ use super::simple_forwards::SimpleForwardsTab;
 use crate::api;
 use crate::components::rule_table::{FilterBox, matches_filter};
 use crate::components::use_config_changed;
+use crate::components::use_toasts;
 use keystone_core::{
     FirewallAction, FirewallGlobalSettings, FirewallPolicy, FirewallZone, ZoneForwardPolicy,
 };
@@ -848,6 +849,7 @@ fn ZoneForwardEditor(
 
 #[component]
 fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let settings = LocalResource::new(move || {
         let token = token.get();
@@ -891,7 +893,7 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
                 Ok(response) => {
                     if response.success {
                         config_changed.run(());
-                        status_message.set("Settings saved successfully".to_string());
+                        toasts.success("Settings saved successfully");
                     } else {
                         status_message.set(format!("Error: {}", response.message));
                     }
@@ -981,7 +983,7 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
                                         }.into_any()
                                     } else {
                                         view! {
-                                            <div class="bg-green-900/50 border border-green-700 text-green-200 px-4 py-2 rounded">
+                                            <div class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded">
                                                 {msg}
                                             </div>
                                         }.into_any()

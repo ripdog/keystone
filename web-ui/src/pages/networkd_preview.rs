@@ -113,7 +113,7 @@ pub fn NetworkdPreviewPage(
                     } else {
                         view! {
                             <div class="space-y-4">
-                                <div class="bg-green-900/50 border border-green-500 text-green-200 px-4 py-2 rounded">
+                                <div class="text-sm text-slate-400">
                                     {format!("Showing {} configuration file(s)", data.files.len())}
                                 </div>
                                 <For

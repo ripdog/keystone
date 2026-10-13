@@ -1,8 +1,8 @@
 //! Main application layout with navigation
 
 use crate::components::{
-    CommandPalette, ConfigRefresh, PendingChangesBar, SidebarNavigation, icon_path,
-    provide_pending_actions,
+    CommandPalette, ConfigRefresh, PendingChangesBar, SidebarNavigation, ToastHost, icon_path,
+    provide_pending_actions, provide_toasts,
 };
 use leptos::prelude::*;
 
@@ -17,9 +17,12 @@ pub fn AppLayout(
     let (sidebar_open, set_sidebar_open) = signal(false);
     // Pages bump this after saving so the pending-changes bar refetches at once.
     provide_context(ConfigRefresh(RwSignal::new(0)));
-    // Shared by the pending bar, its review drawer and the command palette.
-    provide_pending_actions(auth_token, on_unauthorized);
     let palette_open = RwSignal::new(false);
+    // Brief confirmations for saves; shared by every page.
+    provide_toasts();
+    // Shared by the pending bar, its review drawer and the command palette. The
+    // palette closes when a confirmation becomes pending.
+    provide_pending_actions(auth_token, on_unauthorized, palette_open);
 
     let logout_click = move |_| on_logout.run(());
 
@@ -128,6 +131,7 @@ pub fn AppLayout(
                     </main>
                 </div>
             </div>
+            <ToastHost />
         </div>
     }
 }

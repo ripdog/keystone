@@ -6,6 +6,7 @@
 
 use crate::api;
 use crate::components::use_config_changed;
+use crate::components::use_toasts;
 use gloo_timers::callback::Interval;
 use keystone_core::{Client, DnsmasqStaticLease};
 use leptos::prelude::*;
@@ -47,10 +48,10 @@ pub fn ClientsPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let clients = RwSignal::new(None::<Vec<Client>>);
     let load_error = RwSignal::new(None::<String>);
-    let notice = RwSignal::new(None::<String>);
     // `?q=` pre-fills the filter. The effect also applies a new `q` when this
     // page is already open, for example from the command palette.
     let query = use_query_map();
@@ -128,9 +129,9 @@ pub fn ClientsPage(
             match api::save_static_lease(&token, lease).await {
                 Ok(_) => {
                     reserve.mac.set(None);
-                    notice.set(Some(format!(
+                    toasts.success(format!(
                         "Reservation saved for {mac}. Use Apply all in the pending changes bar to activate it."
-                    )));
+                    ));
                     config_changed.run(());
                     poll();
                 }
@@ -182,12 +183,6 @@ pub fn ClientsPage(
                 <span class="text-xs text-gray-500 pt-2">"Refreshes every 5 seconds"</span>
             </div>
 
-            {move || notice.get().map(|text| view! {
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200 flex justify-between items-start gap-3">
-                    <span>{text}</span>
-                    <button class="text-green-200/70 hover:text-green-100" on:click=move |_| notice.set(None)>"×"</button>
-                </div>
-            })}
             {move || load_error.get().map(|text| view! {
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">
                     {format!("Failed to load clients: {text}")}

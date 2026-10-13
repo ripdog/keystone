@@ -1,5 +1,6 @@
 //! Systemd services page - list and manage system services
 
+use crate::components::use_toasts;
 use keystone_core::{SystemdActiveState, SystemdUnit};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -37,10 +38,10 @@ pub fn ServicesPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let (units, set_units) = signal(Vec::<SystemdUnit>::new());
     let (loading, set_loading) = signal(true);
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
-    let (success_msg, set_success_msg) = signal(Option::<String>::None);
     let (show_all, set_show_all) = signal(false);
     let (action_in_progress, set_action_in_progress) = signal(Option::<String>::None);
 
@@ -85,14 +86,13 @@ pub fn ServicesPage(
             None => return,
         };
         set_action_in_progress.set(Some(unit_name.clone()));
-        set_success_msg.set(None);
         set_error_msg.set(None);
 
         spawn_local(async move {
             match api::start_unit(&token, &unit_name).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        toasts.success(response.message);
                     } else {
                         set_error_msg.set(Some(response.message));
                     }
@@ -116,14 +116,13 @@ pub fn ServicesPage(
             None => return,
         };
         set_action_in_progress.set(Some(unit_name.clone()));
-        set_success_msg.set(None);
         set_error_msg.set(None);
 
         spawn_local(async move {
             match api::stop_unit(&token, &unit_name).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        toasts.success(response.message);
                     } else {
                         set_error_msg.set(Some(response.message));
                     }
@@ -147,14 +146,13 @@ pub fn ServicesPage(
             None => return,
         };
         set_action_in_progress.set(Some(unit_name.clone()));
-        set_success_msg.set(None);
         set_error_msg.set(None);
 
         spawn_local(async move {
             match api::restart_unit(&token, &unit_name).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        toasts.success(response.message);
                     } else {
                         set_error_msg.set(Some(response.message));
                     }
@@ -180,11 +178,6 @@ pub fn ServicesPage(
             </div>
 
             // Success message
-            <Show when=move || success_msg.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200">
-                    {move || success_msg.get().unwrap_or_default()}
-                </div>
-            </Show>
 
             // Error message
             <Show when=move || error_msg.get().is_some()>

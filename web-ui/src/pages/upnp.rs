@@ -7,6 +7,7 @@
 use crate::api;
 use crate::components::form_utils::{event_target_checked, event_target_value};
 use crate::components::use_config_changed;
+use crate::components::use_toasts;
 use gloo_timers::callback::Interval;
 use keystone_core::Client;
 use keystone_core::upnp::{
@@ -196,6 +197,7 @@ pub fn UpnpPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let token = Signal::derive(move || auth_token.get().unwrap_or_default());
     let form = FormState::new();
     let state = RwSignal::new(Option::<UpnpStateResponse>::None);
@@ -203,7 +205,6 @@ pub fn UpnpPage(
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let error_msg = RwSignal::new(Option::<String>::None);
-    let success_msg = RwSignal::new(Option::<String>::None);
 
     // Load the saved configuration once the token is known.
     Effect::new(move || {
@@ -234,7 +235,6 @@ pub fn UpnpPage(
     let save = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
         error_msg.set(None);
-        success_msg.set(None);
         let config = match form.to_config() {
             Ok(config) => config,
             Err(message) => {
@@ -247,10 +247,10 @@ pub fn UpnpPage(
         spawn_local(async move {
             match api::save_upnp_config(&token_val, config).await {
                 Ok(()) => {
-                    success_msg.set(Some(
+                    toasts.success(
                         "UPnP settings saved. They take effect once the configuration is applied."
                             .to_string(),
-                    ));
+                    );
                     config_changed.run(());
                 }
                 Err(e) => {
@@ -290,12 +290,6 @@ pub fn UpnpPage(
                     "UPnP lets any device on the selected networks open ports. Keep secure mode on, so that clients can only map ports to their own address."
                 </p>
             </div>
-
-            <Show when=move || success_msg.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200">
-                    {move || success_msg.get().unwrap_or_default()}
-                </div>
-            </Show>
 
             <Show when=move || error_msg.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">

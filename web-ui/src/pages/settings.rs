@@ -1,5 +1,6 @@
 //! System settings page
 
+use crate::components::use_toasts;
 use keystone_core::{GlobalSettings, SaveUserRequest, UserInfo};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -12,6 +13,7 @@ pub fn SettingsPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let (users, set_users) = signal(Vec::<UserInfo>::new());
     let (show_user_modal, set_show_user_modal) = signal(false);
     let (editing_user, set_editing_user) = signal(Option::<UserInfo>::None);
@@ -19,7 +21,6 @@ pub fn SettingsPage(
     let (modal_email, set_modal_email) = signal(String::new());
     let (modal_password, set_modal_password) = signal(String::new());
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
-    let (success_msg, set_success_msg) = signal(Option::<String>::None);
     let (global_settings, set_global_settings) = signal(GlobalSettings::default());
     let (settings_loading, set_settings_loading) = signal(true);
 
@@ -114,7 +115,7 @@ pub fn SettingsPage(
                 Ok(response) => {
                     if response.success {
                         set_show_user_modal.set(false);
-                        set_success_msg.set(Some(response.message.clone()));
+                        toasts.success(response.message.clone());
                         // Reload users
                         if let Ok(users_list) = api::fetch_users(&token).await {
                             leptos::logging::log!("Reloaded {} users after save", users_list.len());
@@ -157,7 +158,7 @@ pub fn SettingsPage(
             match api::delete_user(&token, user_id).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message.clone()));
+                        toasts.success(response.message.clone());
                         // Reload users
                         if let Ok(users_list) = api::fetch_users(&token).await {
                             leptos::logging::log!(
@@ -189,12 +190,6 @@ pub fn SettingsPage(
                 <h1 class="text-2xl font-semibold text-blue-300">"System Settings"</h1>
                 <p class="text-gray-400">"Configure system-wide router settings"</p>
             </div>
-
-            <Show when=move || success_msg.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200">
-                    {move || success_msg.get().unwrap_or_default()}
-                </div>
-            </Show>
 
             <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
                 <div class="flex items-center justify-between mb-4">
@@ -286,7 +281,7 @@ pub fn SettingsPage(
                                         match api::save_global_settings(&token, settings).await {
                                             Ok(response) => {
                                                 if response.success {
-                                                    set_success_msg.set(Some(response.message));
+                                                    toasts.success(response.message);
                                                 } else {
                                                     set_error_msg.set(Some(response.message));
                                                 }

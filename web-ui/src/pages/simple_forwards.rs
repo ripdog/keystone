@@ -2,6 +2,7 @@
 use crate::api;
 use crate::components::rule_table::{FilterBox, RuleHits, matches_filter, use_rule_counters};
 use crate::components::use_config_changed;
+use crate::components::use_toasts;
 use keystone_core::{
     CreateSimplePortForwardRequest, LanDevice, PortForward, RuleProtocol, SimplePortForward,
 };
@@ -77,6 +78,7 @@ pub(super) fn SimpleForwardsTab(
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let config_changed = use_config_changed();
+    let toasts = use_toasts();
     let forwards = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -107,7 +109,6 @@ pub(super) fn SimpleForwardsTab(
     let description = RwSignal::new(String::new());
     let saving = RwSignal::new(false);
     let error = RwSignal::new(String::new());
-    let notice = RwSignal::new(String::new());
 
     // Opened from the Clients page as /firewall/port-forwards?mac=...: start a
     // new forward for that device. Applied once per requested MAC, and only
@@ -210,9 +211,8 @@ pub(super) fn SimpleForwardsTab(
                 Ok(()) => {
                     editing.set(false);
                     edit_id.set(None);
-                    notice.set(
-                        "Forward saved. Use Apply all in the pending changes bar to activate it."
-                            .into(),
+                    toasts.success(
+                        "Forward saved. Use Apply all in the pending changes bar to activate it.",
                     );
                     config_changed.run(());
                     reload_trigger.update(|v| *v += 1);
@@ -253,7 +253,6 @@ pub(super) fn SimpleForwardsTab(
                 </button>
                 </div>
             </div>
-            {move || (!notice.get().is_empty()).then(|| view! { <p class="text-blue-300 text-sm">{notice.get()}</p> })}
             {move || (!error.get().is_empty()).then(|| view! {
                 <div class="bg-red-900/50 border border-red-700 text-red-200 px-4 py-2 rounded text-sm">{error.get()}</div>
             })}
@@ -406,7 +405,6 @@ pub(super) fn SimpleForwardsTab(
                                                             // Show both addresses explicitly even when the discovery list has changed.
                                                             manual.set(true);
                                                             selected.set(String::new());
-                                                            notice.set(String::new());
                                                             error.set(String::new());
                                                             editing.set(true);
                                                         }>"Edit"</button>
@@ -416,7 +414,7 @@ pub(super) fn SimpleForwardsTab(
                                                             leptos::task::spawn_local(async move {
                                                                 match api::delete_simple_forward(&token, id).await {
                                                                     Ok(resp) if resp.success => {
-                                                                        notice.set("Forward removed. Use Apply all in the pending changes bar to activate it.".into());
+                                                                        toasts.success("Forward removed. Use Apply all in the pending changes bar to activate it.");
                                                                         config_changed.run(());
                                                                         reload_trigger.update(|v| *v += 1);
                                                                     }
@@ -493,7 +491,7 @@ pub(super) fn SimpleForwardsTab(
                                                         leptos::task::spawn_local(async move {
                                                             match api::delete_port_forward(&token, id).await {
                                                                 Ok(resp) if resp.success => {
-                                                                    notice.set("Port forward removed. Use Apply all in the pending changes bar to activate it.".into());
+                                                                    toasts.success("Port forward removed. Use Apply all in the pending changes bar to activate it.");
                                                                     config_changed.run(());
                                                                     reload_trigger.update(|v| *v += 1);
                                                                 }

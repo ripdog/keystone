@@ -13,6 +13,7 @@
 
 use crate::api;
 use crate::components::use_config_changed;
+use crate::components::use_toasts;
 use keystone_core::{
     DhcpLease, DnsmasqAddressAction, DnsmasqAddressOverride, DnsmasqCnameRecord, DnsmasqConfig,
     DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord, DnsmasqStaticLease,
@@ -133,7 +134,6 @@ pub fn DnsmasqPage(
 
     let loading = RwSignal::new(true);
     let error_msg = RwSignal::new(Option::<String>::None);
-    let success_msg = RwSignal::new(Option::<String>::None);
     let reload_trigger = RwSignal::new(0u32);
 
     // Load initial data
@@ -194,12 +194,6 @@ pub fn DnsmasqPage(
                 </div>
             </div>
 
-            <Show when=move || success_msg.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200">
-                    {move || success_msg.get().unwrap_or_default()}
-                </div>
-            </Show>
-
             <Show when=move || error_msg.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">
                     {move || error_msg.get().unwrap_or_default()}
@@ -226,7 +220,6 @@ pub fn DnsmasqPage(
                             <DnsSettingsTab
                                 token=token
                                 config=config
-                                success_msg=success_msg
                                 error_msg=error_msg
                             />
                         }.into_any(),
@@ -235,7 +228,6 @@ pub fn DnsmasqPage(
                                 token=token
                                 dhcp_ranges=dhcp_ranges
                                 managed_interfaces=managed_interfaces
-                                success_msg=success_msg
                                 error_msg=error_msg
                                 reload_trigger=reload_trigger
                             />
@@ -244,7 +236,6 @@ pub fn DnsmasqPage(
                             <StaticLeasesTab
                                 token=token
                                 static_leases=static_leases
-                                success_msg=success_msg
                                 error_msg=error_msg
                                 reload_trigger=reload_trigger
                             />
@@ -254,7 +245,6 @@ pub fn DnsmasqPage(
                                 token=token
                                 active_leases=active_leases
                                 static_leases=static_leases
-                                success_msg=success_msg
                                 error_msg=error_msg
                                 reload_trigger=reload_trigger
                             />
@@ -263,7 +253,6 @@ pub fn DnsmasqPage(
                             <DhcpOptionsTab
                                 token=token
                                 dhcp_options=dhcp_options
-                                success_msg=success_msg
                                 error_msg=error_msg
                                 reload_trigger=reload_trigger
                             />
@@ -272,7 +261,6 @@ pub fn DnsmasqPage(
                             <HostRecordsSection
                                 token=token
                                 host_records=host_records
-                                success_msg=success_msg
                                 error_msg=error_msg
                                 reload_trigger=reload_trigger
                             />
@@ -281,7 +269,6 @@ pub fn DnsmasqPage(
                             <CnameRecordsSection
                                 token=token
                                 cname_records=cname_records
-                                success_msg=success_msg
                                 error_msg=error_msg
                                 reload_trigger=reload_trigger
                             />
@@ -290,7 +277,6 @@ pub fn DnsmasqPage(
                             <AddressOverridesTab
                                 token=token
                                 address_overrides=address_overrides
-                                success_msg=success_msg
                                 error_msg=error_msg
                                 reload_trigger=reload_trigger
                             />
@@ -411,9 +397,9 @@ fn OverviewTab(
 fn DnsSettingsTab(
     token: Signal<String>,
     config: RwSignal<DnsmasqConfig>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let saving = RwSignal::new(false);
 
@@ -434,7 +420,6 @@ fn DnsSettingsTab(
         ev.prevent_default();
         saving.set(true);
         error_msg.set(None);
-        success_msg.set(None);
 
         let new_config = DnsmasqConfig {
             enabled: enabled.get(),
@@ -465,7 +450,7 @@ fn DnsSettingsTab(
                 Ok(()) => {
                     config.set(new_config);
                     config_changed.run(());
-                    success_msg.set(Some("DNS settings saved".to_string()));
+                    toasts.success("DNS settings saved".to_string());
                 }
                 Err(e) => {
                     error_msg.set(Some(format!("Error: {}", e)));
@@ -631,10 +616,10 @@ fn DhcpRangesTab(
     token: Signal<String>,
     dhcp_ranges: RwSignal<Vec<DnsmasqDhcpRange>>,
     managed_interfaces: RwSignal<Vec<ManagedInterface>>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     // Modal state
     let show_modal = RwSignal::new(false);
@@ -714,7 +699,7 @@ fn DhcpRangesTab(
                 Ok(_) => {
                     show_modal.set(false);
                     config_changed.run(());
-                    success_msg.set(Some("DHCP range saved".to_string()));
+                    toasts.success("DHCP range saved".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -737,7 +722,7 @@ fn DhcpRangesTab(
             match api::delete_dhcp_range(&token_val, id).await {
                 Ok(()) => {
                     config_changed.run(());
-                    success_msg.set(Some("DHCP range deleted".to_string()));
+                    toasts.success("DHCP range deleted".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -961,10 +946,10 @@ fn DhcpRangesTab(
 fn StaticLeasesTab(
     token: Signal<String>,
     static_leases: RwSignal<Vec<DnsmasqStaticLease>>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     // Modal state
     let show_modal = RwSignal::new(false);
@@ -1031,7 +1016,7 @@ fn StaticLeasesTab(
                 Ok(_) => {
                     show_modal.set(false);
                     config_changed.run(());
-                    success_msg.set(Some("Static lease saved".to_string()));
+                    toasts.success("Static lease saved".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -1054,7 +1039,7 @@ fn StaticLeasesTab(
             match api::delete_static_lease(&token_val, id).await {
                 Ok(()) => {
                     config_changed.run(());
-                    success_msg.set(Some("Static lease deleted".to_string()));
+                    toasts.success("Static lease deleted".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -1229,10 +1214,10 @@ fn ActiveLeasesTab(
     token: Signal<String>,
     active_leases: RwSignal<Vec<DhcpLease>>,
     static_leases: RwSignal<Vec<DnsmasqStaticLease>>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let refreshing = RwSignal::new(false);
 
@@ -1269,7 +1254,7 @@ fn ActiveLeasesTab(
             match api::save_static_lease(&token_val, new_lease).await {
                 Ok(_) => {
                     config_changed.run(());
-                    success_msg.set(Some("Static lease created from active lease".to_string()));
+                    toasts.success("Static lease created from active lease".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -1454,10 +1439,10 @@ fn PreviewTab(token: Signal<String>) -> impl IntoView {
 fn DhcpOptionsTab(
     token: Signal<String>,
     dhcp_options: RwSignal<Vec<DnsmasqDhcpOption>>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     // Modal state
     let show_modal = RwSignal::new(false);
@@ -1530,7 +1515,7 @@ fn DhcpOptionsTab(
                 Ok(_) => {
                     show_modal.set(false);
                     config_changed.run(());
-                    success_msg.set(Some("DHCP option saved".to_string()));
+                    toasts.success("DHCP option saved".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -1553,7 +1538,7 @@ fn DhcpOptionsTab(
             match api::delete_dhcp_option(&token_val, id).await {
                 Ok(()) => {
                     config_changed.run(());
-                    success_msg.set(Some("DHCP option deleted".to_string()));
+                    toasts.success("DHCP option deleted".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -1760,10 +1745,10 @@ fn DhcpOptionsTab(
 fn HostRecordsSection(
     token: Signal<String>,
     host_records: RwSignal<Vec<DnsmasqHostRecord>>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let show_modal = RwSignal::new(false);
     let editing_record = RwSignal::new(Option::<DnsmasqHostRecord>::None);
@@ -1835,7 +1820,7 @@ fn HostRecordsSection(
                 Ok(_) => {
                     show_modal.set(false);
                     config_changed.run(());
-                    success_msg.set(Some("Host record saved".to_string()));
+                    toasts.success("Host record saved".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -1858,7 +1843,7 @@ fn HostRecordsSection(
             match api::delete_host_record(&token_val, id).await {
                 Ok(()) => {
                     config_changed.run(());
-                    success_msg.set(Some("Host record deleted".to_string()));
+                    toasts.success("Host record deleted".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -2035,10 +2020,10 @@ fn HostRecordsSection(
 fn CnameRecordsSection(
     token: Signal<String>,
     cname_records: RwSignal<Vec<DnsmasqCnameRecord>>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let show_modal = RwSignal::new(false);
     let editing_record = RwSignal::new(Option::<DnsmasqCnameRecord>::None);
@@ -2094,7 +2079,7 @@ fn CnameRecordsSection(
                 Ok(_) => {
                     show_modal.set(false);
                     config_changed.run(());
-                    success_msg.set(Some("CNAME record saved".to_string()));
+                    toasts.success("CNAME record saved".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -2117,7 +2102,7 @@ fn CnameRecordsSection(
             match api::delete_cname_record(&token_val, id).await {
                 Ok(()) => {
                     config_changed.run(());
-                    success_msg.set(Some("CNAME record deleted".to_string()));
+                    toasts.success("CNAME record deleted".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -2283,10 +2268,10 @@ fn CnameRecordsSection(
 fn AddressOverridesTab(
     token: Signal<String>,
     address_overrides: RwSignal<Vec<DnsmasqAddressOverride>>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let show_modal = RwSignal::new(false);
     let editing_override = RwSignal::new(Option::<DnsmasqAddressOverride>::None);
@@ -2357,7 +2342,7 @@ fn AddressOverridesTab(
                 Ok(_) => {
                     show_modal.set(false);
                     config_changed.run(());
-                    success_msg.set(Some("Address override saved".to_string()));
+                    toasts.success("Address override saved".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -2380,7 +2365,7 @@ fn AddressOverridesTab(
             match api::delete_address_override(&token_val, id).await {
                 Ok(()) => {
                     config_changed.run(());
-                    success_msg.set(Some("Address override deleted".to_string()));
+                    toasts.success("Address override deleted".to_string());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {

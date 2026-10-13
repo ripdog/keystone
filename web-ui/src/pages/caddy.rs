@@ -7,6 +7,7 @@
 
 use crate::api;
 use crate::components::use_config_changed;
+use crate::components::use_toasts;
 use keystone_core::{CaddyConfig, CaddyHttpsMode};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -67,7 +68,6 @@ pub fn CaddyPage(
 
     let loading = RwSignal::new(true);
     let error_msg = RwSignal::new(Option::<String>::None);
-    let success_msg = RwSignal::new(Option::<String>::None);
     let reload_trigger = RwSignal::new(0u32);
 
     // Load initial data
@@ -109,12 +109,6 @@ pub fn CaddyPage(
                 </div>
             </div>
 
-            <Show when=move || success_msg.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200">
-                    {move || success_msg.get().unwrap_or_default()}
-                </div>
-            </Show>
-
             <Show when=move || error_msg.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">
                     {move || error_msg.get().unwrap_or_default()}
@@ -134,7 +128,6 @@ pub fn CaddyPage(
                                 token=token
                                 config=config
                                 available_interfaces=available_interfaces
-                                success_msg=success_msg
                                 error_msg=error_msg
                             />
                         }.into_any(),
@@ -164,9 +157,9 @@ fn SettingsTab(
     token: Signal<String>,
     config: RwSignal<CaddyConfig>,
     available_interfaces: RwSignal<Vec<String>>,
-    success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let config_changed = use_config_changed();
     let saving = RwSignal::new(false);
 
@@ -183,7 +176,6 @@ fn SettingsTab(
         ev.prevent_default();
         saving.set(true);
         error_msg.set(None);
-        success_msg.set(None);
 
         let new_config = CaddyConfig {
             enabled: enabled.get(),
@@ -203,7 +195,7 @@ fn SettingsTab(
                 Ok(()) => {
                     config.set(new_config);
                     config_changed.run(());
-                    success_msg.set(Some("Caddy settings saved".to_string()));
+                    toasts.success("Caddy settings saved".to_string());
                 }
                 Err(e) => {
                     error_msg.set(Some(format!("Error: {}", e)));

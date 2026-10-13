@@ -1,5 +1,6 @@
 //! Managed OpenSSH listener settings. Root login is deliberately not a UI option.
 use crate::api;
+use crate::components::{PendingActions, use_config_changed, use_toasts};
 use keystone_core::{SshConfig, SshStateResponse};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -9,14 +10,16 @@ pub fn SshPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
+    let config_changed = use_config_changed();
+    // Saving is not offered while an applied change awaits confirmation.
+    let locked = expect_context::<PendingActions>().locked;
     let config = RwSignal::new(SshConfig::default());
     let port = RwSignal::new("22".to_string());
     let state = RwSignal::new(Option::<SshStateResponse>::None);
     let loading = RwSignal::new(true);
     let busy = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
-    let success = RwSignal::new(Option::<String>::None);
-    let firewall_session = RwSignal::new(Option::<String>::None);
     let reload = RwSignal::new(0u32);
 
     Effect::new(move || {
@@ -52,57 +55,19 @@ pub fn SshPage(
         next.port = parsed_port;
         busy.set(true);
         error.set(None);
-        success.set(None);
         spawn_local(async move {
             match api::apply_ssh(&token, &next).await {
                 Ok(response) if response.success => {
-                    firewall_session.set(response.firewall_session_id);
-                    success.set(Some(response.message));
+                    // A firewall change awaits confirmation: the pending bar at
+                    // the top of the page shows that, so no message is added here.
+                    if response.firewall_session_id.is_none() {
+                        toasts.success(response.message);
+                    }
+                    config_changed.run(());
                     reload.update(|n| *n += 1);
                 }
                 Ok(response) => error.set(Some(response.message)),
                 Err(e) if e.contains("Unauthorized") => on_unauthorized.run(()),
-                Err(e) => error.set(Some(e)),
-            }
-            busy.set(false);
-        });
-    };
-
-    let confirm = move |_| {
-        let Some(token) = auth_token.get() else {
-            return;
-        };
-        let Some(session) = firewall_session.get() else {
-            return;
-        };
-        busy.set(true);
-        spawn_local(async move {
-            match api::confirm_firewall(&token, &session).await {
-                Ok(r) if r.success => {
-                    firewall_session.set(None);
-                    success.set(Some("SSH and firewall settings confirmed".into()));
-                }
-                Ok(r) => error.set(Some(r.message)),
-                Err(e) => error.set(Some(e)),
-            }
-            busy.set(false);
-        });
-    };
-
-    let rollback = move |_| {
-        let Some(token) = auth_token.get() else {
-            return;
-        };
-        busy.set(true);
-        spawn_local(async move {
-            match api::rollback_firewall(&token).await {
-                Ok(r) if r.success => {
-                    firewall_session.set(None);
-                    success.set(Some(
-                        "Firewall rules rolled back. SSH settings were not reverted.".into(),
-                    ));
-                }
-                Ok(r) => error.set(Some(r.message)),
                 Err(e) => error.set(Some(e)),
             }
             busy.set(false);
@@ -118,24 +83,6 @@ pub fn SshPage(
             <Show when=move || error.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">
                     {move || error.get().unwrap_or_default()}
-                </div>
-            </Show>
-            <Show when=move || success.get().is_some()>
-                <div class="bg-green-900/50 border border-green-600 rounded p-4 text-green-200">
-                    {move || success.get().unwrap_or_default()}
-                </div>
-            </Show>
-            <Show when=move || firewall_session.get().is_some()>
-                <div class="bg-yellow-950 border border-yellow-600 rounded p-4 space-y-3">
-                    <p class="text-yellow-200 font-medium">
-                        "Confirm the new firewall rules within 60 seconds or they will automatically revert."
-                    </p>
-                    <div class="flex gap-2">
-                        <button class="bg-green-700 hover:bg-green-600 px-4 py-2 rounded disabled:opacity-50"
-                            disabled=move || busy.get() on:click=confirm>"Confirm firewall"</button>
-                        <button class="bg-gray-600 hover:bg-gray-500 px-4 py-2 rounded disabled:opacity-50"
-                            disabled=move || busy.get() on:click=rollback>"Revert firewall"</button>
-                    </div>
                 </div>
             </Show>
             <Show when=move || loading.get()>
@@ -217,7 +164,7 @@ pub fn SshPage(
                         </p>
                     </div>
                     <button class="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-900 disabled:cursor-not-allowed px-5 py-2 rounded font-medium"
-                        disabled=move || busy.get() || firewall_session.get().is_some()
+                        disabled=move || busy.get() || locked.get()
                         on:click=save>
                         {move || if busy.get() { "Applying..." } else { "Save and apply" }}
                     </button>

@@ -8,6 +8,7 @@ use crate::api;
 use crate::components::form_utils::{event_target_checked, event_target_value};
 use crate::components::format_rate;
 use crate::components::use_config_changed;
+use crate::components::use_toasts;
 use gloo_timers::callback::Interval;
 use keystone_core::sqm::{
     SqmConfig, SqmDiffserv, SqmDirectionStatus, SqmIsolation, SqmLinkPreset, SqmStatusResponse,
@@ -237,6 +238,7 @@ pub fn SqmPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let token = Signal::derive(move || auth_token.get().unwrap_or_default());
     let form = FormState::new();
     let interfaces = RwSignal::new(Vec::<String>::new());
@@ -245,7 +247,6 @@ pub fn SqmPage(
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let error_msg = RwSignal::new(Option::<String>::None);
-    let success_msg = RwSignal::new(Option::<String>::None);
 
     // Load the saved configuration once the token is known.
     Effect::new(move || {
@@ -276,7 +277,6 @@ pub fn SqmPage(
     let save = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
         error_msg.set(None);
-        success_msg.set(None);
         let config = match form.to_config() {
             Ok(config) => config,
             Err(message) => {
@@ -289,10 +289,10 @@ pub fn SqmPage(
         spawn_local(async move {
             match api::save_sqm_config(&token_val, config).await {
                 Ok(()) => {
-                    success_msg.set(Some(
+                    toasts.success(
                         "Traffic shaping settings saved. They take effect once the configuration is applied."
                             .to_string(),
-                    ));
+                    );
                     config_changed.run(());
                 }
                 Err(e) => {
@@ -313,12 +313,6 @@ pub fn SqmPage(
                 <h1 class="text-2xl font-semibold text-blue-300">"Traffic Shaping (SQM)"</h1>
                 <p class="text-gray-400">"CAKE shaping on the WAN link keeps latency low under load, in both directions"</p>
             </div>
-
-            <Show when=move || success_msg.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200">
-                    {move || success_msg.get().unwrap_or_default()}
-                </div>
-            </Show>
 
             <Show when=move || error_msg.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">

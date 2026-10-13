@@ -1,5 +1,6 @@
 //! Interfaces management page
 
+use crate::components::use_toasts;
 use keystone_core::{Interface, InterfaceRole, ManagedInterface, SystemState};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -14,6 +15,7 @@ pub fn InterfacesPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     // Runtime interface discovery is owned by this page, not the Dashboard.
     // Direct navigation to /interfaces must not depend on visiting / first.
     let (state, set_state) = signal(SystemState::default());
@@ -27,7 +29,6 @@ pub fn InterfacesPage(
     let (renewing, set_renewing) = signal::<Option<String>>(None);
     let config_changed = use_config_changed();
     let (error, set_error) = signal::<Option<String>>(None);
-    let (success, set_success) = signal::<Option<String>>(None);
 
     // Load both discovered hardware and persisted management configuration.
     // The separate /state endpoint supplies physical interfaces that are not
@@ -87,7 +88,6 @@ pub fn InterfacesPage(
             };
             changes.insert(name, new_role);
         });
-        set_success.set(None);
     };
 
     // Handle changing role
@@ -95,7 +95,6 @@ pub fn InterfacesPage(
         set_pending_changes.update(|changes| {
             changes.insert(name, Some(role));
         });
-        set_success.set(None);
     };
 
     // Save changes
@@ -140,7 +139,7 @@ pub fn InterfacesPage(
                             set_managed_interfaces.set(interfaces);
                             set_pending_changes.set(HashMap::new());
                             config_changed.run(());
-                            set_success.set(Some(response.message));
+                            toasts.success(response.message);
                         } else {
                             set_error.set(Some(response.message));
                         }
@@ -162,7 +161,6 @@ pub fn InterfacesPage(
     let discard_changes = move |_| {
         set_pending_changes.set(HashMap::new());
         set_error.set(None);
-        set_success.set(None);
     };
 
     let renew_link = move |name: String| {
@@ -171,10 +169,9 @@ pub fn InterfacesPage(
         };
         set_renewing.set(Some(name.clone()));
         set_error.set(None);
-        set_success.set(None);
         spawn_local(async move {
             match api::renew_interface(&token, &name).await {
-                Ok(result) if result.success => set_success.set(Some(result.message)),
+                Ok(result) if result.success => toasts.success(result.message),
                 Ok(result) => set_error.set(Some(result.message)),
                 Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
                 Err(e) => set_error.set(Some(format!("Failed to renew {name}: {e}"))),
@@ -201,11 +198,6 @@ pub fn InterfacesPage(
             <Show when=move || error.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 text-red-200 px-4 py-2 rounded">
                     {move || error.get().unwrap_or_default()}
-                </div>
-            </Show>
-            <Show when=move || success.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 text-green-200 px-4 py-2 rounded">
-                    {move || success.get().unwrap_or_default()}
                 </div>
             </Show>
 

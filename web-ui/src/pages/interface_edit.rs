@@ -1,5 +1,6 @@
 //! Interface edit page for configuring individual interface settings
 
+use crate::components::use_toasts;
 use keystone_core::{
     ActivationPolicy, AddressScope, DhcpMode, DhcpPrefixDelegationConfig, Dhcpv4ClientConfig,
     Dhcpv4ClientIdentifier, Dhcpv6ClientConfig, InterfaceConfig, InterfaceRole, IpForwardMode,
@@ -18,6 +19,7 @@ pub fn InterfaceEditPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let params = use_params_map();
 
     // Page state
@@ -26,7 +28,6 @@ pub fn InterfaceEditPage(
     let (loading, set_loading) = signal(true);
     let (saving, set_saving) = signal(false);
     let (error, set_error) = signal::<Option<String>>(None);
-    let (success, set_success) = signal::<Option<String>>(None);
     let (is_new, set_is_new) = signal(false);
     // Saving only updates the database. The pending-changes bar writes the
     // networkd files; this tracks the follow-up that re-reads them on this link.
@@ -315,7 +316,6 @@ pub fn InterfaceEditPage(
         spawn_local(async move {
             set_saving.set(true);
             set_error.set(None);
-            set_success.set(None);
 
             if let Some(token) = auth_token.get()
                 && let Some(current) = config.get()
@@ -429,7 +429,7 @@ pub fn InterfaceEditPage(
                                 ..updated
                             }));
                             set_is_new.set(false);
-                            set_success.set(Some("Configuration saved".to_string()));
+                            toasts.success("Configuration saved".to_string());
                             set_needs_apply.set(true);
                             config_changed.run(());
                         } else {
@@ -456,11 +456,10 @@ pub fn InterfaceEditPage(
         let name = interface_name.get_untracked();
         set_reconfiguring.set(true);
         set_error.set(None);
-        set_success.set(None);
         spawn_local(async move {
             match api::reconfigure_interface(&token, &name).await {
                 Ok(response) if response.success => {
-                    set_success.set(Some(response.message));
+                    toasts.success(response.message);
                     set_needs_apply.set(false);
                 }
                 Ok(response) => set_error.set(Some(response.message)),
@@ -518,11 +517,6 @@ pub fn InterfaceEditPage(
             <Show when=move || error.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded">
                     {move || error.get().unwrap_or_default()}
-                </div>
-            </Show>
-            <Show when=move || success.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 text-green-200 px-4 py-3 rounded">
-                    {move || success.get().unwrap_or_default()}
                 </div>
             </Show>
             <Show when=move || needs_apply.get() && !is_new.get()>

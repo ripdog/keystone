@@ -1,5 +1,6 @@
 //! Service detail page - view details and logs for a specific systemd unit
 
+use crate::components::use_toasts;
 use keystone_core::{SystemdActiveState, SystemdUnitDetail};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -77,12 +78,12 @@ pub fn ServiceDetailPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let toasts = use_toasts();
     let params = use_params_map();
 
     let (unit_detail, set_unit_detail) = signal(Option::<SystemdUnitDetail>::None);
     let (loading, set_loading) = signal(true);
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
-    let (success_msg, set_success_msg) = signal(Option::<String>::None);
     let (action_in_progress, set_action_in_progress) = signal(false);
 
     // Get the unit name from URL params
@@ -129,14 +130,13 @@ pub fn ServiceDetailPage(
             None => return,
         };
         set_action_in_progress.set(true);
-        set_success_msg.set(None);
         set_error_msg.set(None);
 
         spawn_local(async move {
             match api::start_unit(&token, &name).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        toasts.success(response.message);
                     } else {
                         set_error_msg.set(Some(response.message));
                     }
@@ -161,14 +161,13 @@ pub fn ServiceDetailPage(
             None => return,
         };
         set_action_in_progress.set(true);
-        set_success_msg.set(None);
         set_error_msg.set(None);
 
         spawn_local(async move {
             match api::stop_unit(&token, &name).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        toasts.success(response.message);
                     } else {
                         set_error_msg.set(Some(response.message));
                     }
@@ -193,14 +192,13 @@ pub fn ServiceDetailPage(
             None => return,
         };
         set_action_in_progress.set(true);
-        set_success_msg.set(None);
         set_error_msg.set(None);
 
         spawn_local(async move {
             match api::restart_unit(&token, &name).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        toasts.success(response.message);
                     } else {
                         set_error_msg.set(Some(response.message));
                     }
@@ -225,14 +223,13 @@ pub fn ServiceDetailPage(
             None => return,
         };
         set_action_in_progress.set(true);
-        set_success_msg.set(None);
         set_error_msg.set(None);
 
         spawn_local(async move {
             match api::enable_unit(&token, &name).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        toasts.success(response.message);
                     } else {
                         set_error_msg.set(Some(response.message));
                     }
@@ -257,14 +254,13 @@ pub fn ServiceDetailPage(
             None => return,
         };
         set_action_in_progress.set(true);
-        set_success_msg.set(None);
         set_error_msg.set(None);
 
         spawn_local(async move {
             match api::disable_unit(&token, &name).await {
                 Ok(response) => {
                     if response.success {
-                        set_success_msg.set(Some(response.message));
+                        toasts.success(response.message);
                     } else {
                         set_error_msg.set(Some(response.message));
                     }
@@ -300,11 +296,6 @@ pub fn ServiceDetailPage(
             </div>
 
             // Success message
-            <Show when=move || success_msg.get().is_some()>
-                <div class="bg-green-900/50 border border-green-500 rounded p-4 text-green-200">
-                    {move || success_msg.get().unwrap_or_default()}
-                </div>
-            </Show>
 
             // Error message
             <Show when=move || error_msg.get().is_some()>

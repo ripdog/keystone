@@ -126,6 +126,43 @@ impl SnapshotStatus {
     }
 }
 
+/// Civil `(year, month, day)` in UTC for a Unix timestamp in seconds.
+fn utc_civil(unix_secs: i64) -> (i64, i64, i64) {
+    // Civil-from-days (Howard Hinnant's algorithm), days counted from 1970-01-01.
+    let days = unix_secs.div_euclid(86_400) + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// `YYYY-MM-DD` in UTC.
+pub fn format_utc_date(unix_secs: i64) -> String {
+    let (year, month, day) = utc_civil(unix_secs);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// `YYYY-MM-DD HH:MM` in UTC.
+pub fn format_utc_datetime(unix_secs: i64) -> String {
+    let minutes = unix_secs.rem_euclid(86_400) / 60;
+    format!(
+        "{} {:02}:{:02}",
+        format_utc_date(unix_secs),
+        minutes / 60,
+        minutes % 60
+    )
+}
+
 /// Snapshot metadata as presented by the API.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SnapshotSummary {
@@ -294,6 +331,16 @@ mod tests {
         }
         assert_eq!(SnapshotKind::parse("nope"), None);
         assert_eq!(SnapshotStatus::parse("nope"), None);
+    }
+
+    #[test]
+    fn utc_dates_are_calendar_dates() {
+        assert_eq!(format_utc_date(0), "1970-01-01");
+        assert_eq!(format_utc_date(1_700_000_000), "2023-11-14");
+        // Leap day of a century year divisible by 400.
+        assert_eq!(format_utc_date(951_782_400), "2000-02-29");
+        assert_eq!(format_utc_date(1_709_251_199), "2024-02-29");
+        assert_eq!(format_utc_datetime(1_700_000_000), "2023-11-14 22:13");
     }
 
     #[test]

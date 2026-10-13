@@ -9,6 +9,7 @@
 //! - `bridges` - Bridge configuration
 //! - `firewall` - Firewall zones, rules, and settings
 //! - `dnsmasq` - DNS/DHCP configuration
+//! - `clients` - Unified LAN client inventory
 //! - `caddy` - Caddy reverse proxy configuration
 //! - `services` - Systemd service management
 //!
@@ -19,6 +20,7 @@ pub mod auth;
 pub mod bridges;
 pub mod caddy;
 pub mod client;
+pub mod clients;
 pub mod dashboard;
 pub mod dnsmasq;
 pub mod firewall;
@@ -36,6 +38,7 @@ pub mod wizard;
 pub use auth::*;
 pub use bridges::*;
 pub use caddy::*;
+pub use clients::*;
 pub use dashboard::*;
 pub use dnsmasq::*;
 pub use firewall::*;

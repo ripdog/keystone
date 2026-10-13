@@ -8,9 +8,9 @@ use crate::components::{
     AppLayout, LoginPage, PendingConfirmBanner, clear_stored_token, get_stored_token,
 };
 use crate::pages::{
-    BridgesPage, CaddyPage, DashboardPage, DnsmasqPage, FirewallPage, InterfaceEditPage,
-    InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage, SettingsPage, SshPage,
-    StatusPage, VlansPage, WizardPage,
+    BridgesPage, CaddyPage, ClientsPage, DashboardPage, DnsmasqPage, FirewallPage,
+    InterfaceEditPage, InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage,
+    SettingsPage, SshPage, StatusPage, VlansPage, WizardPage,
 };
 use keystone_core::SystemState;
 use leptos::prelude::*;
@@ -109,6 +109,15 @@ pub fn App() -> impl IntoView {
                                         auth_token=auth_token
                                         state=state
                                         set_state=set_state
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
+                                path=path!("/clients")
+                                view=move || view! {
+                                    <ClientsPage
+                                        auth_token=auth_token
                                         on_unauthorized=on_unauthorized
                                     />
                                 }

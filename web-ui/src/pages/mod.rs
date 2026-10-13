@@ -2,6 +2,7 @@
 
 mod bridges;
 mod caddy;
+mod clients;
 mod dashboard;
 mod dnsmasq;
 mod firewall;
@@ -19,6 +20,7 @@ mod wizard;
 
 pub use bridges::*;
 pub use caddy::*;
+pub use clients::*;
 pub use dashboard::*;
 pub use dnsmasq::*;
 pub use firewall::*;

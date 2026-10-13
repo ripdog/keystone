@@ -130,6 +130,7 @@ pub fn breadcrumb(path: &str) -> String {
 
     match path {
         "/" => "Dashboard".to_string(),
+        "/clients" => "Clients".to_string(),
         "/interfaces" => "Interfaces".to_string(),
         "/vlans" => "VLANs".to_string(),
         "/bridges" => "Bridges".to_string(),
@@ -146,6 +147,7 @@ pub fn breadcrumb(path: &str) -> String {
 fn icon_path(kind: &str) -> &'static str {
     match kind {
         "dashboard" => "M3 3h8v8H3zM13 3h8v5h-8zM13 10h8v11h-8zM3 13h8v8H3z",
+        "devices" => "M3 4h18v12H3zM8 20h8M12 16v4",
         "network" => "M12 3v5M5 21h14M5 16v5M19 16v5M5 16h14M12 8l-7 8M12 8l7 8",
         "layers" => "m12 2 9 5-9 5-9-5 9-5Zm-9 10 9 5 9-5M3 17l9 5 9-5",
         "bridge" => "M3 18h18M5 18V9m14 9V9M3 9h18M7 9c0 5 10 5 10 0",
@@ -271,6 +273,7 @@ pub fn SidebarNavigation(on_navigate: Callback<()>) -> impl IntoView {
             <div class="space-y-1">
                 <p class="px-3 mb-2 text-[10px] uppercase tracking-[0.22em] font-semibold text-slate-500">"Overview"</p>
                 <NavLink href="/" title="Dashboard" icon="dashboard" on_navigate=on_navigate />
+                <NavLink href="/clients" title="Clients" icon="devices" on_navigate=on_navigate />
                 <NavLink href="/interfaces" title="Interfaces" icon="network" on_navigate=on_navigate />
                 <NavLink href="/vlans" title="VLANs" icon="layers" on_navigate=on_navigate />
                 <NavLink href="/bridges" title="Bridges" icon="bridge" on_navigate=on_navigate />

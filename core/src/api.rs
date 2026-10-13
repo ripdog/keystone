@@ -6,6 +6,7 @@
 //! `E::Request` and parse `E::Response`. A client therefore cannot post the
 //! wrong body shape to a route without a compile error.
 
+use crate::changes::*;
 use crate::*;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -113,6 +114,13 @@ endpoints! {
     AdvanceWizard: Post "/wizard/advance", WizardAdvanceRequest => WizardAdvanceResponse;
     SkipWizard: Post "/wizard/skip", WizardSkipRequest => WizardSkipResponse;
     SaveWizardInterfaces: Post "/wizard/interfaces", WizardSaveInterfacesRequest => WizardSaveInterfacesResponse;
+
+    /// Manual snapshot of the current configuration.
+    CreateSnapshot: Post "/snapshots", CreateSnapshotRequest => SnapshotResponse;
+    /// Revert pending (unapplied) changes to each component's last applied state.
+    DiscardChanges: Post "/changes/discard", ComponentSelectionRequest => DiscardChangesResponse;
+    /// Path parameter: `{id}` (the snapshot id); see [`render_path`].
+    RestoreSnapshot: Post "/snapshots/{id}/restore", ComponentSelectionRequest => RestoreSnapshotResponse;
 }
 
 #[cfg(test)]
@@ -132,6 +140,14 @@ mod tests {
             );
         }
         assert!(ALL_ENDPOINTS.len() > 30);
+    }
+
+    #[test]
+    fn snapshot_endpoints_render_their_ids() {
+        assert_eq!(
+            render_path(RestoreSnapshot::PATH, &[("id", "12")]),
+            "/snapshots/12/restore"
+        );
     }
 
     #[test]

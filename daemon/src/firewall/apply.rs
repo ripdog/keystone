@@ -9,6 +9,7 @@
 
 use crate::db::Database;
 use crate::firewall::generate::generate_ruleset;
+use crate::firewall::validate::validate_firewall_config;
 use anyhow::{Context, Result};
 use keystone_core::{
     FirewallApplyResponse, FirewallConfig, FirewallConfirmResponse, FirewallRollbackResponse,
@@ -124,6 +125,23 @@ impl FirewallApplyManager {
 
         let previous_config = self.db.get_active_firewall_config().await?;
         let new_config = self.db.get_firewall_config().await?;
+
+        // Pre-existing database rows may predate API validation; never apply a
+        // configuration that would silently match more traffic than intended.
+        let validation_errors = validate_firewall_config(&new_config);
+        if !validation_errors.is_empty() {
+            return Ok(FirewallApplyResponse {
+                success: false,
+                message: format!(
+                    "Firewall configuration is invalid: {}",
+                    validation_errors.join("; ")
+                ),
+                pending_confirmation: false,
+                confirm_deadline: None,
+                session_id: None,
+            });
+        }
+
         let timeout = timeout_secs.unwrap_or(DEFAULT_CONFIRM_TIMEOUT_SECS);
         let rollback_at = current_unix_time() + timeout;
         let session_id = Uuid::new_v4().to_string();

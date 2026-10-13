@@ -10,6 +10,9 @@
 //! - Preview generated nftables rules
 
 use crate::db::Database;
+use crate::firewall::validate::{
+    validate_forward_rule, validate_input_rule, validate_port_forward,
+};
 use crate::firewall::{FirewallApplyManager, generate_json, generate_preview};
 use axum::{
     Json, Router,
@@ -244,6 +247,15 @@ async fn save_input_rule(
         }));
     }
 
+    let errors = validate_input_rule(&rule);
+    if !errors.is_empty() {
+        return Ok(Json(SaveInputRuleResponse {
+            success: false,
+            message: errors.join("; "),
+            rule_id: None,
+        }));
+    }
+
     let id = state.db.save_input_rule(&rule).await?;
     Ok(Json(SaveInputRuleResponse {
         success: true,
@@ -316,6 +328,15 @@ async fn save_forward_rule(
         return Ok(Json(SaveForwardRuleResponse {
             success: false,
             message: "Rule name is required".to_string(),
+            rule_id: None,
+        }));
+    }
+
+    let errors = validate_forward_rule(&rule);
+    if !errors.is_empty() {
+        return Ok(Json(SaveForwardRuleResponse {
+            success: false,
+            message: errors.join("; "),
             rule_id: None,
         }));
     }
@@ -398,6 +419,15 @@ async fn save_port_forward(
         return Ok(Json(SavePortForwardResponse {
             success: false,
             message: "Destination IP is required".to_string(),
+            port_forward_id: None,
+        }));
+    }
+
+    let errors = validate_port_forward(&pf);
+    if !errors.is_empty() {
+        return Ok(Json(SavePortForwardResponse {
+            success: false,
+            message: errors.join("; "),
             port_forward_id: None,
         }));
     }

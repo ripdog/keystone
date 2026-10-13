@@ -8,7 +8,7 @@ use crate::components::{
     AppLayout, LoginPage, PendingConfirmBanner, clear_stored_token, get_stored_token,
 };
 use crate::pages::{
-    BridgesPage, CaddyPage, ClientsPage, DashboardPage, DnsmasqPage, FirewallPage,
+    BridgesPage, CaddyPage, ClientsPage, DashboardPage, DnsmasqPage, FirewallPage, HistoryPage,
     InterfaceEditPage, InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage,
     SettingsPage, SshPage, StatusPage, VlansPage, WizardPage,
 };
@@ -229,6 +229,24 @@ pub fn App() -> impl IntoView {
                                 path=path!("/settings")
                                 view=move || view! {
                                     <SettingsPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
+                                path=path!("/settings/general")
+                                view=move || view! {
+                                    <SettingsPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
+                                path=path!("/settings/history")
+                                view=move || view! {
+                                    <HistoryPage
                                         auth_token=auth_token
                                         on_unauthorized=on_unauthorized
                                     />

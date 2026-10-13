@@ -565,7 +565,7 @@ fn ComponentSection(
 
 /// One generated file with its unified diff.
 #[component]
-fn FileDiffView(file: FileDiff) -> impl IntoView {
+pub fn FileDiffView(file: FileDiff) -> impl IntoView {
     let lines: Vec<(DiffLineKind, String)> = classify_diff(&file.unified_diff)
         .into_iter()
         .map(|(kind, text)| (kind, text.to_string()))

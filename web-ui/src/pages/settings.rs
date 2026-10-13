@@ -3,6 +3,7 @@
 use keystone_core::{GlobalSettings, SaveUserRequest, UserInfo};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::components::A;
 
 use crate::api;
 
@@ -241,6 +242,21 @@ pub fn SettingsPage(
                             }
                         }
                     />
+                </div>
+            </div>
+
+            <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 class="text-lg font-medium text-white">"Configuration history"</h2>
+                        <p class="text-sm text-gray-400">"Saved copies of the configuration. Compare, restore, export or import them."</p>
+                    </div>
+                    <A
+                        href="/settings/history"
+                        attr:class="shrink-0 text-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-medium"
+                    >
+                        "Open history"
+                    </A>
                 </div>
             </div>
 

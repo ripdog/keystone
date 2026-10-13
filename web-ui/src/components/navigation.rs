@@ -98,9 +98,20 @@ const CADDY: &[NavItem] = &[
     },
 ];
 
+const SETTINGS: &[NavItem] = &[
+    NavItem {
+        title: "General",
+        href: "/settings/general",
+    },
+    NavItem {
+        title: "Configuration history",
+        href: "/settings/history",
+    },
+];
+
 /// The old section URLs remain usable, opening their default page.
 pub fn group_for_path(path: &str) -> Option<&'static str> {
-    ["/firewall", "/dnsmasq", "/caddy"]
+    ["/firewall", "/dnsmasq", "/caddy", "/settings"]
         .into_iter()
         .find(|base| path == *base || path.starts_with(&format!("{base}/")))
 }
@@ -110,6 +121,7 @@ fn group_info(base: &str) -> (&'static str, &'static [NavItem]) {
         "/firewall" => ("Firewall", FIREWALL),
         "/dnsmasq" => ("DNS & DHCP", DNSMASQ),
         "/caddy" => ("Web Server", CADDY),
+        "/settings" => ("Settings", SETTINGS),
         _ => ("", &[]),
     }
 }
@@ -137,7 +149,6 @@ pub fn breadcrumb(path: &str) -> String {
         "/ssh" => "SSH Server".to_string(),
         "/services" => "Services".to_string(),
         "/networkd-preview" => "Networkd Preview".to_string(),
-        "/settings" => "Settings".to_string(),
         p if p.starts_with("/interfaces/") => "Interfaces / Edit".to_string(),
         p if p.starts_with("/services/") => "Services / Detail".to_string(),
         _ => "Keystone".to_string(),
@@ -289,7 +300,7 @@ pub fn SidebarNavigation(on_navigate: Callback<()>) -> impl IntoView {
                 <p class="px-3 mb-2 text-[10px] uppercase tracking-[0.22em] font-semibold text-slate-500">"Security & System"</p>
                 <NavSection base="/firewall" title="Firewall" icon="shield" items=FIREWALL expanded=expanded on_navigate=on_navigate />
                 <NavLink href="/networkd-preview" title="Networkd Preview" icon="network" on_navigate=on_navigate />
-                <NavLink href="/settings" title="Settings" icon="settings" on_navigate=on_navigate />
+                <NavSection base="/settings" title="Settings" icon="settings" items=SETTINGS expanded=expanded on_navigate=on_navigate />
             </div>
         </nav>
     }
@@ -306,6 +317,7 @@ mod tests {
             ("/firewall", FIREWALL),
             ("/dnsmasq", DNSMASQ),
             ("/caddy", CADDY),
+            ("/settings", SETTINGS),
         ] {
             for item in items {
                 assert!(item.href.starts_with(&format!("{base}/")));

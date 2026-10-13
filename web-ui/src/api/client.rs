@@ -95,6 +95,40 @@ pub async fn post_empty<T: DeserializeOwned>(url: &str, token: &str) -> Result<T
     send(request).await
 }
 
+/// Perform a GET request with authentication and return the raw body bytes
+/// (file downloads such as configuration snapshots).
+pub async fn get_bytes(url: &str, token: &str) -> Result<Vec<u8>, String> {
+    let response = authorize(builder(HttpMethod::Get, url), Some(token))
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if response.status() == 401 {
+        return Err("Unauthorized".to_string());
+    }
+    if response.ok() {
+        response
+            .binary()
+            .await
+            .map_err(|e| format!("Failed to read response: {}", e))
+    } else {
+        Err(read_error(response).await)
+    }
+}
+
+/// Perform a POST request whose body is raw bytes (for example a `File` chosen
+/// in a file input). The browser streams the file; no JSON encoding happens.
+pub async fn post_raw<T: DeserializeOwned>(
+    url: &str,
+    token: &str,
+    body: impl Into<wasm_bindgen::JsValue>,
+) -> Result<T, String> {
+    let request = authorize(builder(HttpMethod::Post, url), Some(token))
+        .header("Content-Type", "application/octet-stream")
+        .body(body);
+    send(request).await
+}
+
 /// Perform a DELETE request with authentication
 pub async fn delete<T: DeserializeOwned>(url: &str, token: &str) -> Result<T, String> {
     send(authorize(builder(HttpMethod::Delete, url), Some(token)).build()).await

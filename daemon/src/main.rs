@@ -929,6 +929,24 @@ async fn save_interface_config(
         }
     }
 
+    // A bridge member's .network file replaces its own interface config
+    if request.config.enabled {
+        let bridges = state.db.get_all_bridges().await?;
+        if let Some(bridge) = bridges
+            .iter()
+            .find(|b| b.members.iter().any(|m| *m == request.config.name))
+        {
+            return Ok(Json(SaveInterfaceConfigResponse {
+                success: false,
+                message: format!(
+                    "{} is a member of bridge {}; remove it from the bridge before enabling its own interface configuration",
+                    request.config.name, bridge.name
+                ),
+                config_id: None,
+            }));
+        }
+    }
+
     let config_id = state.db.save_interface_config(&request.config).await?;
 
     Ok(Json(SaveInterfaceConfigResponse {
@@ -1085,6 +1103,21 @@ async fn save_vlan(
         }));
     }
 
+    // Validate against the other VLANs
+    let mut vlans = state.db.get_all_vlans().await?;
+    vlans.retain(|v| {
+        !(request.config.id.is_some() && v.id == request.config.id) && v.name != request.config.name
+    });
+    vlans.push(request.config.clone());
+    let errors = networkd::validate_vlans(&vlans);
+    if !errors.is_empty() {
+        return Ok(Json(SaveVlanConfigResponse {
+            success: false,
+            message: errors.join("; "),
+            vlan_id: None,
+        }));
+    }
+
     let vlan_id = state.db.save_vlan(&request.config).await?;
 
     Ok(Json(SaveVlanConfigResponse {
@@ -1175,6 +1208,22 @@ async fn save_bridge(
         }));
     }
 
+    // Validate membership against interface configs and other bridges
+    let configs = state.db.get_interface_configs().await?;
+    let mut bridges = state.db.get_all_bridges().await?;
+    bridges.retain(|b| {
+        !(request.config.id.is_some() && b.id == request.config.id) && b.name != request.config.name
+    });
+    bridges.push(request.config.clone());
+    let errors: Vec<String> = networkd::validate_topology(&configs, &[], &bridges);
+    if !errors.is_empty() {
+        return Ok(Json(keystone_core::SaveBridgeConfigResponse {
+            success: false,
+            message: errors.join("; "),
+            bridge_id: None,
+        }));
+    }
+
     let bridge_id = state.db.save_bridge(&request.config).await?;
 
     Ok(Json(keystone_core::SaveBridgeConfigResponse {
@@ -1261,9 +1310,18 @@ async fn networkd_preview(
         for member in &bridge.members {
             files.push(keystone_core::NetworkdFilePreview {
                 filename: format!("50-keystone-{}.network", member),
-                content: networkd::generate_bridge_member_network_file(member, &bridge.name),
+                content: networkd::generate_bridge_member_network_file(
+                    member,
+                    &bridge.name,
+                    &vlans,
+                ),
             });
         }
+    }
+
+    // Minimal .network files for VLAN parents with no interface config
+    for (filename, content) in networkd::vlan_parent_network_files(&configs, &vlans, &bridges) {
+        files.push(keystone_core::NetworkdFilePreview { filename, content });
     }
 
     Ok(Json(keystone_core::NetworkdPreviewResponse { files }))

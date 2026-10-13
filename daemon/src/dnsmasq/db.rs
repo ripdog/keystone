@@ -53,9 +53,9 @@ pub async fn load_dnsmasq_config(pool: &SqlitePool) -> Result<DnsmasqConfig> {
     let upstream_servers = load_upstream_servers(pool).await?;
 
     // Load interface lists
-    let listen_interfaces = load_interface_list(pool, "dnsmasq_listen_interfaces").await?;
-    let except_interfaces = load_interface_list(pool, "dnsmasq_except_interfaces").await?;
-    let no_dhcp_interfaces = load_interface_list(pool, "dnsmasq_no_dhcp_interfaces").await?;
+    let listen_interfaces = load_interface_list(pool, InterfaceListTable::Listen).await?;
+    let except_interfaces = load_interface_list(pool, InterfaceListTable::Except).await?;
+    let no_dhcp_interfaces = load_interface_list(pool, InterfaceListTable::NoDhcp).await?;
 
     Ok(DnsmasqConfig {
         upstream_servers,
@@ -97,14 +97,9 @@ pub async fn save_dnsmasq_config(pool: &SqlitePool, config: &DnsmasqConfig) -> R
     save_upstream_servers(pool, &config.upstream_servers).await?;
 
     // Save interface lists
-    save_interface_list(pool, "dnsmasq_listen_interfaces", &config.listen_interfaces).await?;
-    save_interface_list(pool, "dnsmasq_except_interfaces", &config.except_interfaces).await?;
-    save_interface_list(
-        pool,
-        "dnsmasq_no_dhcp_interfaces",
-        &config.no_dhcp_interfaces,
-    )
-    .await?;
+    save_interface_list(pool, InterfaceListTable::Listen, &config.listen_interfaces).await?;
+    save_interface_list(pool, InterfaceListTable::Except, &config.except_interfaces).await?;
+    save_interface_list(pool, InterfaceListTable::NoDhcp, &config.no_dhcp_interfaces).await?;
 
     Ok(())
 }
@@ -150,26 +145,59 @@ async fn save_upstream_servers(pool: &SqlitePool, servers: &[DnsmasqUpstreamServ
     Ok(())
 }
 
-/// Load interface list from a table
-async fn load_interface_list(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
-    let query = format!("SELECT interface FROM {} ORDER BY id", table);
-    let rows = sqlx::query(&query).fetch_all(pool).await?;
+/// Only these three fixed tables can be used for interface lists.
+#[derive(Clone, Copy)]
+enum InterfaceListTable {
+    Listen,
+    Except,
+    NoDhcp,
+}
 
+impl InterfaceListTable {
+    fn select_sql(self) -> &'static str {
+        match self {
+            Self::Listen => "SELECT interface FROM dnsmasq_listen_interfaces ORDER BY id",
+            Self::Except => "SELECT interface FROM dnsmasq_except_interfaces ORDER BY id",
+            Self::NoDhcp => "SELECT interface FROM dnsmasq_no_dhcp_interfaces ORDER BY id",
+        }
+    }
+
+    fn delete_sql(self) -> &'static str {
+        match self {
+            Self::Listen => "DELETE FROM dnsmasq_listen_interfaces",
+            Self::Except => "DELETE FROM dnsmasq_except_interfaces",
+            Self::NoDhcp => "DELETE FROM dnsmasq_no_dhcp_interfaces",
+        }
+    }
+
+    fn insert_sql(self) -> &'static str {
+        match self {
+            Self::Listen => "INSERT INTO dnsmasq_listen_interfaces (interface) VALUES (?)",
+            Self::Except => "INSERT INTO dnsmasq_except_interfaces (interface) VALUES (?)",
+            Self::NoDhcp => "INSERT INTO dnsmasq_no_dhcp_interfaces (interface) VALUES (?)",
+        }
+    }
+}
+
+/// Load interface list from one of the supported tables.
+async fn load_interface_list(pool: &SqlitePool, table: InterfaceListTable) -> Result<Vec<String>> {
+    let rows = sqlx::query(table.select_sql()).fetch_all(pool).await?;
     Ok(rows.into_iter().map(|row| row.get("interface")).collect())
 }
 
-/// Save interface list to a table
-async fn save_interface_list(pool: &SqlitePool, table: &str, interfaces: &[String]) -> Result<()> {
-    // Clear existing
-    let delete_query = format!("DELETE FROM {}", table);
-    sqlx::query(&delete_query).execute(pool).await?;
-
-    // Insert new
+/// Save interface list to one of the supported tables.
+async fn save_interface_list(
+    pool: &SqlitePool,
+    table: InterfaceListTable,
+    interfaces: &[String],
+) -> Result<()> {
+    sqlx::query(table.delete_sql()).execute(pool).await?;
     for iface in interfaces {
-        let insert_query = format!("INSERT INTO {} (interface) VALUES (?)", table);
-        sqlx::query(&insert_query).bind(iface).execute(pool).await?;
+        sqlx::query(table.insert_sql())
+            .bind(iface)
+            .execute(pool)
+            .await?;
     }
-
     Ok(())
 }
 
@@ -749,4 +777,58 @@ pub async fn load_dnsmasq_state(pool: &SqlitePool) -> Result<DnsmasqStateRespons
         cname_records,
         address_overrides,
     })
+}
+
+#[cfg(test)]
+mod interface_list_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn interface_lists_use_separate_fixed_tables() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        sqlx::query("CREATE TABLE dnsmasq_listen_interfaces (id INTEGER PRIMARY KEY, interface TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE dnsmasq_except_interfaces (id INTEGER PRIMARY KEY, interface TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE dnsmasq_no_dhcp_interfaces (id INTEGER PRIMARY KEY, interface TEXT NOT NULL)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        for (table, iface) in [
+            (InterfaceListTable::Listen, "lan0"),
+            (InterfaceListTable::Except, "wan0"),
+            (InterfaceListTable::NoDhcp, "dmz0"),
+        ] {
+            save_interface_list(&pool, table, &[iface.to_owned()])
+                .await
+                .unwrap();
+            assert_eq!(load_interface_list(&pool, table).await.unwrap(), [iface]);
+        }
+
+        save_interface_list(&pool, InterfaceListTable::Listen, &["br0".to_owned()])
+            .await
+            .unwrap();
+        assert_eq!(
+            load_interface_list(&pool, InterfaceListTable::Listen)
+                .await
+                .unwrap(),
+            ["br0"]
+        );
+        assert_eq!(
+            load_interface_list(&pool, InterfaceListTable::Except)
+                .await
+                .unwrap(),
+            ["wan0"]
+        );
+    }
 }

@@ -40,6 +40,7 @@ package() {
   install -Dm644 "${startdir}/packaging/arch/keystone-web-ui.service" "${pkgdir}/usr/lib/systemd/system/keystone-web-ui.service"
   install -Dm644 "${startdir}/packaging/arch/sysusers.conf" "${pkgdir}/usr/lib/sysusers.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/tmpfiles.conf" "${pkgdir}/usr/lib/tmpfiles.d/keystone.conf"
+  install -Dm644 "${startdir}/packaging/arch/keystone-modules.conf" "${pkgdir}/usr/lib/modules-load.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/keystone.toml" "${pkgdir}/etc/keystone/keystone.toml"
 
   install -Dm644 "${startdir}/README.md" "${pkgdir}/usr/share/doc/keystone/README.md"

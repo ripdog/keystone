@@ -53,6 +53,8 @@ PrivateTmp=yes
 # Additional hardening
 NoNewPrivileges=yes
 ProtectKernelTunables=no
+# SQM traffic shaping needs sch_cake, ifb, act_mirred and cls_matchall. They
+# are loaded at boot by keystone-modules.conf, not by this daemon.
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictSUIDSGID=yes

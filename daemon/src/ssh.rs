@@ -55,6 +55,11 @@ fn load_config() -> Result<SshConfig> {
     Ok(load_stored()?.config)
 }
 
+/// Port of the Keystone-managed SSH listener, if SSH management is enabled.
+pub(crate) fn enabled_port() -> Option<u16> {
+    load_config().ok().filter(|c| c.enabled).map(|c| c.port)
+}
+
 fn store_config(config: &SshConfig, addresses: &[IpAddr]) -> Result<()> {
     let record = StoredSsh {
         config: config.clone(),

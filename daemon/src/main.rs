@@ -160,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
     firewall_apply_manager.init().await?;
     info!("Firewall apply manager initialized");
     ssh::start_reconciler(db.clone());
+    caddy::start_reconciler(db.pool().clone());
 
     let state = Arc::new(AppState::new(
         auth_manager,

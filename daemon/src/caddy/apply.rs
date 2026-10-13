@@ -24,8 +24,40 @@ pub const CADDY_MAIN_CONFIG: &str = "/etc/caddy/Caddyfile";
 /// The port that keystone-web-ui listens on (internal)
 const KEYSTONE_WEB_UI_PORT: u16 = 8080;
 
+/// Ports used by other Keystone-managed services (DNS and DHCP).
+const RESERVED_SERVICE_PORTS: [(u16, &str); 2] = [(53, "DNS"), (67, "DHCP")];
+
+/// Last LAN IP Caddy was configured with; used to notice address changes.
+const LAST_BIND_IP_PATH: &str = "/var/lib/keystone/caddy-bind-ip";
+
+/// Serializes applies so the reconciler never races a user-triggered apply.
+static APPLY_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Reject Caddy ports that are unusable or would collide with other listeners.
+fn validate_ports(config: &CaddyConfig, ssh_port: Option<u16>) -> Result<()> {
+    for (label, port) in [("HTTP", config.http_port), ("HTTPS", config.https_port)] {
+        anyhow::ensure!(port != 0, "Caddy {label} port must be between 1 and 65535");
+        anyhow::ensure!(
+            port != KEYSTONE_WEB_UI_PORT,
+            "Caddy {label} port {port} is used by the Keystone web UI"
+        );
+        if ssh_port == Some(port) {
+            anyhow::bail!("Caddy {label} port {port} is used by the SSH server");
+        }
+        if let Some((_, service)) = RESERVED_SERVICE_PORTS.iter().find(|(p, _)| *p == port) {
+            anyhow::bail!("Caddy {label} port {port} is reserved for {service}");
+        }
+    }
+    anyhow::ensure!(
+        config.http_port != config.https_port,
+        "Caddy HTTP and HTTPS ports must differ"
+    );
+    Ok(())
+}
+
 /// Validate the subset of Caddy configuration that Keystone safely supports.
 pub fn validate_config(config: &CaddyConfig) -> Result<()> {
+    validate_ports(config, crate::ssh::enabled_port())?;
     keystone_core::validation::hostname_or_ip(&config.server_address)
         .map_err(anyhow::Error::msg)?;
     keystone_core::validation::single_line_fields(&config.server_address)
@@ -497,6 +529,71 @@ pub fn disable_caddy() -> Result<()> {
 /// 5. Writes the Caddyfile
 /// 6. Reloads Caddy service
 pub async fn apply_caddy_config(pool: &SqlitePool) -> Result<()> {
+    let _guard = APPLY_LOCK.lock().await;
+    apply_caddy_config_locked(pool).await
+}
+
+/// Whether Caddy must be re-applied because the LAN address it was configured
+/// with differs from the currently assigned one. An unresolvable address
+/// (interface down) never triggers a re-apply, which would fail anyway.
+fn bind_ip_changed(last_applied: Option<&str>, current: Option<&str>) -> bool {
+    current.is_some_and(|current| last_applied != Some(current))
+}
+
+fn read_last_bind_ip() -> Option<String> {
+    std::fs::read_to_string(LAST_BIND_IP_PATH)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn store_last_bind_ip(ip: Option<&str>) {
+    let result = match ip {
+        Some(ip) => std::fs::write(LAST_BIND_IP_PATH, ip),
+        None => match std::fs::remove_file(LAST_BIND_IP_PATH) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        },
+    };
+    if let Err(error) = result {
+        warn!("Failed to record Caddy bind address: {error}");
+    }
+}
+
+async fn reconcile(pool: &SqlitePool, last_attempt: &mut Option<String>) -> Result<()> {
+    let config = load_caddy_config(pool).await?;
+    if !config.enabled {
+        return Ok(());
+    }
+    let current = lan_bind_ip(pool, &config.bind_interface).await.ok();
+    if bind_ip_changed(read_last_bind_ip().as_deref(), current.as_deref()) {
+        // Try each new address once so a persistent failure doesn't re-run
+        // Caddy validation every few seconds; a later address change retries.
+        if *last_attempt == current {
+            return Ok(());
+        }
+        *last_attempt = current.clone();
+        info!("Caddy LAN address changed to {current:?}; re-applying Caddy configuration");
+        apply_caddy_config(pool).await?;
+    }
+    Ok(())
+}
+
+/// Periodically re-apply Caddy when the LAN address it binds to changes.
+pub fn start_reconciler(pool: SqlitePool) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut last_attempt = None;
+        loop {
+            interval.tick().await;
+            if let Err(err) = reconcile(&pool, &mut last_attempt).await {
+                warn!("Caddy address reconciliation: {err:#}");
+            }
+        }
+    });
+}
+
+async fn apply_caddy_config_locked(pool: &SqlitePool) -> Result<()> {
     // Load configuration from database
     let config = load_caddy_config(pool).await?;
 
@@ -506,6 +603,7 @@ pub async fn apply_caddy_config(pool: &SqlitePool) -> Result<()> {
         remove_caddyfile()?;
         disable_caddy()?;
         update_validation_status(pool, "Disabled").await?;
+        store_last_bind_ip(None);
         return Ok(());
     }
 
@@ -513,6 +611,7 @@ pub async fn apply_caddy_config(pool: &SqlitePool) -> Result<()> {
     validate_config(&config)?;
     ensure_required_dns_modules(&config)?;
     let bind_ip = Some(lan_bind_ip(pool, &config.bind_interface).await?);
+    let applied_ip = bind_ip.clone();
 
     // Generate Caddyfile
     let content = generate_caddyfile(&config, bind_ip.as_deref());
@@ -531,6 +630,7 @@ pub async fn apply_caddy_config(pool: &SqlitePool) -> Result<()> {
     // Enable and reload/restart service
     enable_caddy()?;
     reload_caddy()?;
+    store_last_bind_ip(applied_ip.as_deref());
 
     info!("Caddy configuration applied successfully");
     Ok(())
@@ -608,6 +708,38 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use keystone_core::{InterfaceConfig, InterfaceRole};
+
+    fn config_with_ports(http: u16, https: u16) -> CaddyConfig {
+        CaddyConfig {
+            enabled: true,
+            server_address: "router.lan".into(),
+            http_port: http,
+            https_port: https,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn port_validation_rejects_collisions() {
+        assert!(validate_ports(&config_with_ports(80, 443), Some(22)).is_ok());
+        assert!(validate_ports(&config_with_ports(8443, 8443), None).is_err());
+        assert!(validate_ports(&config_with_ports(0, 443), None).is_err());
+        assert!(validate_ports(&config_with_ports(80, 0), None).is_err());
+        assert!(validate_ports(&config_with_ports(8080, 443), None).is_err());
+        assert!(validate_ports(&config_with_ports(80, 8080), None).is_err());
+        assert!(validate_ports(&config_with_ports(80, 2222), Some(2222)).is_err());
+        assert!(validate_ports(&config_with_ports(53, 443), None).is_err());
+        assert!(validate_ports(&config_with_ports(80, 67), None).is_err());
+    }
+
+    #[test]
+    fn bind_ip_change_decision() {
+        assert!(bind_ip_changed(Some("192.168.1.1"), Some("10.0.0.1")));
+        assert!(bind_ip_changed(None, Some("10.0.0.1")));
+        assert!(!bind_ip_changed(Some("10.0.0.1"), Some("10.0.0.1")));
+        assert!(!bind_ip_changed(Some("10.0.0.1"), None));
+        assert!(!bind_ip_changed(None, None));
+    }
 
     #[tokio::test]
     async fn caddy_lan_selection_reads_authoritative_interface_table() {

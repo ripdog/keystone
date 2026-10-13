@@ -1338,30 +1338,48 @@ async fn delete_bridge(
     }))
 }
 
-/// GET /networkd-preview - Preview networkd files without writing to disk
-async fn networkd_preview(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<keystone_core::NetworkdPreviewResponse>, AppError> {
-    info!("Generating networkd preview");
-
+/// Every file the networkd apply writes for the current database state, in
+/// write order. Later entries replace earlier ones with the same name, as they
+/// do on disk.
+pub(crate) async fn networkd_preview_files(
+    db: &Database,
+) -> anyhow::Result<Vec<keystone_core::NetworkdFilePreview>> {
     // Get all interface configs from database
-    let configs = state.db.get_interface_configs().await?;
+    let configs = db.get_interface_configs().await?;
 
     // Get all VLAN configs from database
-    let vlans = state.db.get_all_vlans().await?;
+    let vlans = db.get_all_vlans().await?;
 
     // Get all bridge configs from database
-    let bridges = state.db.get_all_bridges().await?;
+    let bridges = db.get_all_bridges().await?;
+
+    // Forwarding settings are written before the link files.
+    let mut files: Vec<keystone_core::NetworkdFilePreview> = Vec::new();
+    if let Some(content) = networkd::generate_networkd_global_config(&configs) {
+        files.push(keystone_core::NetworkdFilePreview {
+            filename: format!(
+                "{}/{}",
+                networkd::NETWORKD_CONFIG_DIR,
+                networkd::NETWORKD_ROUTER_CONFIG
+            ),
+            content,
+        });
+    }
+    files.push(keystone_core::NetworkdFilePreview {
+        filename: networkd::ROUTER_SYSCTL_CONFIG.to_string(),
+        content: networkd::generate_router_sysctl_config(&configs),
+    });
 
     // Generate preview for all enabled interface configs
-    let mut files: Vec<keystone_core::NetworkdFilePreview> = configs
-        .iter()
-        .filter(|config| config.enabled)
-        .map(|config| keystone_core::NetworkdFilePreview {
-            filename: networkd::get_network_filename(&config.name),
-            content: networkd::generate_network_file(config),
-        })
-        .collect();
+    files.extend(
+        configs
+            .iter()
+            .filter(|config| config.enabled)
+            .map(|config| keystone_core::NetworkdFilePreview {
+                filename: networkd::get_network_filename(&config.name),
+                content: networkd::generate_network_file(config),
+            }),
+    );
 
     // Add VLAN .netdev files
     for vlan in &vlans {
@@ -1395,6 +1413,15 @@ async fn networkd_preview(
         files.push(keystone_core::NetworkdFilePreview { filename, content });
     }
 
+    Ok(files)
+}
+
+/// GET /networkd-preview - Preview networkd files without writing to disk
+async fn networkd_preview(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<keystone_core::NetworkdPreviewResponse>, AppError> {
+    info!("Generating networkd preview");
+    let files = networkd_preview_files(&state.db).await?;
     Ok(Json(keystone_core::NetworkdPreviewResponse { files }))
 }
 

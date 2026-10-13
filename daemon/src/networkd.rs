@@ -16,12 +16,12 @@ use uuid::Uuid;
 /// Directory where networkd link configuration files are written.
 const NETWORKD_DIR: &str = "/etc/systemd/network";
 /// Directory for global systemd-networkd configuration drop-ins.
-const NETWORKD_CONFIG_DIR: &str = "/etc/systemd/networkd.conf.d";
+pub(crate) const NETWORKD_CONFIG_DIR: &str = "/etc/systemd/networkd.conf.d";
 /// Keystone-owned global forwarding configuration.
-const NETWORKD_ROUTER_CONFIG: &str = "50-keystone-router.conf";
+pub(crate) const NETWORKD_ROUTER_CONFIG: &str = "50-keystone-router.conf";
 /// Keep forwarding enabled at runtime and across boots; networkd reload alone
 /// does not reliably apply global forwarding sysctls.
-const ROUTER_SYSCTL_CONFIG: &str = "/etc/sysctl.d/99-zz-keystone-forwarding.conf";
+pub(crate) const ROUTER_SYSCTL_CONFIG: &str = "/etc/sysctl.d/99-zz-keystone-forwarding.conf";
 const IPV4_FORWARD_SYSCTL: &str = "/proc/sys/net/ipv4/ip_forward";
 const IPV6_FORWARD_SYSCTL: &str = "/proc/sys/net/ipv6/conf/all/forwarding";
 

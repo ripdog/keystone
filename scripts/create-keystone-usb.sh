@@ -295,8 +295,8 @@ validate_requirements() {
         exit 1
     fi
 
-    # If no package provided (create mode), check we're in keystone source directory
-    if [[ "$MODE" == "create" && -z "$KEYSTONE_PKG" ]]; then
+    # Source builds need the Keystone repository (including upgrade --build).
+    if [[ "$FORCE_BUILD" == "true" || ( "$MODE" == "create" && -z "$KEYSTONE_PKG" ) ]]; then
         if [[ ! -f "Cargo.toml" ]] || ! grep -q 'keystone' Cargo.toml 2>/dev/null; then
             error "Not in keystone project directory and no package specified"
             error "Either run from keystone project root or provide -k <package>"
@@ -687,38 +687,38 @@ build_keystone_package() {
     
     info "Building Keystone package from source..."
     
-    # Install build dependencies in chroot
+    # The distro rust package does not provide rustup-managed WASM targets.
+    # Use packaged Trunk and an isolated toolchain for the unprivileged builder.
     arch-chroot "$WORKDIR/rootfs" pacman -S --noconfirm --needed \
-        base-devel \
-        rust \
-        cargo \
-        sqlite
-    
-    # Install trunk for WASM builds
-    arch-chroot "$WORKDIR/rootfs" cargo install trunk
-    arch-chroot "$WORKDIR/rootfs" rustup target add wasm32-unknown-unknown
-    
-    # Copy source to chroot
+        base-devel rustup trunk sqlite git
+
     local src_dest="$WORKDIR/rootfs/tmp/keystone-src"
     mkdir -p "$src_dest"
-    
-    # Copy source files (excluding target directory and other large files)
     rsync -a --exclude='target' --exclude='.git' --exclude='*.iso' \
+        --exclude='*.pkg.tar.*' --exclude='pkg' --exclude='logs' \
         "$(pwd)/" "$src_dest/"
-    
+    chown -R keystone:keystone "$src_dest"
+
+    # Match the project pin rather than silently using an older chroot compiler.
+    local rust_channel
+    rust_channel=$(awk -F '"' '/^channel[[:space:]]*=/ {print $2}' "$src_dest/rust-toolchain.toml")
+    if [[ -z "$rust_channel" ]]; then
+        error "Missing pinned Rust channel in rust-toolchain.toml"
+        exit 1
+    fi
+    arch-chroot "$WORKDIR/rootfs" runuser -u keystone -- \
+        rustup toolchain install "$rust_channel" --profile minimal \
+        --component clippy --component rustfmt --target wasm32-unknown-unknown
+
     if [[ "$RUN_TESTS" == "true" ]]; then
         info "Running tests in chroot..."
-        arch-chroot "$WORKDIR/rootfs" bash -c "
-            cd /tmp/keystone-src
-            cargo test --all
-        "
+        arch-chroot "$WORKDIR/rootfs" runuser -u keystone -- \
+            bash -c "cd /tmp/keystone-src && cargo test --workspace --locked"
     fi
 
-    # Build the package
-    arch-chroot "$WORKDIR/rootfs" bash -c "
-        cd /tmp/keystone-src
-        makepkg -sf --noconfirm
-    "
+    # makepkg refuses to run as root; keep build artifacts owned by keystone.
+    arch-chroot "$WORKDIR/rootfs" runuser -u keystone -- \
+        bash -c "cd /tmp/keystone-src && makepkg -sf --noconfirm"
     
     # Find the built package
     KEYSTONE_PKG=$(find "$WORKDIR/rootfs/tmp/keystone-src" -maxdepth 1 -name '*.pkg.tar.zst' | head -1)

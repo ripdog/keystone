@@ -8,6 +8,7 @@
 //! Both sides are generated with the same functions the apply uses, so the diff
 //! shows what the next apply would write.
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -237,13 +238,16 @@ async fn baseline_generated(
     id: i64,
     component: Component,
 ) -> Result<Generated, String> {
-    if !opened.contains_key(&id) {
-        let result = snapshots::open_snapshot(db, id)
-            .await
-            .map_err(|error| format!("{error:#}"));
-        opened.insert(id, result);
-    }
-    match opened.get(&id).expect("snapshot was opened above") {
+    let entry = match opened.entry(id) {
+        Entry::Occupied(entry) => entry.into_mut(),
+        Entry::Vacant(entry) => {
+            let result = snapshots::open_snapshot(db, id)
+                .await
+                .map_err(|error| format!("{error:#}"));
+            entry.insert(result)
+        }
+    };
+    match entry {
         Ok(snapshot) => generate_side(component, snapshot.database()).await,
         Err(error) => Err(format!("snapshot {id} could not be opened: {error}")),
     }

@@ -1,3 +1,5 @@
+use console::style;
+use keystone_core::changes::*;
 use keystone_core::*;
 use std::path::PathBuf;
 
@@ -733,5 +735,120 @@ pub fn delete_success(success: bool, message: &str) {
         println!("✓ Deleted successfully");
     } else {
         println!("✗ {}", message);
+    }
+}
+
+/// Pending configuration changes, per component, with unified diffs.
+pub fn pending_changes(response: &PendingChangesResponse) {
+    component_diffs("Pending configuration changes", response);
+}
+
+/// Per-component diffs under `heading`. Colour is used only on a terminal.
+pub fn component_diffs(heading: &str, response: &PendingChangesResponse) {
+    println!("=== {heading} ===\n");
+    let mut any_difference = false;
+    for diff in &response.components {
+        let baseline = match response.baseline_ids.get(diff.component) {
+            Some(id) => format!("snapshot {id}"),
+            None => "never applied".to_string(),
+        };
+        if let Some(error) = &diff.error {
+            any_difference |= diff.changed;
+            println!(
+                "{}: cannot be generated (against {baseline}): {error}",
+                diff.component
+            );
+        }
+        if !diff.changed {
+            if diff.error.is_none() {
+                println!("{}: no changes (against {baseline})", diff.component);
+            }
+            continue;
+        }
+        any_difference = true;
+        if diff.error.is_none() {
+            println!("{}: changed (against {baseline})", diff.component);
+        }
+        for file in &diff.files {
+            let status = match file.status {
+                FileChangeStatus::Added => "added",
+                FileChangeStatus::Removed => "removed",
+                FileChangeStatus::Modified => "modified",
+            };
+            println!("  {status} {}", file.path);
+            for line in file.unified_diff.lines() {
+                if line.starts_with("---") || line.starts_with("+++") {
+                    continue;
+                }
+                println!("    {}", colour_diff_line(line));
+            }
+        }
+        println!();
+    }
+    if !any_difference {
+        println!("No differences.");
+    }
+}
+
+fn colour_diff_line(line: &str) -> String {
+    if line.starts_with("@@") {
+        style(line).cyan().to_string()
+    } else if line.starts_with('+') {
+        style(line).green().to_string()
+    } else if line.starts_with('-') {
+        style(line).red().to_string()
+    } else {
+        line.to_string()
+    }
+}
+
+pub fn discard_changes(response: &DiscardChangesResponse) {
+    println!("{}", response.message);
+}
+
+pub fn restore_snapshot(response: &RestoreSnapshotResponse) {
+    println!("{}", response.message);
+}
+
+pub fn snapshot_response(response: &SnapshotResponse) {
+    if response.success {
+        println!("✓ {}", response.message);
+    } else {
+        println!("✗ {}", response.message);
+    }
+}
+
+pub fn snapshot_list(response: &SnapshotListResponse) {
+    println!("=== Configuration snapshots ===\n");
+    if response.snapshots.is_empty() {
+        println!("No snapshots.");
+        return;
+    }
+    println!(
+        "ID     Created (UTC)     Kind         Status              Applied for                    Size     Actor      Note"
+    );
+    println!("{}", "-".repeat(118));
+    for snapshot in &response.snapshots {
+        let components = if snapshot.components.is_empty() {
+            "-".to_string()
+        } else {
+            snapshot
+                .components
+                .iter()
+                .map(|component| component.as_str())
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        println!(
+            "{:<6} {:<17} {:<12} {:<19} {:<30} {:<8} {:<10} {}",
+            snapshot.id,
+            format_utc_datetime(snapshot.created_at),
+            snapshot.kind.as_str(),
+            snapshot.status.as_str(),
+            components,
+            crate::format_bytes(snapshot.size_bytes),
+            snapshot.actor.as_deref().unwrap_or("-"),
+            snapshot.note.as_deref().unwrap_or("")
+        );
     }
 }

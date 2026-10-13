@@ -126,6 +126,10 @@ impl SnapshotStatus {
     }
 }
 
+/// Largest snapshot file accepted by the import endpoint. Configuration
+/// snapshots are small, so this only bounds the work done on an uploaded file.
+pub const MAX_SNAPSHOT_UPLOAD_BYTES: usize = 32 * 1024 * 1024;
+
 /// Civil `(year, month, day)` in UTC for a Unix timestamp in seconds.
 fn utc_civil(unix_secs: i64) -> (i64, i64, i64) {
     // Civil-from-days (Howard Hinnant's algorithm), days counted from 1970-01-01.

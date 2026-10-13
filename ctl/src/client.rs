@@ -50,6 +50,26 @@ impl DaemonClient {
         body: Option<&impl Serialize>,
         token: Option<&str>,
     ) -> Result<T> {
+        let body_bytes = match body {
+            Some(b) => serde_json::to_vec(b).context("Failed to serialize request body")?,
+            None => Vec::new(),
+        };
+        let response = self
+            .send(method, path, body_bytes, "application/json", token)
+            .await?;
+        serde_json::from_slice(&response).context("Failed to parse response JSON")
+    }
+
+    /// Send one request and return the response body. Non-success statuses
+    /// become errors carrying the daemon's message.
+    async fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body_bytes: Vec<u8>,
+        content_type: &str,
+        token: Option<&str>,
+    ) -> Result<Vec<u8>> {
         // Connect to Unix socket
         let stream = UnixStream::connect(&self.socket_path)
             .await
@@ -69,16 +89,10 @@ impl DaemonClient {
             }
         });
 
-        // Build request
-        let body_bytes = match body {
-            Some(b) => serde_json::to_vec(b).context("Failed to serialize request body")?,
-            None => Vec::new(),
-        };
-
         let mut req_builder = hyper::Request::builder()
             .method(method)
             .uri(path)
-            .header("Content-Type", "application/json");
+            .header("Content-Type", content_type);
 
         if let Some(t) = token {
             req_builder = req_builder.header("Authorization", format!("Bearer {}", t));
@@ -107,7 +121,25 @@ impl DaemonClient {
             anyhow::bail!("Request failed with status {}: {}", status, error_msg);
         }
 
-        serde_json::from_slice(&body_bytes).context("Failed to parse response JSON")
+        Ok(body_bytes.to_vec())
+    }
+
+    /// GET a non-JSON body, such as a snapshot file.
+    pub async fn get_raw(&self, path: &str, token: Option<&str>) -> Result<Vec<u8>> {
+        self.send("GET", path, Vec::new(), "application/json", token)
+            .await
+    }
+
+    /// POST a non-JSON body and parse the JSON response.
+    pub async fn post_raw<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        content_type: &str,
+        token: Option<&str>,
+    ) -> Result<T> {
+        let response = self.send("POST", path, body, content_type, token).await?;
+        serde_json::from_slice(&response).context("Failed to parse response JSON")
     }
 
     /// Call a typed endpoint; path, method and body/response types come from `E`.
@@ -153,6 +185,21 @@ impl<'a> AuthedDaemonClient<'a> {
 
     pub async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.client.delete(path, Some(&self.token)).await
+    }
+
+    pub async fn get_raw(&self, path: &str) -> Result<Vec<u8>> {
+        self.client.get_raw(path, Some(&self.token)).await
+    }
+
+    pub async fn post_raw<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: Vec<u8>,
+        content_type: &str,
+    ) -> Result<T> {
+        self.client
+            .post_raw(path, body, content_type, Some(&self.token))
+            .await
     }
 }
 

@@ -937,7 +937,7 @@ pub async fn open_snapshot(db: &Database, id: i64) -> Result<OpenedSnapshot> {
 
 /// Largest uploaded snapshot accepted. Configuration snapshots are small, so
 /// this only bounds the work done on an untrusted file.
-pub const MAX_IMPORT_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_IMPORT_BYTES: usize = keystone_core::changes::MAX_SNAPSHOT_UPLOAD_BYTES;
 
 const SQLITE_HEADER: &[u8] = b"SQLite format 3\0";
 

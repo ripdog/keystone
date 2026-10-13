@@ -1,4 +1,7 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
+use keystone_core::changes::Component;
 
 use crate::SOCKET_PATH;
 
@@ -91,6 +94,105 @@ pub enum Commands {
     /// Manage DNS & DHCP (dnsmasq) configuration
     #[command(subcommand)]
     Dnsmasq(DnsmasqCommands),
+
+    /// Show configuration changes that have not been applied yet
+    Changes {
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        #[command(subcommand)]
+        action: Option<ChangesAction>,
+    },
+
+    /// Manage configuration snapshots
+    #[command(subcommand)]
+    Snapshots(SnapshotsCommands),
+}
+
+#[derive(Subcommand)]
+pub enum ChangesAction {
+    /// Revert unapplied changes to the last applied configuration
+    ///
+    /// Nothing is applied to the system. Omit --component to discard every
+    /// changed component.
+    Discard {
+        /// Component to discard: networkd, firewall, dnsmasq or caddy (repeatable)
+        #[arg(long = "component", value_parser = parse_component)]
+        components: Vec<Component>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SnapshotsCommands {
+    /// List snapshots, newest first
+    List {
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Save a manual snapshot of the current configuration
+    Create {
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+
+        /// Note describing the snapshot
+        #[arg(short, long)]
+        note: Option<String>,
+    },
+
+    /// Show what restoring a snapshot would change in the live configuration
+    ShowDiff {
+        /// Snapshot id
+        id: i64,
+
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Restore a snapshot into the live configuration; the result is pending until applied
+    Restore {
+        /// Snapshot id
+        id: i64,
+
+        /// Restore only this component: networkd, firewall, dnsmasq or caddy (repeatable)
+        #[arg(long = "component", value_parser = parse_component)]
+        components: Vec<Component>,
+
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Save a snapshot file to disk (refuses to overwrite an existing file)
+    Export {
+        /// Snapshot id
+        id: i64,
+
+        /// Destination file
+        file: PathBuf,
+
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+
+    /// Upload a snapshot file as an imported snapshot (restore it separately)
+    Import {
+        /// Snapshot file produced by `snapshots export`
+        file: PathBuf,
+
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
+    },
+}
+
+fn parse_component(value: &str) -> Result<Component, String> {
+    value.parse()
 }
 
 #[derive(Subcommand)]

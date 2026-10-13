@@ -26,6 +26,7 @@ mod wizard;
 
 use crate::client::DaemonClient;
 use crate::commands::*;
+use crate::handlers::changes::{handle_changes_command, handle_snapshots_command};
 use crate::handlers::dnsmasq::handle_dnsmasq_command;
 use crate::handlers::firewall::handle_firewall_command;
 use crate::io::{output, read_json_input};
@@ -341,6 +342,14 @@ async fn main() -> Result<()> {
 
         Some(Commands::Dnsmasq(subcmd)) => {
             handle_dnsmasq_command(&client, cli.json, subcmd).await?
+        }
+
+        Some(Commands::Changes { token, action }) => {
+            handle_changes_command(&client, cli.json, token, action).await?
+        }
+
+        Some(Commands::Snapshots(subcmd)) => {
+            handle_snapshots_command(&client, cli.json, subcmd).await?
         }
     }
 

@@ -272,7 +272,7 @@ pub fn VlansPage(
                                     let protocol = format!("{}", vlan.protocol);
                                     let description = vlan.description.clone().unwrap_or_else(|| "-".to_string());
                                     view! {
-                                        <tr class="hover:bg-gray-750">
+                                        <tr class="hover:bg-gray-700/30">
                                             <td class="px-4 py-3 text-white font-medium">{name}</td>
                                             <td class="px-4 py-3 text-gray-300">{vlan_id}</td>
                                             <td class="px-4 py-3 text-gray-300">{parent}</td>

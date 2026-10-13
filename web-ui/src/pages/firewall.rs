@@ -2143,7 +2143,7 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
                             <div class="space-y-6 max-w-xl">
                                 // ICMP / Ping Settings
                                 <div class="bg-gray-700/50 rounded-lg p-4 space-y-4">
-                                    <h3 class="text-md font-medium text-gray-300">"ICMP Settings"</h3>
+                                    <h3 class="text-base font-medium text-gray-300">"ICMP Settings"</h3>
                                     <p class="text-sm text-gray-400">
                                         "Control whether the router responds to ping requests. "
                                         "Dangerous ICMP types (timestamp, redirect, address-mask) are always blocked."
@@ -2175,7 +2175,7 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
 
                                 // Hairpin NAT Settings
                                 <div class="bg-gray-700/50 rounded-lg p-4 space-y-4">
-                                    <h3 class="text-md font-medium text-gray-300">"NAT Settings"</h3>
+                                    <h3 class="text-base font-medium text-gray-300">"NAT Settings"</h3>
                                     <p class="text-sm text-gray-400">
                                         "Hairpin NAT (NAT reflection) allows LAN clients to access port-forwarded "
                                         "services using the router's external IP address."

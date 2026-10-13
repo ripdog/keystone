@@ -367,7 +367,7 @@ pub(super) fn SimpleForwardsTab(
             <Suspense fallback=|| view! { <p class="text-gray-400">"Loading other port forwards..."</p> }>
                 {move || other_forwards.get().and_then(|res| res.ok()).filter(|items| !items.is_empty()).map(|items| view! {
                     <div class="space-y-2 pt-4">
-                        <h3 class="text-md font-medium text-gray-200">"Other port forwards (created via CLI/API)"</h3>
+                        <h3 class="text-base font-medium text-gray-200">"Other port forwards (created via CLI/API)"</h3>
                         <p class="text-gray-400 text-sm">"These DNAT rules are not part of a simple forward above. They are live once applied."</p>
                         <div class="overflow-x-auto">
                             <table class="w-full text-sm">

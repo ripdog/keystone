@@ -830,7 +830,7 @@ fn DhcpRangesTab(
                                 let range_for_edit = range.clone();
                                 let range_id = range.id.unwrap_or(0);
                                 view! {
-                                    <tr class="hover:bg-gray-750">
+                                    <tr class="hover:bg-gray-700/30">
                                         <td class="px-4 py-3 text-white">{range.name.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300">{range.interface.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300">
@@ -1143,7 +1143,7 @@ fn StaticLeasesTab(
                                 let lease_for_edit = lease.clone();
                                 let lease_id = lease.id.unwrap_or(0);
                                 view! {
-                                    <tr class="hover:bg-gray-750">
+                                    <tr class="hover:bg-gray-700/30">
                                         <td class="px-4 py-3 text-white font-mono">{lease.mac_address.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300 font-mono">{lease.ip_address.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300">{lease.hostname.clone().unwrap_or_else(|| "-".to_string())}</td>
@@ -1366,7 +1366,7 @@ fn ActiveLeasesTab(
                                 let mac_for_check = lease.mac_address.clone();
                                 let expires = format_timestamp(lease.expires_at);
                                 view! {
-                                    <tr class="hover:bg-gray-750">
+                                    <tr class="hover:bg-gray-700/30">
                                         <td class="px-4 py-3 text-white font-mono">{lease.mac_address.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300 font-mono">{lease.ip_address.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300">{lease.hostname.clone().unwrap_or_else(|| "-".to_string())}</td>
@@ -1647,7 +1647,7 @@ fn DhcpOptionsTab(
                                     if f.is_empty() { "-".to_string() } else { f.join(", ") }
                                 };
                                 view! {
-                                    <tr class="hover:bg-gray-750">
+                                    <tr class="hover:bg-gray-700/30">
                                         <td class="px-4 py-3 text-white">{opt.description.clone().unwrap_or_else(|| "-".to_string())}</td>
                                         <td class="px-4 py-3 text-gray-300 font-mono">{opt.option.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300 font-mono max-w-xs truncate">{opt.value.clone()}</td>
@@ -1942,7 +1942,7 @@ fn HostRecordsSection(
                                 let rec_for_edit = rec.clone();
                                 let rec_id = rec.id.unwrap_or(0);
                                 view! {
-                                    <tr class="hover:bg-gray-750">
+                                    <tr class="hover:bg-gray-700/30">
                                         <td class="px-4 py-3 text-white">{rec.hostnames.join(", ")}</td>
                                         <td class="px-4 py-3 text-gray-300 font-mono">{rec.ipv4_address.clone().unwrap_or_else(|| "-".to_string())}</td>
                                         <td class="px-4 py-3 text-gray-300 font-mono">{rec.ipv6_address.clone().unwrap_or_else(|| "-".to_string())}</td>
@@ -2197,7 +2197,7 @@ fn CnameRecordsSection(
                                 let rec_for_edit = rec.clone();
                                 let rec_id = rec.id.unwrap_or(0);
                                 view! {
-                                    <tr class="hover:bg-gray-750">
+                                    <tr class="hover:bg-gray-700/30">
                                         <td class="px-4 py-3 text-white">{rec.alias.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300">{rec.target.clone()}</td>
                                         <td class="px-4 py-3">
@@ -2467,7 +2467,7 @@ fn AddressOverridesTab(
                                 let ovr_id = ovr.id.unwrap_or(0);
                                 let action_text = action_display(&ovr.action);
                                 view! {
-                                    <tr class="hover:bg-gray-750">
+                                    <tr class="hover:bg-gray-700/30">
                                         <td class="px-4 py-3 text-white">{ovr.domain.clone()}</td>
                                         <td class="px-4 py-3 text-gray-300">{action_text}</td>
                                         <td class="px-4 py-3 text-gray-300 font-mono">{ovr.redirect_address.clone().unwrap_or_else(|| "-".to_string())}</td>

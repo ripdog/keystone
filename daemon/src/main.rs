@@ -1161,29 +1161,11 @@ async fn save_vlan(
 ) -> Result<Json<Res<SaveVlan>>, AppError> {
     info!("Saving VLAN config: {}", request.config.name);
 
-    // Validate VLAN name
-    if request.config.name.is_empty() {
+    let fields = networkd::validate_vlan_fields(&request.config);
+    if !fields.is_empty() {
         return Ok(Json(SaveVlanConfigResponse {
             success: false,
-            message: "VLAN name is required".to_string(),
-            vlan_id: None,
-        }));
-    }
-
-    // Validate parent interface
-    if request.config.parent_interface.is_empty() {
-        return Ok(Json(SaveVlanConfigResponse {
-            success: false,
-            message: "Parent interface is required".to_string(),
-            vlan_id: None,
-        }));
-    }
-
-    // Validate VLAN ID range
-    if request.config.vlan_id < 1 || request.config.vlan_id > 4094 {
-        return Ok(Json(SaveVlanConfigResponse {
-            success: false,
-            message: "VLAN ID must be between 1 and 4094".to_string(),
+            message: fields.join("; "),
             vlan_id: None,
         }));
     }
@@ -1273,22 +1255,11 @@ async fn save_bridge(
 ) -> Result<Json<Res<SaveBridge>>, AppError> {
     info!("Saving bridge config: {:?}", request.config.name);
 
-    // Validate bridge name
-    if request.config.name.is_empty() {
+    let fields = networkd::validate_bridge_fields(&request.config);
+    if !fields.is_empty() {
         return Ok(Json(keystone_core::SaveBridgeConfigResponse {
             success: false,
-            message: "Bridge name cannot be empty".to_string(),
-            bridge_id: None,
-        }));
-    }
-
-    // Validate STP forward delay (2-30 seconds per IEEE 802.1D)
-    if request.config.stp
-        && (request.config.stp_forward_delay < 2 || request.config.stp_forward_delay > 30)
-    {
-        return Ok(Json(keystone_core::SaveBridgeConfigResponse {
-            success: false,
-            message: "STP forward delay must be between 2 and 30 seconds".to_string(),
+            message: fields.join("; "),
             bridge_id: None,
         }));
     }

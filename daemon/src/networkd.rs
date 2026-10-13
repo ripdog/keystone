@@ -1047,6 +1047,34 @@ pub fn validate_topology(
     errors
 }
 
+/// Field checks for one VLAN definition: a name, a parent, and an ID in range.
+pub fn validate_vlan_fields(vlan: &VlanConfig) -> Vec<String> {
+    let mut errors = Vec::new();
+    if vlan.name.is_empty() {
+        errors.push("VLAN name is required".to_owned());
+    }
+    if vlan.parent_interface.is_empty() {
+        errors.push("Parent interface is required".to_owned());
+    }
+    if !(1..=4094).contains(&vlan.vlan_id) {
+        errors.push("VLAN ID must be between 1 and 4094".to_owned());
+    }
+    errors
+}
+
+/// Field checks for one bridge definition: a name, and a valid STP delay when
+/// STP is on (IEEE 802.1D allows 2 to 30 seconds).
+pub fn validate_bridge_fields(bridge: &BridgeConfig) -> Vec<String> {
+    let mut errors = Vec::new();
+    if bridge.name.is_empty() {
+        errors.push("Bridge name cannot be empty".to_owned());
+    }
+    if bridge.stp && !(2..=30).contains(&bridge.stp_forward_delay) {
+        errors.push("STP forward delay must be between 2 and 30 seconds".to_owned());
+    }
+    errors
+}
+
 /// Check VLAN definitions for names and IDs that cannot work together.
 pub fn validate_vlans(vlans: &[VlanConfig]) -> Vec<String> {
     let mut errors = Vec::new();
@@ -1544,6 +1572,36 @@ mod tests {
             ..config
         };
         assert_eq!(vlan_parent_network_files(&[disabled], &vlans, &[]).len(), 1);
+    }
+
+    #[test]
+    fn vlan_and_bridge_fields_are_checked_before_topology() {
+        let mut vlan = test_vlan("eth0.10", "eth0", 10);
+        assert!(validate_vlan_fields(&vlan).is_empty());
+        vlan.vlan_id = 4095;
+        assert_eq!(
+            validate_vlan_fields(&vlan),
+            ["VLAN ID must be between 1 and 4094"]
+        );
+        vlan.vlan_id = 10;
+        vlan.name.clear();
+        assert_eq!(validate_vlan_fields(&vlan), ["VLAN name is required"]);
+
+        let mut bridge = test_bridge("br0", &["eth1"]);
+        assert!(validate_bridge_fields(&bridge).is_empty());
+        bridge.stp = true;
+        bridge.stp_forward_delay = 31;
+        assert_eq!(
+            validate_bridge_fields(&bridge),
+            ["STP forward delay must be between 2 and 30 seconds"]
+        );
+        bridge.stp = false;
+        assert!(validate_bridge_fields(&bridge).is_empty());
+        bridge.name.clear();
+        assert_eq!(
+            validate_bridge_fields(&bridge),
+            ["Bridge name cannot be empty"]
+        );
     }
 
     #[test]

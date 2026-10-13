@@ -191,6 +191,13 @@ mod tests {
         assert_eq!(parse_comment("ks:input:x"), None);
     }
 
+    /// The UPnP accept has no rule id, so its comment is not a user rule and
+    /// its counter is not attributed to any rule.
+    #[test]
+    fn the_upnp_accept_comment_has_no_rule_id_and_is_skipped() {
+        assert_eq!(parse_comment("ks:upnp"), None);
+    }
+
     #[test]
     fn counters_are_summed_per_rule_across_families_and_tables() {
         let counters = parse_rule_counters(&[filter_fixture(), nat_fixture()]);

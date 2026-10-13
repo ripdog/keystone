@@ -557,7 +557,7 @@ fn evaluate_cond(cond: &Cond, ctx: &Context, flow: &Flow) -> Result<String, Stri
 
 fn trace_origin(origin: &Origin) -> TraceOrigin {
     match origin {
-        Origin::Builtin => TraceOrigin::Builtin,
+        Origin::Builtin | Origin::Upnp => TraceOrigin::Builtin,
         Origin::Policy => TraceOrigin::Policy,
         Origin::User { kind, id, .. } => TraceOrigin::User {
             rule_kind: (*kind).to_string(),
@@ -570,6 +570,7 @@ fn trace_origin(origin: &Origin) -> TraceOrigin {
 fn rule_label(rule: &RuleSpec) -> String {
     match &rule.origin {
         Origin::User { name, .. } => name.clone(),
+        Origin::Upnp => "UPnP / NAT-PMP mappings (accepted DNAT traffic)".to_string(),
         Origin::Builtin | Origin::Policy => rule.comment.clone(),
     }
 }
@@ -637,6 +638,9 @@ fn notes(config: &FirewallConfig, egress: Option<&str>, path: TraceStage) -> Vec
             "The outgoing interface is unknown, so rules that match on it cannot match."
                 .to_string(),
         );
+    }
+    if config.upnp_forward.is_some() {
+        notes.push("UPnP / NAT-PMP is enabled. The mappings are made by miniupnpd, whose table is not modelled: a UPnP-mapped connection is accepted here only if this trace also DNATs it through a rule above.".to_string());
     }
     if config.zones.iter().any(|zone| {
         zone.default_forward_policy == FirewallPolicy::Accept && !zone.interfaces.is_empty()
@@ -1158,6 +1162,45 @@ mod tests {
                 .steps
                 .iter()
                 .any(|step| step.reason.contains("outgoing interface is unknown"))
+        );
+    }
+
+    /// The UPnP accept matches only DNATed packets. For an ordinary forwarded
+    /// packet the step is listed and reported as not matched, and the trace says
+    /// that miniupnpd's mappings are not modelled.
+    #[test]
+    fn upnp_accept_matches_only_dnated_packets_and_says_so() {
+        let config = crate::firewall::fixtures::rich_upnp();
+        // Leaves through the LAN, so the UPnP interface match holds and only the DNAT condition can fail.
+        let response = run(&config, &tcp("eth0", "198.51.100.7", "192.168.1.77", 80));
+        let upnp = response
+            .steps
+            .iter()
+            .find(|step| step.label.starts_with("UPnP"))
+            .expect("the UPnP accept is evaluated");
+        assert!(!upnp.matched);
+        assert!(
+            upnp.reason.contains("not translated by a port forward"),
+            "{}",
+            upnp.reason
+        );
+        assert!(response.notes.iter().any(|note| note.contains("miniupnpd")));
+    }
+
+    #[test]
+    fn upnp_note_is_absent_when_upnp_is_disabled() {
+        let response = run(&rich(), &tcp("eth0", "198.51.100.7", "1.1.1.1", 443));
+        assert!(
+            response
+                .notes
+                .iter()
+                .all(|note| !note.contains("miniupnpd"))
+        );
+        assert!(
+            response
+                .steps
+                .iter()
+                .all(|step| !step.label.starts_with("UPnP"))
         );
     }
 

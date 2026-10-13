@@ -19,6 +19,7 @@ mod simple_forwards;
 mod sqm;
 mod ssh;
 mod status;
+mod upnp;
 mod vlans;
 mod wizard;
 
@@ -38,5 +39,6 @@ pub use settings::*;
 pub use sqm::*;
 pub use ssh::*;
 pub use status::*;
+pub use upnp::*;
 pub use vlans::*;
 pub use wizard::*;

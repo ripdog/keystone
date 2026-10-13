@@ -13,6 +13,7 @@
 //! - `caddy` - Caddy reverse proxy configuration
 //! - `changes` - Pending changes, apply-all and configuration snapshots
 //! - `sqm` - Traffic shaping (SQM / CAKE)
+//! - `upnp` - UPnP IGD and NAT-PMP / PCP port mapping
 //! - `services` - Systemd service management
 //!
 //! All functions use the shared `client` module for HTTP requests,
@@ -32,6 +33,7 @@ pub mod services;
 pub mod settings;
 pub mod sqm;
 pub mod ssh;
+pub mod upnp;
 pub mod users;
 pub mod vlans;
 pub mod wizard;
@@ -52,6 +54,7 @@ pub use services::*;
 pub use settings::*;
 pub use sqm::*;
 pub use ssh::*;
+pub use upnp::*;
 pub use users::*;
 pub use vlans::*;
 pub use wizard::*;

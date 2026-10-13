@@ -49,6 +49,7 @@ pub fn component_display_name(component: Component) -> &'static str {
         Component::Dnsmasq => "DNS & DHCP",
         Component::Caddy => "Web Server",
         Component::Sqm => "Traffic Shaping",
+        Component::Upnp => "UPnP / NAT-PMP",
     }
 }
 
@@ -180,6 +181,7 @@ pub fn apply_outcome_rows(results: &ApplyComponentResults) -> Vec<(Component, Co
         (Component::Networkd, results.networkd.clone()),
         (Component::Firewall, results.firewall.clone()),
         (Component::Sqm, results.sqm.clone()),
+        (Component::Upnp, results.upnp.clone()),
         (Component::Dnsmasq, results.dnsmasq.clone()),
         (Component::Caddy, results.caddy.clone()),
     ]

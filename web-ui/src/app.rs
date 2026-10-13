@@ -10,7 +10,7 @@ use crate::components::{
 use crate::pages::{
     BridgesPage, CaddyPage, ClientsPage, DashboardPage, DnsmasqPage, FirewallPage, HistoryPage,
     InterfaceEditPage, InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage,
-    SettingsPage, SqmPage, SshPage, StatusPage, VlansPage, WizardPage,
+    SettingsPage, SqmPage, SshPage, StatusPage, UpnpPage, VlansPage, WizardPage,
 };
 use keystone_core::SystemState;
 use leptos::prelude::*;
@@ -256,6 +256,15 @@ pub fn App() -> impl IntoView {
                                 path=path!("/sqm")
                                 view=move || view! {
                                     <SqmPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
+                                path=path!("/upnp")
+                                view=move || view! {
+                                    <UpnpPage
                                         auth_token=auth_token
                                         on_unauthorized=on_unauthorized
                                     />

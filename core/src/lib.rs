@@ -2549,6 +2549,50 @@ pub struct FirewallLogResponse {
 }
 
 // ============================================================================
+// Connection Tracking Types
+// ============================================================================
+
+/// One tracked connection, as the kernel's connection tracking table holds it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectionEntry {
+    /// `ipv4` or `ipv6`.
+    pub family: String,
+    /// Protocol name as conntrack reports it: `tcp`, `udp`, `icmp`, `icmpv6`, ...
+    pub protocol: String,
+    /// TCP state such as `ESTABLISHED`. `None` for protocols without one.
+    pub state: Option<String>,
+    /// Address and port of the connection's initiator.
+    pub original_source: String,
+    pub original_destination: String,
+    pub original_source_port: Option<u16>,
+    pub original_destination_port: Option<u16>,
+    /// Address and port of the replies, as they arrive at the router.
+    pub reply_source: String,
+    pub reply_destination: String,
+    pub reply_source_port: Option<u16>,
+    pub reply_destination_port: Option<u16>,
+    /// True when the reply tuple is not the mirror of the original, which
+    /// means the connection was NATed (DNAT, SNAT or masquerade).
+    pub nat: bool,
+    pub mark: u32,
+    /// Seconds until the entry expires.
+    pub timeout: Option<u64>,
+    /// Packets in both directions. `None` when connection byte accounting is off.
+    pub packets: Option<u64>,
+    /// Bytes in both directions. `None` when connection byte accounting is off.
+    pub bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConnectionsResponse {
+    pub connections: Vec<ConnectionEntry>,
+    /// True when the table holds more connections than `limit`.
+    pub truncated: bool,
+    /// Most connections returned.
+    pub limit: usize,
+}
+
+// ============================================================================
 // Global Settings Types
 // ============================================================================
 

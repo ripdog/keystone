@@ -21,6 +21,7 @@
 //! - `keystone_nat` - NAT rules (prerouting/postrouting chains)
 
 mod apply;
+pub(crate) mod connections;
 pub mod counters;
 #[cfg(test)]
 mod fixtures;

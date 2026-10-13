@@ -1,5 +1,9 @@
 //! Dnsmasq (DNS/DHCP) configuration API functions
 
+use keystone_core::api::{
+    SaveAddressOverride, SaveCnameRecord, SaveDhcpOption, SaveDhcpRange, SaveDnsmasqConfig,
+    SaveHostRecord, SaveStaticLease,
+};
 use keystone_core::{
     DhcpLease, DhcpLeasesResponse, DnsmasqAddressOverride, DnsmasqApplyResponse,
     DnsmasqCnameRecord, DnsmasqConfig, DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord,
@@ -8,7 +12,16 @@ use keystone_core::{
     SaveHostRecordRequest, SaveStaticLeaseRequest,
 };
 
-use super::client::{delete_no_response, get, post, post_empty, put_no_response};
+use super::client::{call, delete_no_response, get, post_empty};
+
+/// Turn a `{success, message, id}` save response into the saved id.
+fn saved_id(success: bool, message: String, id: Option<i64>) -> Result<i64, String> {
+    if success {
+        Ok(id.unwrap_or(0))
+    } else {
+        Err(message)
+    }
+}
 
 // ============================================================================
 // State
@@ -25,31 +38,22 @@ pub async fn fetch_dnsmasq_state(token: &str) -> Result<DnsmasqStateResponse, St
 
 /// Save global dnsmasq configuration
 pub async fn save_dnsmasq_config(token: &str, config: DnsmasqConfig) -> Result<(), String> {
-    let request = SaveDnsmasqConfigRequest { config };
-    put_no_response("/api/dnsmasq/config", token, &request).await
+    let response = call::<SaveDnsmasqConfig>(token, &SaveDnsmasqConfigRequest { config }).await?;
+    if response.success {
+        Ok(())
+    } else {
+        Err(response.message)
+    }
 }
 
 // ============================================================================
 // DHCP Ranges
 // ============================================================================
 
-/// Response type for saving DHCP ranges
-#[derive(serde::Deserialize)]
-struct SaveRangeResponse {
-    success: bool,
-    message: String,
-    range_id: Option<i64>,
-}
-
 /// Save a DHCP range
 pub async fn save_dhcp_range(token: &str, range: DnsmasqDhcpRange) -> Result<i64, String> {
-    let request = SaveDhcpRangeRequest { range };
-    let response: SaveRangeResponse = post("/api/dnsmasq/ranges", token, &request).await?;
-    if response.success {
-        Ok(response.range_id.unwrap_or(0))
-    } else {
-        Err(response.message)
-    }
+    let response = call::<SaveDhcpRange>(token, &SaveDhcpRangeRequest { range }).await?;
+    saved_id(response.success, response.message, response.range_id)
 }
 
 /// Delete a DHCP range
@@ -61,23 +65,10 @@ pub async fn delete_dhcp_range(token: &str, id: i64) -> Result<(), String> {
 // Static Leases
 // ============================================================================
 
-/// Response type for saving static leases
-#[derive(serde::Deserialize)]
-struct SaveLeaseResponse {
-    success: bool,
-    message: String,
-    lease_id: Option<i64>,
-}
-
 /// Save a static lease
 pub async fn save_static_lease(token: &str, lease: DnsmasqStaticLease) -> Result<i64, String> {
-    let request = SaveStaticLeaseRequest { lease };
-    let response: SaveLeaseResponse = post("/api/dnsmasq/leases", token, &request).await?;
-    if response.success {
-        Ok(response.lease_id.unwrap_or(0))
-    } else {
-        Err(response.message)
-    }
+    let response = call::<SaveStaticLease>(token, &SaveStaticLeaseRequest { lease }).await?;
+    saved_id(response.success, response.message, response.lease_id)
 }
 
 /// Delete a static lease
@@ -95,23 +86,10 @@ pub async fn fetch_active_leases(token: &str) -> Result<Vec<DhcpLease>, String> 
 // DHCP Options
 // ============================================================================
 
-/// Response type for saving DHCP options
-#[derive(serde::Deserialize)]
-struct SaveOptionResponse {
-    success: bool,
-    message: String,
-    option_id: Option<i64>,
-}
-
 /// Save a DHCP option
 pub async fn save_dhcp_option(token: &str, option: DnsmasqDhcpOption) -> Result<i64, String> {
-    let request = SaveDhcpOptionRequest { option };
-    let response: SaveOptionResponse = post("/api/dnsmasq/options", token, &request).await?;
-    if response.success {
-        Ok(response.option_id.unwrap_or(0))
-    } else {
-        Err(response.message)
-    }
+    let response = call::<SaveDhcpOption>(token, &SaveDhcpOptionRequest { option }).await?;
+    saved_id(response.success, response.message, response.option_id)
 }
 
 /// Delete a DHCP option
@@ -123,23 +101,10 @@ pub async fn delete_dhcp_option(token: &str, id: i64) -> Result<(), String> {
 // Host Records
 // ============================================================================
 
-/// Response type for saving host records
-#[derive(serde::Deserialize)]
-struct SaveHostRecordResponse {
-    success: bool,
-    message: String,
-    record_id: Option<i64>,
-}
-
 /// Save a host record
 pub async fn save_host_record(token: &str, record: DnsmasqHostRecord) -> Result<i64, String> {
-    let request = SaveHostRecordRequest { record };
-    let response: SaveHostRecordResponse = post("/api/dnsmasq/hosts", token, &request).await?;
-    if response.success {
-        Ok(response.record_id.unwrap_or(0))
-    } else {
-        Err(response.message)
-    }
+    let response = call::<SaveHostRecord>(token, &SaveHostRecordRequest { record }).await?;
+    saved_id(response.success, response.message, response.record_id)
 }
 
 /// Delete a host record
@@ -151,23 +116,10 @@ pub async fn delete_host_record(token: &str, id: i64) -> Result<(), String> {
 // CNAME Records
 // ============================================================================
 
-/// Response type for saving CNAME records
-#[derive(serde::Deserialize)]
-struct SaveCnameResponse {
-    success: bool,
-    message: String,
-    record_id: Option<i64>,
-}
-
 /// Save a CNAME record
 pub async fn save_cname_record(token: &str, record: DnsmasqCnameRecord) -> Result<i64, String> {
-    let request = SaveCnameRecordRequest { record };
-    let response: SaveCnameResponse = post("/api/dnsmasq/cnames", token, &request).await?;
-    if response.success {
-        Ok(response.record_id.unwrap_or(0))
-    } else {
-        Err(response.message)
-    }
+    let response = call::<SaveCnameRecord>(token, &SaveCnameRecordRequest { record }).await?;
+    saved_id(response.success, response.message, response.record_id)
 }
 
 /// Delete a CNAME record
@@ -179,26 +131,14 @@ pub async fn delete_cname_record(token: &str, id: i64) -> Result<(), String> {
 // Address Overrides
 // ============================================================================
 
-/// Response type for saving address overrides
-#[derive(serde::Deserialize)]
-struct SaveOverrideResponse {
-    success: bool,
-    message: String,
-    override_id: Option<i64>,
-}
-
 /// Save an address override
 pub async fn save_address_override(
     token: &str,
     override_entry: DnsmasqAddressOverride,
 ) -> Result<i64, String> {
-    let request = SaveAddressOverrideRequest { override_entry };
-    let response: SaveOverrideResponse = post("/api/dnsmasq/overrides", token, &request).await?;
-    if response.success {
-        Ok(response.override_id.unwrap_or(0))
-    } else {
-        Err(response.message)
-    }
+    let response =
+        call::<SaveAddressOverride>(token, &SaveAddressOverrideRequest { override_entry }).await?;
+    saved_id(response.success, response.message, response.override_id)
 }
 
 /// Delete an address override

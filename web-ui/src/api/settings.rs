@@ -1,11 +1,12 @@
 //! Global settings API functions
 
+use keystone_core::api::SaveGlobalSettings;
 use keystone_core::{
     CompleteSetupResponse, GlobalSettings, GlobalSettingsResponse, SaveGlobalSettingsRequest,
     SaveGlobalSettingsResponse, SystemStatusResponse,
 };
 
-use super::client::{get, get_public, post, post_empty};
+use super::client::{call, get, get_public, post_empty};
 
 /// Fetch global settings from the API
 pub async fn fetch_global_settings(token: &str) -> Result<GlobalSettings, String> {
@@ -19,7 +20,7 @@ pub async fn save_global_settings(
     settings: GlobalSettings,
 ) -> Result<SaveGlobalSettingsResponse, String> {
     let request = SaveGlobalSettingsRequest { settings };
-    post("/api/settings", token, &request).await
+    call::<SaveGlobalSettings>(token, &request).await
 }
 
 // ============================================================================

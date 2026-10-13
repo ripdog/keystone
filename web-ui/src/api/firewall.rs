@@ -1,5 +1,9 @@
 //! Firewall configuration API functions
 
+use keystone_core::api::{
+    ConfirmFirewall, CreateSimpleForward, SaveFirewallGlobalSettings, SaveFirewallZone,
+    SaveForwardRule, SaveInputRule, SaveZoneForward, UpdateSimpleForward,
+};
 use keystone_core::{
     CreateSimplePortForwardRequest, DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest,
     FirewallConfirmResponse, FirewallGlobalSettings, FirewallGlobalSettingsResponse,
@@ -10,7 +14,16 @@ use keystone_core::{
     SimplePortForwardsResponse, ZoneForwardPolicy,
 };
 
-use super::client::{SaveIdResponse, delete, extract_id, get, post, post_empty, put_no_response};
+use super::client::{call, call_with, delete, get, post_empty};
+
+/// Turn a `{success, message, id}` save response into the saved id.
+fn saved_id(success: bool, message: String, id: Option<i64>) -> Result<i64, String> {
+    if success {
+        Ok(id.unwrap_or(0))
+    } else {
+        Err(message)
+    }
+}
 
 // ============================================================================
 // Zones
@@ -24,13 +37,8 @@ pub async fn fetch_firewall_zones(token: &str) -> Result<Vec<FirewallZone>, Stri
 
 /// Save a firewall zone
 pub async fn save_firewall_zone(token: &str, zone: FirewallZone) -> Result<i64, String> {
-    let response: SaveIdResponse = post(
-        "/api/firewall/zones",
-        token,
-        &SaveFirewallZoneRequest { zone },
-    )
-    .await?;
-    extract_id(response)
+    let response = call::<SaveFirewallZone>(token, &SaveFirewallZoneRequest { zone }).await?;
+    saved_id(response.success, response.message, response.zone_id)
 }
 
 /// Delete a firewall zone
@@ -49,13 +57,8 @@ pub async fn fetch_zone_forwards(token: &str) -> Result<Vec<ZoneForwardPolicy>, 
 
 /// Save a zone forward policy
 pub async fn save_zone_forward(token: &str, forward: ZoneForwardPolicy) -> Result<i64, String> {
-    let response: SaveIdResponse = post(
-        "/api/firewall/zone-forwards",
-        token,
-        &SaveZoneForwardRequest { forward },
-    )
-    .await?;
-    extract_id(response)
+    let response = call::<SaveZoneForward>(token, &SaveZoneForwardRequest { forward }).await?;
+    saved_id(response.success, response.message, response.forward_id)
 }
 
 /// Delete a zone forward policy
@@ -74,13 +77,8 @@ pub async fn fetch_input_rules(token: &str) -> Result<Vec<InputRule>, String> {
 
 /// Save an input rule
 pub async fn save_input_rule(token: &str, rule: InputRule) -> Result<i64, String> {
-    let response: SaveIdResponse = post(
-        "/api/firewall/input-rules",
-        token,
-        &SaveInputRuleRequest { rule },
-    )
-    .await?;
-    extract_id(response)
+    let response = call::<SaveInputRule>(token, &SaveInputRuleRequest { rule }).await?;
+    saved_id(response.success, response.message, response.rule_id)
 }
 
 /// Delete an input rule
@@ -99,13 +97,8 @@ pub async fn fetch_forward_rules(token: &str) -> Result<Vec<ForwardRule>, String
 
 /// Save a forward rule
 pub async fn save_forward_rule(token: &str, rule: ForwardRule) -> Result<i64, String> {
-    let response: SaveIdResponse = post(
-        "/api/firewall/forward-rules",
-        token,
-        &SaveForwardRuleRequest { rule },
-    )
-    .await?;
-    extract_id(response)
+    let response = call::<SaveForwardRule>(token, &SaveForwardRuleRequest { rule }).await?;
+    saved_id(response.success, response.message, response.rule_id)
 }
 
 /// Delete a forward rule
@@ -143,7 +136,7 @@ pub async fn create_simple_forward(
     token: &str,
     req: CreateSimplePortForwardRequest,
 ) -> Result<(), String> {
-    let _: SimplePortForwardsResponse = post("/api/firewall/simple-forwards", token, &req).await?;
+    call::<CreateSimpleForward>(token, &req).await?;
     Ok(())
 }
 
@@ -152,12 +145,8 @@ pub async fn update_simple_forward(
     rule_id: i64,
     req: CreateSimplePortForwardRequest,
 ) -> Result<(), String> {
-    put_no_response(
-        &format!("/api/firewall/simple-forwards/{rule_id}"),
-        token,
-        &req,
-    )
-    .await
+    call_with::<UpdateSimpleForward>(token, &[("id", &rule_id.to_string())], &req).await?;
+    Ok(())
 }
 
 pub async fn delete_simple_forward(token: &str, rule_id: i64) -> Result<DeleteResponse, String> {
@@ -180,7 +169,7 @@ pub async fn save_firewall_global_settings(
     settings: FirewallGlobalSettings,
 ) -> Result<SaveFirewallGlobalSettingsResponse, String> {
     let request = SaveFirewallGlobalSettingsRequest { settings };
-    post("/api/firewall/settings", token, &request).await
+    call::<SaveFirewallGlobalSettings>(token, &request).await
 }
 
 // ============================================================================
@@ -206,7 +195,7 @@ pub async fn confirm_firewall(
     let request = FirewallConfirmRequest {
         session_id: session_id.to_string(),
     };
-    post("/api/firewall/confirm", token, &request).await
+    call::<ConfirmFirewall>(token, &request).await
 }
 
 /// Rollback firewall changes

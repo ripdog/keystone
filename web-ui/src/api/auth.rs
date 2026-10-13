@@ -1,8 +1,9 @@
 //! Authentication API functions
 
+use keystone_core::api::Login;
 use keystone_core::{LoginRequest, LoginResponse};
 
-use super::client::post_public;
+use super::client::call_public;
 
 /// Login to the API and get a JWT token
 pub async fn login(username: &str, password: &str) -> Result<LoginResponse, String> {
@@ -11,5 +12,5 @@ pub async fn login(username: &str, password: &str) -> Result<LoginResponse, Stri
         password: password.to_string(),
     };
 
-    post_public("/api/login", &request).await
+    call_public::<Login>(&request).await
 }

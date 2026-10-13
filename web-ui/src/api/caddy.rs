@@ -1,11 +1,12 @@
 //! Caddy reverse proxy configuration API functions
 
+use keystone_core::api::SaveCaddyConfig;
 use keystone_core::{
     CaddyApplyResponse, CaddyConfig, CaddyPreviewResponse, CaddyStateResponse,
     CaddyValidateResponse, SaveCaddyConfigRequest,
 };
 
-use super::client::{get, post_empty, put_no_response};
+use super::client::{call, get, post_empty};
 
 // ============================================================================
 // State
@@ -22,8 +23,12 @@ pub async fn fetch_caddy_state(token: &str) -> Result<CaddyStateResponse, String
 
 /// Save Caddy configuration
 pub async fn save_caddy_config(token: &str, config: CaddyConfig) -> Result<(), String> {
-    let request = SaveCaddyConfigRequest { config };
-    put_no_response("/api/caddy/config", token, &request).await
+    let response = call::<SaveCaddyConfig>(token, &SaveCaddyConfigRequest { config }).await?;
+    if response.success {
+        Ok(())
+    } else {
+        Err(response.message)
+    }
 }
 
 // ============================================================================

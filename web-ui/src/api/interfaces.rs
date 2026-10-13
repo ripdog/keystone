@@ -1,5 +1,6 @@
 //! Interface configuration API functions
 
+use keystone_core::api::{SaveInterfaceConfig, SaveManagedInterfaces};
 use keystone_core::{
     ApplyConfigResponse, InterfaceConfig, InterfaceConfigResponse, ManagedInterface,
     ManagedInterfacesResponse, NetworkdPreviewResponse, RenewInterfaceResponse,
@@ -7,7 +8,7 @@ use keystone_core::{
     SaveManagedInterfacesResponse, SystemState,
 };
 
-use super::client::{get, post, post_empty};
+use super::client::{call, get, post_empty};
 
 // ============================================================================
 // Runtime interface discovery
@@ -34,7 +35,7 @@ pub async fn save_managed_interfaces(
     interfaces: Vec<ManagedInterface>,
 ) -> Result<SaveManagedInterfacesResponse, String> {
     let request = SaveManagedInterfacesRequest { interfaces };
-    post("/api/managed-interfaces", token, &request).await
+    call::<SaveManagedInterfaces>(token, &request).await
 }
 
 // ============================================================================
@@ -57,7 +58,7 @@ pub async fn save_interface_config(
     config: InterfaceConfig,
 ) -> Result<SaveInterfaceConfigResponse, String> {
     let request = SaveInterfaceConfigRequest { config };
-    post("/api/interface-config", token, &request).await
+    call::<SaveInterfaceConfig>(token, &request).await
 }
 
 // ============================================================================

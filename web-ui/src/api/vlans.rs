@@ -1,11 +1,12 @@
 //! VLAN configuration API functions
 
+use keystone_core::api::SaveVlan;
 use keystone_core::{
     DeleteVlanResponse, SaveVlanConfigRequest, SaveVlanConfigResponse, VlanConfig,
     VlanConfigsResponse,
 };
 
-use super::client::{delete, get, post};
+use super::client::{call, delete, get};
 
 /// Fetch all VLAN configurations
 pub async fn fetch_vlans(token: &str) -> Result<Vec<VlanConfig>, String> {
@@ -16,7 +17,7 @@ pub async fn fetch_vlans(token: &str) -> Result<Vec<VlanConfig>, String> {
 /// Save a VLAN configuration (create or update)
 pub async fn save_vlan(token: &str, config: VlanConfig) -> Result<SaveVlanConfigResponse, String> {
     let request = SaveVlanConfigRequest { config };
-    post("/api/vlans", token, &request).await
+    call::<SaveVlan>(token, &request).await
 }
 
 /// Delete a VLAN configuration

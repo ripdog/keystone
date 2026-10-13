@@ -1,11 +1,12 @@
 //! Bridge configuration API functions
 
+use keystone_core::api::SaveBridge;
 use keystone_core::{
     BridgeConfig, BridgeConfigsResponse, DeleteBridgeResponse, SaveBridgeConfigRequest,
     SaveBridgeConfigResponse,
 };
 
-use super::client::{delete, get, post};
+use super::client::{call, delete, get};
 
 /// Fetch all bridge configurations
 pub async fn fetch_bridges(token: &str) -> Result<Vec<BridgeConfig>, String> {
@@ -19,7 +20,7 @@ pub async fn save_bridge(
     config: BridgeConfig,
 ) -> Result<SaveBridgeConfigResponse, String> {
     let request = SaveBridgeConfigRequest { config };
-    post("/api/bridges", token, &request).await
+    call::<SaveBridge>(token, &request).await
 }
 
 /// Delete a bridge configuration

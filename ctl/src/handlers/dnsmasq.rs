@@ -1,4 +1,8 @@
 use anyhow::Result;
+use keystone_core::api::{
+    SaveAddressOverride, SaveCnameRecord, SaveDhcpOption, SaveDhcpRange, SaveDnsmasqConfig,
+    SaveHostRecord, SaveStaticLease,
+};
 use keystone_core::*;
 
 use crate::client::DaemonClient;
@@ -77,7 +81,7 @@ pub async fn handle_dnsmasq_command(
 
                 let request = SaveDnsmasqConfigRequest { config };
                 let response: SaveDnsmasqConfigResponse =
-                    authed.put("/dnsmasq/config", &request).await?;
+                    authed.call::<SaveDnsmasqConfig>(&request).await?;
                 output(cli_json, &response, pretty::save_dnsmasq_config);
                 if !response.success {
                     std::process::exit(1);
@@ -117,7 +121,7 @@ pub async fn handle_dnsmasq_command(
                 };
                 let request = SaveDhcpRangeRequest { range };
                 let response: SaveDhcpRangeResponse =
-                    authed.post("/dnsmasq/ranges", &request).await?;
+                    authed.call::<SaveDhcpRange>(&request).await?;
                 output(cli_json, &response, pretty::save_dhcp_range);
                 if !response.success {
                     std::process::exit(1);
@@ -180,7 +184,7 @@ pub async fn handle_dnsmasq_command(
                 };
                 let request = SaveStaticLeaseRequest { lease };
                 let response: SaveStaticLeaseResponse =
-                    authed.post("/dnsmasq/leases", &request).await?;
+                    authed.call::<SaveStaticLease>(&request).await?;
                 output(cli_json, &response, pretty::save_static_lease);
                 if !response.success {
                     std::process::exit(1);
@@ -245,7 +249,7 @@ pub async fn handle_dnsmasq_command(
                 };
                 let request = SaveDhcpOptionRequest { option: opt };
                 let response: SaveDhcpOptionResponse = client
-                    .post("/dnsmasq/options", &request, Some(&token))
+                    .call::<SaveDhcpOption>(&request, Some(&token))
                     .await?;
                 output(cli_json, &response, pretty::save_dhcp_option);
                 if !response.success {
@@ -324,7 +328,7 @@ pub async fn handle_dnsmasq_command(
 
                 let request = SaveHostRecordRequest { record };
                 let response: SaveHostRecordResponse = client
-                    .post("/dnsmasq/hosts", &request, Some(&token))
+                    .call::<SaveHostRecord>(&request, Some(&token))
                     .await?;
                 output(cli_json, &response, pretty::save_host_record);
                 if !response.success {
@@ -386,7 +390,7 @@ pub async fn handle_dnsmasq_command(
 
                 let request = SaveCnameRecordRequest { record };
                 let response: SaveCnameRecordResponse = client
-                    .post("/dnsmasq/cnames", &request, Some(&token))
+                    .call::<SaveCnameRecord>(&request, Some(&token))
                     .await?;
                 output(cli_json, &response, pretty::save_cname_record);
                 if !response.success {
@@ -471,7 +475,7 @@ pub async fn handle_dnsmasq_command(
                     override_entry: ovr,
                 };
                 let response: SaveAddressOverrideResponse = client
-                    .post("/dnsmasq/overrides", &request, Some(&token))
+                    .call::<SaveAddressOverride>(&request, Some(&token))
                     .await?;
                 output(cli_json, &response, pretty::save_address_override);
                 if !response.success {

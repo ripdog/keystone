@@ -39,11 +39,10 @@ use keystone_core::api::{
 use keystone_core::{
     ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse, DashboardResponse,
     DeleteUserResponse, DeleteVlanResponse, GlobalSettingsResponse, InterfaceConfigResponse,
-    InterfaceConfigsResponse, InterfaceCounters, KeystoneError, LoginResponse,
-    ManagedInterfacesResponse, RenewInterfaceResponse, SaveGlobalSettingsResponse,
-    SaveInterfaceConfigResponse, SaveManagedInterfacesResponse, SaveUserResponse,
-    SaveVlanConfigResponse, SystemCheck, SystemState, SystemStatusResponse, UsersResponse,
-    VlanConfigResponse, VlanConfigsResponse,
+    InterfaceConfigsResponse, InterfaceCounters, LoginResponse, ManagedInterfacesResponse,
+    RenewInterfaceResponse, SaveGlobalSettingsResponse, SaveInterfaceConfigResponse,
+    SaveManagedInterfacesResponse, SaveUserResponse, SaveVlanConfigResponse, SystemCheck,
+    SystemState, SystemStatusResponse, UsersResponse, VlanConfigResponse, VlanConfigsResponse,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -1654,8 +1653,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         error!("Request error: {:?}", self.0);
 
-        let error = KeystoneError::Internal(self.0.to_string());
-        let body = Json(error);
+        let body = Json(serde_json::json!({ "error": self.0.to_string() }));
 
         (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
     }
@@ -1774,6 +1772,18 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn app_error_body_is_json_with_error_message() {
+        use axum::response::IntoResponse;
+        let response = AppError(anyhow::anyhow!("zone name is invalid")).into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["error"], "zone name is invalid");
     }
 
     #[tokio::test]

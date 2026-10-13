@@ -6,9 +6,12 @@
 use anyhow::Result;
 use console::{Term, style};
 use inquire::{Confirm, MultiSelect, Password, PasswordDisplayMode, Select, Text};
+use keystone_core::api::{
+    AdvanceWizard, ConfirmFirewall, Login, SaveUser, SaveWizardInterfaces, SkipWizard,
+};
 use keystone_core::{
-    FirewallConfirmRequest, FirewallConfirmResponse, InterfaceRole, LoginRequest, LoginResponse,
-    SaveUserRequest, SaveUserResponse, SystemState, SystemStatusResponse, WizardAdvanceRequest,
+    FirewallConfirmRequest, FirewallConfirmResponse, InterfaceRole, LoginRequest, SaveUserRequest,
+    SaveUserResponse, SystemState, SystemStatusResponse, WizardAdvanceRequest,
     WizardAdvanceResponse, WizardInterfaceAssignment, WizardSaveInterfacesRequest,
     WizardSaveInterfacesResponse, WizardSkipRequest, WizardSkipResponse, WizardState,
     WizardStateResponse, WizardStep,
@@ -225,7 +228,7 @@ async fn login_step(client: &DaemonClient) -> Result<String> {
             password,
         };
 
-        match client.post::<LoginResponse>("/login", &request, None).await {
+        match client.call::<Login>(&request, None).await {
             Ok(response) => {
                 if response.success
                     && let Some(token) = response.token
@@ -262,7 +265,7 @@ async fn get_wizard_state(client: &DaemonClient, token: &str) -> Result<WizardSt
 /// Skip the wizard
 async fn skip_wizard(client: &DaemonClient, token: &str) -> Result<()> {
     let request = WizardSkipRequest { confirm_skip: true };
-    let _response: WizardSkipResponse = client.post("/wizard/skip", &request, Some(token)).await?;
+    let _response: WizardSkipResponse = client.call::<SkipWizard>(&request, Some(token)).await?;
     Ok(())
 }
 
@@ -273,9 +276,8 @@ async fn advance_wizard(
     completing_step: WizardStep,
 ) -> Result<WizardStep> {
     let request = WizardAdvanceRequest { completing_step };
-    let response: WizardAdvanceResponse = client
-        .post("/wizard/advance", &request, Some(token))
-        .await?;
+    let response: WizardAdvanceResponse =
+        client.call::<AdvanceWizard>(&request, Some(token)).await?;
 
     if !response.success {
         anyhow::bail!("Failed to advance wizard: {}", response.message);
@@ -325,7 +327,7 @@ async fn change_password_step(client: &DaemonClient, token: &str) -> Result<()> 
             password: Some(new_password),
         };
 
-        let response: SaveUserResponse = client.post("/users", &request, Some(token)).await?;
+        let response: SaveUserResponse = client.call::<SaveUser>(&request, Some(token)).await?;
 
         if response.success {
             println!();
@@ -503,7 +505,7 @@ async fn interface_assignment_step(client: &DaemonClient, token: &str) -> Result
 
     let request = WizardSaveInterfacesRequest { assignments };
     let response: WizardSaveInterfacesResponse = client
-        .post("/wizard/interfaces", &request, Some(token))
+        .call::<SaveWizardInterfaces>(&request, Some(token))
         .await?;
 
     if !response.success {
@@ -519,7 +521,7 @@ async fn interface_assignment_step(client: &DaemonClient, token: &str) -> Result
             .ok_or_else(|| anyhow::anyhow!("Firewall confirmation session is missing"))?;
         let confirm_request = FirewallConfirmRequest { session_id };
         let confirm_response: FirewallConfirmResponse = client
-            .post("/firewall/confirm", &confirm_request, Some(token))
+            .call::<ConfirmFirewall>(&confirm_request, Some(token))
             .await?;
         if !confirm_response.success {
             anyhow::bail!("Failed to confirm firewall: {}", confirm_response.message);

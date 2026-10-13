@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use keystone_core::api::{DeleteUser, Login, SaveManagedInterfaces, SaveUser};
 use keystone_core::{
     ApplyAllResponse, CompleteSetupResponse, DashboardResponse, DeleteUserRequest,
     DeleteUserResponse, LoginRequest, LoginResponse, ManagedInterfacesResponse,
@@ -196,7 +197,7 @@ async fn main() -> Result<()> {
                 }
             };
             let request = LoginRequest { username, password };
-            let response: LoginResponse = client.post("/login", &request, None).await?;
+            let response: LoginResponse = client.call::<Login>(&request, None).await?;
             output(cli.json, &response, pretty::login);
             if !response.success {
                 std::process::exit(1);
@@ -261,7 +262,7 @@ async fn main() -> Result<()> {
                     email,
                     password: Some(password),
                 };
-                let response: SaveUserResponse = authed.post("/users", &request).await?;
+                let response: SaveUserResponse = authed.call::<SaveUser>(&request).await?;
                 output(cli.json, &response, pretty::save_user);
                 if !response.success {
                     std::process::exit(1);
@@ -282,7 +283,7 @@ async fn main() -> Result<()> {
                     email,
                     password,
                 };
-                let response: SaveUserResponse = authed.post("/users", &request).await?;
+                let response: SaveUserResponse = authed.call::<SaveUser>(&request).await?;
                 output(cli.json, &response, pretty::save_user);
                 if !response.success {
                     std::process::exit(1);
@@ -292,8 +293,7 @@ async fn main() -> Result<()> {
             UsersCommands::Delete { token, id } => {
                 let authed = client.authed(get_token(token)?);
                 let request = DeleteUserRequest { id };
-                let response: DeleteUserResponse =
-                    authed.delete_with_body("/users", &request).await?;
+                let response: DeleteUserResponse = authed.call::<DeleteUser>(&request).await?;
                 output(cli.json, &response, pretty::delete_user);
                 if !response.success {
                     std::process::exit(1);
@@ -314,7 +314,7 @@ async fn main() -> Result<()> {
                 let request: SaveManagedInterfacesRequest =
                     serde_json::from_str(&json_input).context("Invalid JSON input")?;
                 let response: SaveManagedInterfacesResponse =
-                    authed.post("/managed-interfaces", &request).await?;
+                    authed.call::<SaveManagedInterfaces>(&request).await?;
                 output(cli.json, &response, pretty::save_interfaces);
                 if !response.success {
                     std::process::exit(1);

@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper_util::rt::TokioIo;
+use keystone_core::api::Endpoint;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::net::UnixStream;
@@ -14,6 +15,20 @@ pub struct DaemonClient {
 pub struct AuthedDaemonClient<'a> {
     client: &'a DaemonClient,
     token: String,
+}
+
+/// Message from a daemon error body: a JSON `error`/`message` field, else the
+/// raw (plain-text) body.
+fn error_text(body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|json| {
+            ["error", "message"]
+                .into_iter()
+                .find_map(|key| json.get(key).and_then(|v| v.as_str()).map(str::to_string))
+        })
+        .unwrap_or_else(|| text.trim().to_string())
 }
 
 impl DaemonClient {
@@ -88,11 +103,21 @@ impl DaemonClient {
             .to_bytes();
 
         if !status.is_success() {
-            let error_msg = String::from_utf8_lossy(&body_bytes);
+            let error_msg = error_text(&body_bytes);
             anyhow::bail!("Request failed with status {}: {}", status, error_msg);
         }
 
         serde_json::from_slice(&body_bytes).context("Failed to parse response JSON")
+    }
+
+    /// Call a typed endpoint; path, method and body/response types come from `E`.
+    pub async fn call<E: Endpoint>(
+        &self,
+        req: &E::Request,
+        token: Option<&str>,
+    ) -> Result<E::Response> {
+        self.request(E::METHOD.as_str(), E::PATH, Some(req), token)
+            .await
     }
 
     pub async fn get<T: DeserializeOwned>(&self, path: &str, token: Option<&str>) -> Result<T> {
@@ -108,30 +133,16 @@ impl DaemonClient {
         self.request("POST", path, Some(body), token).await
     }
 
-    pub async fn put<T: DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &impl Serialize,
-        token: Option<&str>,
-    ) -> Result<T> {
-        self.request("PUT", path, Some(body), token).await
-    }
-
     pub async fn delete<T: DeserializeOwned>(&self, path: &str, token: Option<&str>) -> Result<T> {
         self.request::<T>("DELETE", path, None::<&()>, token).await
-    }
-
-    pub async fn delete_with_body<T: DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &impl Serialize,
-        token: Option<&str>,
-    ) -> Result<T> {
-        self.request("DELETE", path, Some(body), token).await
     }
 }
 
 impl<'a> AuthedDaemonClient<'a> {
+    pub async fn call<E: Endpoint>(&self, req: &E::Request) -> Result<E::Response> {
+        self.client.call::<E>(req, Some(&self.token)).await
+    }
+
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.client.get(path, Some(&self.token)).await
     }
@@ -140,28 +151,24 @@ impl<'a> AuthedDaemonClient<'a> {
         self.client.post(path, body, Some(&self.token)).await
     }
 
-    pub async fn put<T: DeserializeOwned>(&self, path: &str, body: &impl Serialize) -> Result<T> {
-        self.client.put(path, body, Some(&self.token)).await
-    }
-
     pub async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         self.client.delete(path, Some(&self.token)).await
-    }
-
-    pub async fn delete_with_body<T: DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &impl Serialize,
-    ) -> Result<T> {
-        self.client
-            .delete_with_body(path, body, Some(&self.token))
-            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_text_prefers_json_message() {
+        assert_eq!(error_text(br#"{"error":"bad zone"}"#), "bad zone");
+        assert_eq!(error_text(br#"{"message":"nope"}"#), "nope");
+        assert_eq!(
+            error_text(b"missing field `config`\n"),
+            "missing field `config`"
+        );
+    }
 
     #[test]
     fn authed_client_retains_token() {

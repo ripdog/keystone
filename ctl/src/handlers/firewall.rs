@@ -1,4 +1,8 @@
 use anyhow::Result;
+use keystone_core::api::{
+    ConfirmFirewall, SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule, SaveInputRule,
+    SavePortForward, SaveZoneForward,
+};
 use keystone_core::*;
 
 use crate::client::DaemonClient;
@@ -56,7 +60,7 @@ pub async fn handle_firewall_command(
 
                 let request = SaveFirewallZoneRequest { zone };
                 let response: SaveFirewallZoneResponse =
-                    authed.post("/firewall/zones", &request).await?;
+                    authed.call::<SaveFirewallZone>(&request).await?;
                 output(cli_json, &response, pretty::save_zone);
                 if !response.success {
                     std::process::exit(1);
@@ -102,7 +106,7 @@ pub async fn handle_firewall_command(
 
                 let request = SaveZoneForwardRequest { forward };
                 let response: SaveZoneForwardResponse =
-                    authed.post("/firewall/zone-forwards", &request).await?;
+                    authed.call::<SaveZoneForward>(&request).await?;
                 output(cli_json, &response, pretty::save_zone_forward);
                 if !response.success {
                     std::process::exit(1);
@@ -161,7 +165,7 @@ pub async fn handle_firewall_command(
 
                 let request = SavePortForwardRequest { port_forward };
                 let response: SavePortForwardResponse =
-                    authed.post("/firewall/port-forwards", &request).await?;
+                    authed.call::<SavePortForward>(&request).await?;
                 output(cli_json, &response, pretty::save_port_forward);
                 if !response.success {
                     std::process::exit(1);
@@ -230,7 +234,7 @@ pub async fn handle_firewall_command(
 
                 let request = SaveInputRuleRequest { rule };
                 let response: SaveInputRuleResponse =
-                    authed.post("/firewall/input-rules", &request).await?;
+                    authed.call::<SaveInputRule>(&request).await?;
                 output(cli_json, &response, pretty::save_input_rule);
                 if !response.success {
                     std::process::exit(1);
@@ -303,7 +307,7 @@ pub async fn handle_firewall_command(
 
                 let request = SaveForwardRuleRequest { rule };
                 let response: SaveForwardRuleResponse =
-                    authed.post("/firewall/forward-rules", &request).await?;
+                    authed.call::<SaveForwardRule>(&request).await?;
                 output(cli_json, &response, pretty::save_forward_rule);
                 if !response.success {
                     std::process::exit(1);
@@ -350,7 +354,7 @@ pub async fn handle_firewall_command(
 
                 let request = SaveFirewallGlobalSettingsRequest { settings };
                 let response: SaveFirewallGlobalSettingsResponse =
-                    authed.post("/firewall/settings", &request).await?;
+                    authed.call::<SaveFirewallGlobalSettings>(&request).await?;
                 output(cli_json, &response, pretty::save_firewall_settings);
                 if !response.success {
                     std::process::exit(1);
@@ -378,7 +382,7 @@ pub async fn handle_firewall_command(
             let authed = client.authed(get_token(token)?);
             let request = FirewallConfirmRequest { session_id };
             let response: FirewallConfirmResponse =
-                authed.post("/firewall/confirm", &request).await?;
+                authed.call::<ConfirmFirewall>(&request).await?;
             output(cli_json, &response, pretty::firewall_confirm);
             if !response.success {
                 std::process::exit(1);

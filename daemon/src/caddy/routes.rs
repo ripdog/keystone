@@ -28,6 +28,7 @@ use crate::AppError;
 #[derive(Clone)]
 pub struct CaddyState {
     pub db: Database,
+    pub firewall: Arc<crate::firewall::FirewallApplyManager>,
 }
 
 /// Create Caddy router with all routes
@@ -156,6 +157,16 @@ async fn apply_caddy(
             success: false,
             message: "Configuration changes are disabled. Unlock in Settings to apply changes."
                 .to_string(),
+        }));
+    }
+
+    if crate::apply::pending_confirmation(&state.firewall)
+        .await
+        .is_some()
+    {
+        return Ok(Json(CaddyApplyResponse {
+            success: false,
+            message: crate::apply::AWAITING_CONFIRMATION_MESSAGE.to_string(),
         }));
     }
 

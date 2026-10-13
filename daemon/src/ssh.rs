@@ -429,6 +429,16 @@ async fn save(
             firewall_session_id: None,
         }));
     }
+    if crate::apply::pending_confirmation(&state.firewall_manager)
+        .await
+        .is_some()
+    {
+        return Ok(Json(SshApplyResponse {
+            success: false,
+            message: crate::apply::AWAITING_CONFIRMATION_MESSAGE.into(),
+            firewall_session_id: None,
+        }));
+    }
     if let Err(e) = validate(&config) {
         return Ok(Json(SshApplyResponse {
             success: false,

@@ -222,6 +222,9 @@ async fn main() -> anyhow::Result<()> {
         firewall: firewall_apply_manager.clone(),
     };
 
+    // Every per-component apply checks the firewall's pending confirmation.
+    let applies_firewall = firewall_apply_manager.clone();
+
     // Create firewall state for firewall routes
     let firewall_state = firewall::routes::FirewallState {
         db: db.clone(),
@@ -229,16 +232,28 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Create dnsmasq state for dnsmasq routes
-    let dnsmasq_state = dnsmasq::routes::DnsmasqState { db: db.clone() };
+    let dnsmasq_state = dnsmasq::routes::DnsmasqState {
+        db: db.clone(),
+        firewall: applies_firewall.clone(),
+    };
 
     // Create Caddy state for Caddy routes
-    let caddy_state = caddy::routes::CaddyState { db: db.clone() };
+    let caddy_state = caddy::routes::CaddyState {
+        db: db.clone(),
+        firewall: applies_firewall.clone(),
+    };
 
     // Create SQM state for traffic-shaping routes
-    let sqm_state = sqm::routes::SqmState { db: db.clone() };
+    let sqm_state = sqm::routes::SqmState {
+        db: db.clone(),
+        firewall: applies_firewall.clone(),
+    };
 
     // Create UPnP state for port-mapping routes
-    let upnp_state = upnp::routes::UpnpState { db: db.clone() };
+    let upnp_state = upnp::routes::UpnpState {
+        db: db.clone(),
+        firewall: applies_firewall,
+    };
 
     // Build the router with protected routes
     let protected = Router::new()
@@ -1445,6 +1460,19 @@ async fn apply_networkd(
             session_id: None,
         }));
     }
+    if apply::pending_confirmation(&state.firewall_manager)
+        .await
+        .is_some()
+    {
+        return Ok(Json(ApplyConfigResponse {
+            success: false,
+            message: apply::AWAITING_CONFIRMATION_MESSAGE.to_string(),
+            errors: Vec::new(),
+            pending_confirmation: true,
+            confirm_deadline: None,
+            session_id: None,
+        }));
+    }
 
     let configs = state.db.get_interface_configs().await?;
     let vlans = state.db.get_all_vlans().await?;
@@ -1784,14 +1812,18 @@ mod tests {
             .merge(firewall::routes::firewall_routes(
                 firewall::routes::FirewallState {
                     db: db.clone(),
-                    apply_manager: manager,
+                    apply_manager: manager.clone(),
                 },
             ))
             .merge(dnsmasq::routes::dnsmasq_routes(
-                dnsmasq::routes::DnsmasqState { db: db.clone() },
+                dnsmasq::routes::DnsmasqState {
+                    db: db.clone(),
+                    firewall: manager.clone(),
+                },
             ))
             .merge(caddy::routes::caddy_routes(caddy::routes::CaddyState {
                 db,
+                firewall: manager,
             }))
             .with_state(state)
     }

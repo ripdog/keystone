@@ -36,6 +36,7 @@ const CHANGES_DISABLED_APPLY: &str =
 #[derive(Clone)]
 pub struct UpnpState {
     pub db: Database,
+    pub firewall: Arc<crate::firewall::FirewallApplyManager>,
 }
 
 pub fn upnp_routes(state: UpnpState) -> Router<Arc<crate::AppState>> {
@@ -109,6 +110,15 @@ async fn apply_upnp(
         return Ok(Json(UpnpApplyResponse {
             success: false,
             message: CHANGES_DISABLED_APPLY.to_string(),
+        }));
+    }
+    if crate::apply::pending_confirmation(&state.firewall)
+        .await
+        .is_some()
+    {
+        return Ok(Json(UpnpApplyResponse {
+            success: false,
+            message: crate::apply::AWAITING_CONFIRMATION_MESSAGE.to_string(),
         }));
     }
 

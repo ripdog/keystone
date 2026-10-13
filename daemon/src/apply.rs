@@ -23,6 +23,18 @@ use crate::upnp;
 /// Re-export the result type for use by main.rs
 pub use keystone_core::ApplyAllResponse as ApplyAllResult;
 
+/// Refusal given by every apply while an applied change awaits confirmation.
+pub(crate) const AWAITING_CONFIRMATION_MESSAGE: &str = "A configuration change is awaiting confirmation. Confirm or roll back the previous change first.";
+
+/// The first apply that awaits confirmation, if any. Every apply route calls
+/// this before it touches the system: while a confirmation is pending, applying
+/// more would run part of the configuration on top of an unconfirmed one.
+pub(crate) async fn pending_confirmation(
+    firewall: &FirewallApplyManager,
+) -> Option<crate::networkd::PendingInfo> {
+    firewall.awaiting_confirmation().await.into_iter().next()
+}
+
 // Helper functions for creating ComponentResult values
 fn component_success(message: impl Into<String>) -> ComponentResult {
     ComponentResult {
@@ -88,16 +100,19 @@ pub async fn apply_all(
     // Refuse before touching anything. A confirmation already pending means the
     // system runs an unconfirmed configuration; applying the rest now would
     // leave some components on the new state and the firewall on the old one.
-    let live = firewall_manager.awaiting_confirmation().await;
-    if let Some(session) = live.first() {
+    if let Some(session) = pending_confirmation(firewall_manager).await {
         return Ok(ApplyAllResult {
             success: false,
-            message: "A configuration change is awaiting confirmation. Confirm or roll back the previous change first.".to_string(),
+            message: AWAITING_CONFIRMATION_MESSAGE.to_string(),
             components: ApplyComponentResults::default(),
             firewall_pending_confirmation: true,
             firewall_confirm_deadline: Some(session.deadline),
             firewall_session_id: Some(session.session_id.clone()),
-            networkd_pending_confirmation: firewall_manager.networkd().pending_info().await.is_some(),
+            networkd_pending_confirmation: firewall_manager
+                .networkd()
+                .pending_info()
+                .await
+                .is_some(),
         });
     }
 
@@ -334,6 +349,21 @@ async fn apply_networkd_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn pending_confirmation_reports_only_a_live_apply() {
+        let db = crate::db::Database::new_in_memory().await.unwrap();
+        let networkd = Arc::new(NetworkdApplyManager::system());
+        let firewall = FirewallApplyManager::new(Arc::new(db), networkd);
+        assert!(pending_confirmation(&firewall).await.is_none());
+
+        firewall.seed_pending_for_test("live", u64::MAX / 2).await;
+        let pending = pending_confirmation(&firewall)
+            .await
+            .expect("the seeded apply is live");
+        assert_eq!(pending.session_id, "live");
+        assert_eq!(pending.deadline, u64::MAX / 2);
+    }
 
     #[test]
     fn apply_error_summary_includes_component_diagnostics() {

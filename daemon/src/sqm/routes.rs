@@ -33,6 +33,7 @@ const CHANGES_DISABLED_APPLY: &str =
 #[derive(Clone)]
 pub struct SqmState {
     pub db: Database,
+    pub firewall: Arc<crate::firewall::FirewallApplyManager>,
 }
 
 pub fn sqm_routes(state: SqmState) -> Router<Arc<crate::AppState>> {
@@ -107,6 +108,15 @@ async fn apply_sqm(
             message: CHANGES_DISABLED_APPLY.to_string(),
         }));
     }
+    if crate::apply::pending_confirmation(&state.firewall)
+        .await
+        .is_some()
+    {
+        return Ok(Json(SqmApplyResponse {
+            success: false,
+            message: crate::apply::AWAITING_CONFIRMATION_MESSAGE.to_string(),
+        }));
+    }
 
     match apply_saved(&state.db).await {
         Ok(()) => {
@@ -129,4 +139,59 @@ async fn get_sqm_status(
     State(state): State<SqmState>,
 ) -> Result<Json<SqmStatusResponse>, AppError> {
     Ok(Json(read_status(state.db.pool()).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::AuthManager;
+    use crate::networkd::NetworkdApplyManager;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn apply_is_refused_while_a_confirmation_is_pending() {
+        let db = Database::new_in_memory().await.unwrap();
+        let firewall = Arc::new(crate::firewall::FirewallApplyManager::new(
+            Arc::new(db.clone()),
+            Arc::new(NetworkdApplyManager::system()),
+        ));
+        firewall.seed_pending_for_test("live", u64::MAX / 2).await;
+        let state = Arc::new(crate::AppState::new(
+            Arc::new(AuthManager::new(vec![7; 32])),
+            db.clone(),
+            firewall.clone(),
+        ));
+        let app = sqm_routes(SqmState {
+            db: db.clone(),
+            firewall,
+        })
+        .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/sqm/apply")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["success"], false);
+        assert_eq!(body["message"], crate::apply::AWAITING_CONFIRMATION_MESSAGE);
+        // Nothing was shaped, so no applied snapshot was recorded.
+        assert!(
+            crate::snapshots::list_snapshots(&db)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

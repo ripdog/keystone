@@ -879,6 +879,19 @@ async fn apply_firewall(
         }));
     }
 
+    if crate::apply::pending_confirmation(&state.apply_manager)
+        .await
+        .is_some()
+    {
+        return Ok(Json(FirewallApplyResponse {
+            success: false,
+            message: crate::apply::AWAITING_CONFIRMATION_MESSAGE.to_string(),
+            pending_confirmation: true,
+            confirm_deadline: None,
+            session_id: None,
+        }));
+    }
+
     let response = state.apply_manager.apply(None).await?;
     if response.success {
         let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());

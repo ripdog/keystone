@@ -41,6 +41,7 @@ use crate::AppError;
 #[derive(Clone)]
 pub struct DnsmasqState {
     pub db: Database,
+    pub firewall: Arc<crate::firewall::FirewallApplyManager>,
 }
 
 /// Create dnsmasq router with all routes
@@ -515,6 +516,16 @@ async fn apply_dnsmasq(
             success: false,
             message: "Configuration changes are disabled. Unlock in Settings to apply changes."
                 .to_string(),
+        }));
+    }
+
+    if crate::apply::pending_confirmation(&state.firewall)
+        .await
+        .is_some()
+    {
+        return Ok(Json(DnsmasqApplyResponse {
+            success: false,
+            message: crate::apply::AWAITING_CONFIRMATION_MESSAGE.to_string(),
         }));
     }
 

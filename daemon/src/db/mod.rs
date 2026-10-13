@@ -45,7 +45,14 @@ impl Database {
         // runs under another account and must not be able to read these files.
         std::fs::set_permissions(db_dir, std::fs::Permissions::from_mode(0o700))?;
 
-        let db_url = format!("sqlite:{}?mode=rwc", DB_PATH);
+        Self::open_at(std::path::Path::new(DB_PATH)).await
+    }
+
+    /// Open (creating if needed) and migrate the database file at `path`.
+    pub async fn open_at(path: &std::path::Path) -> Result<Self> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let db_url = format!("sqlite:{}?mode=rwc", path.display());
 
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
@@ -53,13 +60,18 @@ impl Database {
             .await
             .context("Failed to connect to database")?;
 
-        std::fs::set_permissions(DB_PATH, std::fs::Permissions::from_mode(0o600))?;
-        info!("Connected to database at {}", DB_PATH);
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        info!("Connected to database at {}", path.display());
 
         let db = Self { pool };
         db.run_migrations().await?;
 
         Ok(db)
+    }
+
+    /// Wrap an already-open pool (used for read-only snapshot previews).
+    pub fn from_pool(pool: SqlitePool) -> Self {
+        Self { pool }
     }
 
     #[cfg(test)]

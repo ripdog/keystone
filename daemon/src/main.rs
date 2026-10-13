@@ -14,6 +14,7 @@ mod dnsmasq;
 mod firewall;
 mod gateway;
 mod networkd;
+mod snapshots;
 mod soho;
 mod ssh;
 mod status;

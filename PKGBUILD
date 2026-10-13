@@ -1,25 +1,34 @@
 pkgname=keystone
-pkgver=0.1.0
+pkgver=0.1.6
 pkgrel=1
 pkgdesc="Linux router/firewall manager with split-privilege web UI"
 arch=("x86_64")
-url="https://github.com/example/keystone"
+url="https://github.com/ripdog/keystone"
 license=("GPL-3.0-only")
 depends=("glibc" "sqlite" "nftables" "systemd" "iproute2" "iputils" "dnsmasq")
 makedepends=("rust" "cargo" "trunk" "git")
-options=("!strip")
+# Do not inherit host-specific -march=native/-O3/LTO flags. C dependencies
+# (including cryptographic RNG implementations) control their own optimisation.
+options=("!strip" "!buildflags" "!lto")
 install="packaging/arch/keystone.install"
 
 build() {
+  # In addition to makepkg options, clear explicitly inherited compiler flags.
+  # This keeps the package portable across x86_64 USB target machines and lets
+  # C dependencies request -O0 for files that cannot tolerate optimisations.
+  unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS RUSTFLAGS CARGO_ENCODED_RUSTFLAGS
+  unset CFLAGS_x86_64_unknown_linux_gnu CXXFLAGS_x86_64_unknown_linux_gnu
+  unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
+
   mkdir -p "${startdir}/pkg"
   chmod u+rwx,go+rx "${startdir}/pkg"
   export CARGO_TARGET_DIR="${startdir}/pkg/target"
 
   cd "${startdir}"
-  cargo build --release
+  cargo build --release --locked
 
   cd "${startdir}/web-ui"
-  trunk build --release
+  trunk build --release --locked
 }
 
 package() {

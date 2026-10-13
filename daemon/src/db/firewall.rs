@@ -256,6 +256,49 @@ impl<'a> FirewallDb<'a> {
             );
         }
 
+        // Rule zone FKs are ON DELETE SET NULL and NULL means "any zone", so
+        // deleting a referenced zone would silently widen those rules.
+        let mut referencing: Vec<String> = Vec::new();
+        let input_rules: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM firewall_input_rules WHERE zone_id = ? ORDER BY id")
+                .bind(id)
+                .fetch_all(self.pool)
+                .await?;
+        referencing.extend(
+            input_rules
+                .into_iter()
+                .map(|r| format!("input rule '{}'", r.0)),
+        );
+        let forward_rules: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM firewall_forward_rules WHERE source_zone_id = ? OR dest_zone_id = ? ORDER BY id",
+        )
+        .bind(id)
+        .bind(id)
+        .fetch_all(self.pool)
+        .await?;
+        referencing.extend(
+            forward_rules
+                .into_iter()
+                .map(|r| format!("forward rule '{}'", r.0)),
+        );
+        let port_forwards: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM firewall_port_forwards WHERE source_zone_id = ? ORDER BY id",
+        )
+        .bind(id)
+        .fetch_all(self.pool)
+        .await?;
+        referencing.extend(
+            port_forwards
+                .into_iter()
+                .map(|r| format!("port forward '{}'", r.0)),
+        );
+        if !referencing.is_empty() {
+            anyhow::bail!(
+                "Cannot delete zone: it is referenced by {}. Delete or change these first",
+                referencing.join(", ")
+            );
+        }
+
         let result = sqlx::query("DELETE FROM firewall_zones WHERE id = ?")
             .bind(id)
             .execute(self.pool)
@@ -1240,5 +1283,70 @@ impl<'a> FirewallDb<'a> {
 
         info!("Cleared rollback state");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod zone_delete_tests {
+    use keystone_core::{FirewallZone, ForwardRule, InputRule, PortForward};
+
+    async fn db_with_zone() -> (crate::db::Database, i64) {
+        let db = crate::db::Database::new_in_memory().await.unwrap();
+        let id = db
+            .save_firewall_zone(&FirewallZone {
+                name: "testzone".into(),
+                interfaces: vec!["eth1".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        (db, id)
+    }
+
+    #[tokio::test]
+    async fn unreferenced_zone_can_be_deleted() {
+        let (db, id) = db_with_zone().await;
+        assert!(db.delete_firewall_zone(id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn zone_referenced_by_input_rule_cannot_be_deleted() {
+        let (db, id) = db_with_zone().await;
+        db.save_input_rule(&InputRule {
+            name: "ssh".into(),
+            zone: Some("testzone".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let err = db.delete_firewall_zone(id).await.unwrap_err().to_string();
+        assert!(err.contains("input rule 'ssh'"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn zone_referenced_by_forward_rule_or_port_forward_cannot_be_deleted() {
+        let (db, id) = db_with_zone().await;
+        db.save_forward_rule(&ForwardRule {
+            name: "fwd".into(),
+            dest_zone: Some("testzone".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let err = db.delete_firewall_zone(id).await.unwrap_err().to_string();
+        assert!(err.contains("forward rule 'fwd'"), "{err}");
+
+        let (db, id) = db_with_zone().await;
+        db.save_port_forward(&PortForward {
+            name: "web".into(),
+            source_zone: Some("testzone".into()),
+            external_port_start: 80,
+            dest_ip: "10.0.0.2".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let err = db.delete_firewall_zone(id).await.unwrap_err().to_string();
+        assert!(err.contains("port forward 'web'"), "{err}");
     }
 }

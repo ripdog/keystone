@@ -11,6 +11,7 @@ use keystone_core::{Client, DnsmasqStaticLease};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
+use leptos_router::hooks::use_query_map;
 
 const REFRESH_MS: u32 = 5_000;
 
@@ -50,7 +51,14 @@ pub fn ClientsPage(
     let clients = RwSignal::new(None::<Vec<Client>>);
     let load_error = RwSignal::new(None::<String>);
     let notice = RwSignal::new(None::<String>);
-    let filter = RwSignal::new(String::new());
+    // `?q=` pre-fills the filter. The effect also applies a new `q` when this
+    // page is already open, for example from the command palette.
+    let query = use_query_map();
+    let filter = RwSignal::new(query.with_untracked(|q| q.get("q").unwrap_or_default()));
+    Effect::new(move |_| {
+        let requested = query.with(|q| q.get("q").unwrap_or_default());
+        filter.set(requested);
+    });
     let show_offline = RwSignal::new(true);
     let reserve = ReserveForm {
         mac: RwSignal::new(None),

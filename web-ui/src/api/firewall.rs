@@ -1,23 +1,24 @@
 //! Firewall configuration API functions
 
 use keystone_core::api::{
-    ConfirmFirewall, CreateSimpleForward, ReorderForwardRules, ReorderInputRules, SaveAddressGroup,
-    SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule, SaveInputRule, SavePortGroup,
-    SaveZoneForward, UpdateSimpleForward,
+    ConfirmFirewall, CreateSimpleForward, Endpoint, ReorderForwardRules, ReorderInputRules,
+    SaveAddressGroup, SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule, SaveInputRule,
+    SavePortGroup, SaveZoneForward, TestFirewallPacket, UpdateSimpleForward,
 };
 use keystone_core::{
-    AddressGroup, AddressGroupsResponse, CreateSimplePortForwardRequest, DeleteResponse,
-    FirewallConfirmRequest, FirewallConfirmResponse, FirewallCountersResponse,
-    FirewallGlobalSettings, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
-    FirewallRollbackResponse, FirewallRuleCounter, FirewallZone, FirewallZonesResponse,
-    ForwardRule, InputRule, LanDevice, LanDevicesResponse, PortForward, PortGroup,
-    PortGroupsResponse, ReorderRulesRequest, SaveAddressGroupRequest,
+    AddressGroup, AddressGroupsResponse, ConnectionsResponse, CreateSimplePortForwardRequest,
+    DeleteResponse, FirewallConfirmRequest, FirewallConfirmResponse, FirewallCountersResponse,
+    FirewallGlobalSettings, FirewallGlobalSettingsResponse, FirewallLogResponse,
+    FirewallPreviewResponse, FirewallRollbackResponse, FirewallRuleCounter, FirewallZone,
+    FirewallZonesResponse, ForwardRule, InputRule, LanDevice, LanDevicesResponse, PortForward,
+    PortGroup, PortGroupsResponse, ReorderRulesRequest, SaveAddressGroupRequest,
     SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, SaveFirewallZoneRequest,
     SaveForwardRuleRequest, SaveInputRuleRequest, SavePortGroupRequest, SaveZoneForwardRequest,
-    SimplePortForward, SimplePortForwardsResponse, ZoneForwardPolicy,
+    SimplePortForward, SimplePortForwardsResponse, TestPacketRequest, TestPacketResponse,
+    ZoneForwardPolicy,
 };
 
-use super::client::{call, call_with, delete, get, post_empty};
+use super::client::{call, call_at, call_with, delete, get, post_empty};
 
 /// Turn a `{success, message, id}` save response into the saved id.
 fn saved_id(success: bool, message: String, id: Option<i64>) -> Result<i64, String> {
@@ -274,4 +275,45 @@ pub async fn fetch_pending_status(
     token: &str,
 ) -> Result<keystone_core::FirewallStatusResponse, String> {
     get("/api/firewall/status", token).await
+}
+
+// ============================================================================
+// Packet Tester, Live Log and Connections
+// ============================================================================
+
+/// Trace one packet. With `applied`, the last applied configuration is traced
+/// instead of the saved one.
+pub async fn run_packet_trace(
+    token: &str,
+    request: &TestPacketRequest,
+    applied: bool,
+) -> Result<TestPacketResponse, String> {
+    let path = if applied {
+        format!("{}?baseline=applied", TestFirewallPacket::PATH)
+    } else {
+        TestFirewallPacket::PATH.to_string()
+    };
+    call_at::<TestFirewallPacket>(token, &path, request).await
+}
+
+/// Kernel log lines logged by firewall rules, after `cursor` when given.
+///
+/// The daemon validates the cursor. `;` and `=` are percent-encoded here so
+/// they cannot split the query string.
+pub async fn fetch_firewall_log(
+    token: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<FirewallLogResponse, String> {
+    let mut url = format!("/api/firewall/log?limit={limit}");
+    if let Some(cursor) = cursor {
+        url.push_str("&cursor=");
+        url.push_str(&cursor.replace(';', "%3B").replace('=', "%3D"));
+    }
+    get(&url, token).await
+}
+
+/// Connections in the kernel's connection tracking table.
+pub async fn fetch_connections(token: &str) -> Result<ConnectionsResponse, String> {
+    get("/api/firewall/connections", token).await
 }

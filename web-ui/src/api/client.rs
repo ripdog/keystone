@@ -72,6 +72,16 @@ pub async fn call_with<E: Endpoint>(
     call_inner::<E>(Some(token), &render_path(E::PATH, params), req).await
 }
 
+/// Call a typed endpoint with authentication at `path`, which may carry a query
+/// string (for example `E::PATH` followed by `?baseline=applied`).
+pub async fn call_at<E: Endpoint>(
+    token: &str,
+    path: &str,
+    req: &E::Request,
+) -> Result<E::Response, String> {
+    call_inner::<E>(Some(token), path, req).await
+}
+
 /// Call a typed endpoint without authentication (login).
 pub async fn call_public<E: Endpoint>(req: &E::Request) -> Result<E::Response, String> {
     call_inner::<E>(None, E::PATH, req).await

@@ -9,7 +9,10 @@
 //! - Forward Rules (traffic through the router)
 //! - Preview (see generated nftables rules)
 
+use super::firewall_connections::ConnectionsTab;
 use super::firewall_groups::GroupsTab;
+use super::firewall_live_log::LiveLogTab;
+use super::firewall_packet_tester::PacketTesterTab;
 use super::firewall_rules::{ForwardRulesTab, InputRulesTab};
 use super::simple_forwards::SimpleForwardsTab;
 use crate::api;
@@ -33,6 +36,9 @@ enum FirewallTab {
     ForwardRules,
     Settings,
     Preview,
+    PacketTester,
+    LiveLog,
+    Connections,
 }
 
 impl FirewallTab {
@@ -45,6 +51,9 @@ impl FirewallTab {
             "forward-rules" => Self::ForwardRules,
             "settings" => Self::Settings,
             "preview" => Self::Preview,
+            "packet-tester" => Self::PacketTester,
+            "live-log" => Self::LiveLog,
+            "connections" => Self::Connections,
             _ => Self::Zones,
         }
     }
@@ -87,6 +96,18 @@ mod route_tests {
         assert!(matches!(
             FirewallTab::from_path("/firewall/preview"),
             FirewallTab::Preview
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/packet-tester"),
+            FirewallTab::PacketTester
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/live-log"),
+            FirewallTab::LiveLog
+        ));
+        assert!(matches!(
+            FirewallTab::from_path("/firewall/connections"),
+            FirewallTab::Connections
         ));
         assert!(matches!(
             FirewallTab::from_path("/firewall"),
@@ -137,6 +158,9 @@ pub fn FirewallPage(
                     FirewallTab::ForwardRules => view! { <ForwardRulesTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
                     FirewallTab::Settings => view! { <SettingsTab token=token on_unauthorized=on_unauthorized /> }.into_any(),
                     FirewallTab::Preview => view! { <PreviewTab token=token reload_trigger=reload_trigger on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::PacketTester => view! { <PacketTesterTab token=token on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::LiveLog => view! { <LiveLogTab token=token on_unauthorized=on_unauthorized /> }.into_any(),
+                    FirewallTab::Connections => view! { <ConnectionsTab token=token on_unauthorized=on_unauthorized /> }.into_any(),
                 }}
             </div>
         </div>

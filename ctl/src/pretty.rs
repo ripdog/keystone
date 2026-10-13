@@ -87,6 +87,7 @@ pub fn apply_all(response: &ApplyAllResponse) {
     let components = [
         ("networkd", &response.components.networkd),
         ("firewall", &response.components.firewall),
+        ("sqm", &response.components.sqm),
         ("dnsmasq", &response.components.dnsmasq),
         ("caddy", &response.components.caddy),
     ];

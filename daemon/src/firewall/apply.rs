@@ -11,6 +11,7 @@ use crate::db::Database;
 use crate::firewall::generate::generate_ruleset;
 use crate::firewall::validate::validate_firewall_config;
 use crate::networkd::{ConfirmOutcome, NetworkdApplyManager};
+use crate::snapshots::{self, SnapshotStatus};
 use anyhow::{Context, Result};
 use keystone_core::{
     FirewallApplyResponse, FirewallConfig, FirewallConfirmResponse, FirewallRollbackResponse,
@@ -241,6 +242,9 @@ impl FirewallApplyManager {
             self.confirm_firewall(session_id).await?;
             parts.push("Firewall configuration confirmed and saved.");
         }
+        if !parts.is_empty() {
+            snapshots::settle_session(&self.db, session_id, SnapshotStatus::Active).await;
+        }
         Ok(FirewallConfirmResponse {
             success: true,
             message: parts.join(" "),
@@ -290,8 +294,25 @@ impl FirewallApplyManager {
     /// Force a rollback (manually triggered) of the firewall and any pending
     /// networkd change.
     pub async fn rollback(&self) -> Result<FirewallRollbackResponse> {
+        let firewall_session = self
+            .pending
+            .read()
+            .await
+            .as_ref()
+            .map(|p| p.session_id.clone());
+        let networkd_session = self
+            .networkd
+            .pending_info()
+            .await
+            .map(|info| info.session_id);
         let networkd = self.networkd.rollback().await;
         let firewall = self.rollback_firewall().await?;
+        if let (Ok(true), Some(session)) = (&networkd, &networkd_session) {
+            snapshots::settle_session(&self.db, session, SnapshotStatus::RolledBack).await;
+        }
+        if let (true, Some(session)) = (firewall.success, &firewall_session) {
+            snapshots::settle_session(&self.db, session, SnapshotStatus::RolledBack).await;
+        }
         Ok(match networkd {
             Ok(true) => FirewallRollbackResponse {
                 success: true,
@@ -433,6 +454,7 @@ impl FirewallApplyManager {
                 return;
             }
 
+            snapshots::settle_session(&db, &session_id, SnapshotStatus::RolledBack).await;
             info!("Automatic firewall rollback completed");
         });
     }

@@ -9,14 +9,16 @@
 //! - Apply/Confirm/Rollback workflow
 //! - Preview generated nftables rules
 
+use crate::Actor;
 use crate::db::Database;
 use crate::firewall::validate::{
     validate_forward_rule, validate_input_rule, validate_port_forward,
 };
 use crate::firewall::{FirewallApplyManager, generate_json, generate_preview};
+use crate::snapshots;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     routing::{delete, get, post, put},
 };
 use keystone_core::api::{
@@ -531,6 +533,7 @@ async fn preview_firewall_json(State(state): State<FirewallState>) -> Result<Str
 /// POST /firewall/apply - Apply firewall configuration
 async fn apply_firewall(
     State(state): State<FirewallState>,
+    actor: Option<Extension<Actor>>,
 ) -> Result<Json<FirewallApplyResponse>, AppError> {
     info!("Applying firewall configuration");
 
@@ -548,6 +551,15 @@ async fn apply_firewall(
     }
 
     let response = state.apply_manager.apply(None).await?;
+    if response.success {
+        let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
+        let pending = if response.pending_confirmation {
+            response.session_id.as_deref()
+        } else {
+            None
+        };
+        snapshots::record_applied(&state.db, actor, pending, "firewall apply").await;
+    }
     Ok(Json(response))
 }
 

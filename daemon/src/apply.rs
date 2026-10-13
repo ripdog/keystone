@@ -15,6 +15,7 @@ use crate::dnsmasq;
 use crate::firewall::DEFAULT_CONFIRM_TIMEOUT_SECS;
 use crate::firewall::FirewallApplyManager;
 use crate::networkd::NetworkdApplyManager;
+use crate::snapshots;
 
 /// Re-export the result type for use by main.rs
 pub use keystone_core::ApplyAllResponse as ApplyAllResult;
@@ -54,11 +55,13 @@ fn component_skipped(message: impl Into<String>) -> ComponentResult {
 /// 5. Apply Caddy configuration (web server)
 ///
 /// If any component fails, subsequent components are still attempted to avoid
-/// leaving the system in an inconsistent state.
+/// leaving the system in an inconsistent state. A configuration snapshot is
+/// recorded only when every component succeeded.
 pub async fn apply_all(
     db: &Database,
     firewall_manager: &Arc<FirewallApplyManager>,
     firewall_timeout_secs: Option<u64>,
+    actor: Option<&str>,
 ) -> Result<ApplyAllResult> {
     info!("Starting unified configuration apply");
 
@@ -195,6 +198,15 @@ pub async fn apply_all(
     };
 
     info!("Unified apply complete: {}", message);
+
+    if all_success {
+        let pending_session = if firewall_pending {
+            firewall_session.as_deref()
+        } else {
+            None
+        };
+        snapshots::record_applied(db, actor, pending_session, "unified apply").await;
+    }
 
     Ok(ApplyAllResult {
         success: all_success,

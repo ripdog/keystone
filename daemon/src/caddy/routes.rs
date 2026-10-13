@@ -5,11 +5,13 @@
 //! - Preview/Validate
 //! - Apply
 
+use crate::Actor;
 use crate::caddy::{self};
 use crate::db::Database;
+use crate::snapshots;
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Extension, State},
     routing::{get, post, put},
 };
 use keystone_core::api::{Endpoint, Req, Res, SaveCaddyConfig};
@@ -143,6 +145,7 @@ async fn validate_caddy(
 /// POST /caddy/apply - Apply Caddy configuration
 async fn apply_caddy(
     State(state): State<CaddyState>,
+    actor: Option<Extension<Actor>>,
 ) -> Result<Json<CaddyApplyResponse>, AppError> {
     info!("Applying Caddy configuration");
 
@@ -159,10 +162,14 @@ async fn apply_caddy(
     let pool = state.db.pool();
 
     match caddy::apply_caddy_config(pool).await {
-        Ok(()) => Ok(Json(CaddyApplyResponse {
-            success: true,
-            message: "Caddy configuration applied successfully".to_string(),
-        })),
+        Ok(()) => {
+            let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
+            snapshots::record_applied(&state.db, actor, None, "caddy apply").await;
+            Ok(Json(CaddyApplyResponse {
+                success: true,
+                message: "Caddy configuration applied successfully".to_string(),
+            }))
+        }
         Err(e) => Ok(Json(CaddyApplyResponse {
             success: false,
             message: format!("Failed to apply Caddy configuration: {e:#}"),

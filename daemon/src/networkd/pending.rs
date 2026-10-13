@@ -69,10 +69,14 @@ pub enum ConfirmOutcome {
     WrongSession,
 }
 
+/// Told the session id whenever a timer rolls back an unconfirmed change.
+pub type RollbackListener = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct NetworkdApplyManager {
     state_path: PathBuf,
     restorer: Arc<dyn NetworkdRestorer>,
     pending: Arc<Mutex<Option<PendingNetworkd>>>,
+    rollback_listener: Option<RollbackListener>,
 }
 
 fn now_secs() -> u64 {
@@ -105,7 +109,14 @@ impl NetworkdApplyManager {
             state_path,
             restorer,
             pending: Arc::new(Mutex::new(None)),
+            rollback_listener: None,
         }
+    }
+
+    /// Notify `listener` when the confirmation timer rolls back a change.
+    pub fn with_rollback_listener(mut self, listener: RollbackListener) -> Self {
+        self.rollback_listener = Some(listener);
+        self
     }
 
     /// Recover a pending change persisted by a previous daemon run: roll back
@@ -255,6 +266,7 @@ impl NetworkdApplyManager {
         let pending_state = self.pending.clone();
         let restorer = self.restorer.clone();
         let state_path = self.state_path.clone();
+        let rollback_listener = self.rollback_listener.clone();
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             let mut guard = pending_state.lock().await;
@@ -270,6 +282,9 @@ impl NetworkdApplyManager {
                     *guard = None;
                     clear_persisted(&state_path);
                     warn!("Automatic networkd rollback completed");
+                    if let Some(listener) = &rollback_listener {
+                        listener(&session_id);
+                    }
                 }
                 Err(error) => {
                     error!("Automatic networkd rollback FAILED: {error:#}");
@@ -339,6 +354,44 @@ mod tests {
             manager.confirm(&info.session_id).await,
             ConfirmOutcome::NoPending
         );
+    }
+
+    #[tokio::test]
+    async fn timer_rollback_notifies_listener_with_the_session() {
+        let (manager, _restorer, path) = manager();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let sink = seen.clone();
+        let manager = manager.with_rollback_listener(Arc::new(move |session: &str| {
+            sink.lock().unwrap().push(session.to_owned());
+        }));
+        let info = manager
+            .register(Some(snapshot()), Duration::ZERO)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(*seen.lock().unwrap(), vec![info.session_id]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn confirmed_change_does_not_notify_listener() {
+        let (manager, _restorer, path) = manager();
+        let seen = Arc::new(std::sync::Mutex::new(0usize));
+        let counter = seen.clone();
+        let manager = manager.with_rollback_listener(Arc::new(move |_: &str| {
+            *counter.lock().unwrap() += 1;
+        }));
+        let info = manager
+            .register(Some(snapshot()), Duration::from_millis(200))
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.confirm(&info.session_id).await,
+            ConfirmOutcome::Confirmed
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(*seen.lock().unwrap(), 0);
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]

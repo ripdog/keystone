@@ -11,11 +11,13 @@
 //! - Active leases (from lease file)
 //! - Apply/Preview
 
+use crate::Actor;
 use crate::db::Database;
 use crate::dnsmasq::{self, get_active_leases};
+use crate::snapshots;
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     routing::{delete, get, post, put},
 };
 use keystone_core::api::{
@@ -555,6 +557,7 @@ async fn preview_dnsmasq(
 /// POST /dnsmasq/apply - Apply dnsmasq configuration
 async fn apply_dnsmasq(
     State(state): State<DnsmasqState>,
+    actor: Option<Extension<Actor>>,
 ) -> Result<Json<DnsmasqApplyResponse>, AppError> {
     info!("Applying dnsmasq configuration");
 
@@ -571,10 +574,14 @@ async fn apply_dnsmasq(
     let pool = state.db.pool();
 
     match dnsmasq::apply_dnsmasq_config(pool).await {
-        Ok(()) => Ok(Json(DnsmasqApplyResponse {
-            success: true,
-            message: "dnsmasq configuration applied successfully".to_string(),
-        })),
+        Ok(()) => {
+            let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
+            snapshots::record_applied(&state.db, actor, None, "dnsmasq apply").await;
+            Ok(Json(DnsmasqApplyResponse {
+                success: true,
+                message: "dnsmasq configuration applied successfully".to_string(),
+            }))
+        }
         Err(e) => Ok(Json(DnsmasqApplyResponse {
             success: false,
             message: format!("Failed to apply dnsmasq configuration: {}", e),

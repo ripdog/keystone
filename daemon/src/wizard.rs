@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Extension, State},
     routing::{get, post},
 };
 use keystone_core::{
@@ -158,6 +158,7 @@ async fn skip_wizard(
 /// POST /wizard/interfaces - Build and activate a basic SOHO router profile.
 async fn save_wizard_interfaces(
     State(state): State<Arc<AppState>>,
+    actor: Option<Extension<crate::Actor>>,
     Json(request): Json<Req<SaveWizardInterfaces>>,
 ) -> Result<Json<Res<SaveWizardInterfaces>>, AppError> {
     info!(assignments = ?request.assignments, "Activating wizard router profile");
@@ -173,7 +174,8 @@ async fn save_wizard_interfaces(
         }
     };
 
-    let apply_result = apply::apply_all(&state.db, &state.firewall_manager, None).await?;
+    let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
+    let apply_result = apply::apply_all(&state.db, &state.firewall_manager, None, actor).await?;
     let success = apply_result.success;
     let message = if success {
         format!(

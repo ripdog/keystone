@@ -25,7 +25,7 @@ mod wizard;
 use auth::AuthManager;
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Extension, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -54,6 +54,11 @@ use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 
 const DEV_HTTP_ADDR: &str = "127.0.0.1:3000";
+
+/// Username of the authenticated caller, set by the auth middleware and used
+/// to attribute configuration snapshots.
+#[derive(Clone)]
+pub struct Actor(pub String);
 
 #[derive(Clone)]
 struct AppState {
@@ -148,8 +153,23 @@ async fn main() -> anyhow::Result<()> {
         std::fs::remove_file(&socket_path)?;
     }
 
+    // Networkd rollbacks performed by its timer also settle the matching
+    // configuration snapshot.
+    let snapshot_db = db.clone();
+    let networkd_apply_manager = Arc::new(
+        networkd::NetworkdApplyManager::system().with_rollback_listener(Arc::new(
+            move |session: &str| {
+                let db = snapshot_db.clone();
+                let session = session.to_owned();
+                tokio::spawn(async move {
+                    snapshots::settle_session(&db, &session, snapshots::SnapshotStatus::RolledBack)
+                        .await;
+                });
+            },
+        )),
+    );
+
     // Create the firewall apply manager
-    let networkd_apply_manager = Arc::new(networkd::NetworkdApplyManager::system());
     let firewall_apply_manager = Arc::new(firewall::FirewallApplyManager::new(
         Arc::new(db.clone()),
         networkd_apply_manager.clone(),
@@ -162,6 +182,23 @@ async fn main() -> anyhow::Result<()> {
     // Initialize firewall manager (check for pending rollbacks from previous run)
     firewall_apply_manager.init().await?;
     info!("Firewall apply manager initialized");
+
+    // Reconcile configuration snapshots with the apply sessions restored above.
+    // Snapshot bookkeeping must never stop the daemon from starting.
+    let mut live_sessions = Vec::new();
+    if let Some(info) = networkd_apply_manager.pending_info().await {
+        live_sessions.push(info.session_id);
+    }
+    let firewall_status = firewall_apply_manager.status().await;
+    if firewall_status.pending_confirmation
+        && let Some(session) = firewall_status.session_id
+        && !live_sessions.contains(&session)
+    {
+        live_sessions.push(session);
+    }
+    if let Err(error) = snapshots::reconcile_on_startup(&db, &live_sessions).await {
+        warn!("Failed to reconcile configuration snapshots: {error:#}");
+    }
     ssh::start_reconciler(db.clone());
     caddy::start_reconciler(db.pool().clone());
 
@@ -566,7 +603,7 @@ fn is_blocked_before_setup(path: &str) -> bool {
 
 async fn auth_middleware(
     State(state): State<Arc<AppState>>,
-    request: Request<axum::body::Body>,
+    mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
     let path = request.uri().path();
@@ -607,6 +644,7 @@ async fn auth_middleware(
             && username == claims.sub
             && version == claims.version
         {
+            request.extensions_mut().insert(Actor(claims.sub));
             return Ok(next.run(request).await);
         }
     }
@@ -1363,6 +1401,7 @@ async fn networkd_preview(
 /// POST /apply-networkd - Write interface configs to networkd and reload
 async fn apply_networkd(
     State(state): State<Arc<AppState>>,
+    actor: Option<Extension<Actor>>,
 ) -> Result<Json<ApplyConfigResponse>, AppError> {
     info!("Applying networkd configuration");
 
@@ -1401,11 +1440,19 @@ async fn apply_networkd(
                 "Applied networkd config for {} interfaces, {} VLANs, and {} bridges",
                 summary.interfaces, summary.vlans, summary.bridges
             );
+            let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
             if let Some(pending) = &applied.pending {
                 message.push_str(&format!(
                     ". Confirm within {} seconds or the change will be rolled back.",
                     firewall::DEFAULT_CONFIRM_TIMEOUT_SECS
                 ));
+                snapshots::record_applied(
+                    &state.db,
+                    actor,
+                    Some(&pending.session_id),
+                    "networkd apply",
+                )
+                .await;
                 return Ok(Json(ApplyConfigResponse {
                     success: true,
                     message,
@@ -1415,6 +1462,7 @@ async fn apply_networkd(
                     session_id: Some(pending.session_id.clone()),
                 }));
             }
+            snapshots::record_applied(&state.db, actor, None, "networkd apply").await;
             Ok(Json(ApplyConfigResponse {
                 success: true,
                 message,
@@ -1463,10 +1511,12 @@ async fn networkd_status(
 /// POST /apply-all - Apply all configuration (networkd, firewall, dnsmasq, caddy)
 async fn apply_all(
     State(state): State<Arc<AppState>>,
+    actor: Option<Extension<Actor>>,
 ) -> Result<Json<apply::ApplyAllResult>, AppError> {
     info!("Applying all configuration");
 
-    let result = apply::apply_all(&state.db, &state.firewall_manager, None).await?;
+    let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
+    let result = apply::apply_all(&state.db, &state.firewall_manager, None, actor).await?;
 
     Ok(Json(result))
 }

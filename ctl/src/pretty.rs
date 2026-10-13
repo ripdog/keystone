@@ -150,8 +150,8 @@ pub fn firewall_zones(response: &FirewallZonesResponse) {
         return;
     }
     println!(
-        "{:<6} {:<15} {:<25} {:<10} {:<10}",
-        "ID", "Name", "Interfaces", "Input", "Forward"
+        "{:<6} {:<15} {:<25} {:<10}",
+        "ID", "Name", "Interfaces", "Input"
     );
     println!("{}", "-".repeat(70));
     for zone in &response.zones {
@@ -162,8 +162,8 @@ pub fn firewall_zones(response: &FirewallZonesResponse) {
             zone.interfaces.join(", ")
         };
         println!(
-            "{:<6} {:<15} {:<25} {:<10} {:<10}",
-            id, zone.name, interfaces, zone.default_input_policy, zone.default_forward_policy
+            "{:<6} {:<15} {:<25} {:<10}",
+            id, zone.name, interfaces, zone.default_input_policy
         );
     }
 }

@@ -310,10 +310,6 @@ pub enum ZonesCommands {
         #[arg(long, default_value = "drop")]
         input_policy: String,
 
-        /// Default forward policy (accept or drop)
-        #[arg(long, default_value = "drop")]
-        forward_policy: String,
-
         /// Mark this as an Internet-facing zone
         #[arg(long, default_value_t = false)]
         wan: bool,

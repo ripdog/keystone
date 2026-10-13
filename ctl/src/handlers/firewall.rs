@@ -30,7 +30,6 @@ pub async fn handle_firewall_command(
                 description,
                 interfaces,
                 input_policy,
-                forward_policy,
                 wan,
                 masquerade_ipv4,
             } => {
@@ -42,9 +41,6 @@ pub async fn handle_firewall_command(
                 let input_policy: FirewallPolicy = input_policy
                     .parse()
                     .map_err(|e: String| anyhow::anyhow!(e))?;
-                let forward_policy: FirewallPolicy = forward_policy
-                    .parse()
-                    .map_err(|e: String| anyhow::anyhow!(e))?;
 
                 let zone = FirewallZone {
                     id,
@@ -54,7 +50,8 @@ pub async fn handle_firewall_command(
                     is_wan: wan,
                     masquerade_ipv4,
                     default_input_policy: input_policy,
-                    default_forward_policy: forward_policy,
+                    // Unused by the firewall generator; kept for storage compatibility.
+                    default_forward_policy: FirewallPolicy::Drop,
                 };
 
                 let request = SaveFirewallZoneRequest { zone };

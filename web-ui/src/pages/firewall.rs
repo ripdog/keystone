@@ -455,10 +455,6 @@ fn ZonesTab(
                                                         <span class=if zone.default_input_policy == FirewallPolicy::Accept { "text-green-400" } else { "text-red-400" }>
                                                             {format!("{:?}", zone.default_input_policy)}
                                                         </span>
-                                                        " | Forward: "
-                                                        <span class=if zone.default_forward_policy == FirewallPolicy::Accept { "text-green-400" } else { "text-red-400" }>
-                                                            {format!("{:?}", zone.default_forward_policy)}
-                                                        </span>
                                                     </div>
                                                 </div>
                                                 <div class="flex gap-2">
@@ -525,7 +521,8 @@ fn ZoneEditor(
     let is_wan = RwSignal::new(zone.is_wan);
     let masquerade_ipv4 = RwSignal::new(zone.masquerade_ipv4);
     let input_policy = RwSignal::new(zone.default_input_policy);
-    let forward_policy = RwSignal::new(zone.default_forward_policy);
+    // Not user-editable: forwarding is controlled by zone-to-zone policies.
+    let forward_policy = zone.default_forward_policy;
     let saving = RwSignal::new(false);
     let zone_id = zone.id;
 
@@ -562,7 +559,7 @@ fn ZoneEditor(
             is_wan: is_wan.get(),
             masquerade_ipv4: masquerade_ipv4.get(),
             default_input_policy: input_policy.get(),
-            default_forward_policy: forward_policy.get(),
+            default_forward_policy: forward_policy,
         };
 
         leptos::task::spawn_local(async move {
@@ -678,19 +675,9 @@ fn ZoneEditor(
                         <option value="accept" selected=move || input_policy.get() == FirewallPolicy::Accept>"Accept"</option>
                     </select>
                 </div>
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">"Default Forward Policy"</label>
-                    <select
-                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500 focus:border-blue-500 focus:outline-none"
-                        on:change=move |ev| {
-                            let value = event_target_value(&ev);
-                            forward_policy.set(if value == "accept" { FirewallPolicy::Accept } else { FirewallPolicy::Drop });
-                        }
-                    >
-                        <option value="drop" selected=move || forward_policy.get() == FirewallPolicy::Drop>"Drop"</option>
-                        <option value="accept" selected=move || forward_policy.get() == FirewallPolicy::Accept>"Accept"</option>
-                    </select>
-                </div>
+                <p class="text-sm text-gray-400 self-end">
+                    "To allow forwarding between zones, use the Zone Forwards tab."
+                </p>
             </div>
 
             <div class="flex gap-2 pt-2">

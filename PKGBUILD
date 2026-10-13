@@ -5,7 +5,7 @@ pkgdesc="Linux router/firewall manager with split-privilege web UI"
 arch=("x86_64")
 url="https://github.com/ripdog/keystone"
 license=("GPL-3.0-only")
-depends=("glibc" "sqlite" "nftables" "systemd" "iproute2" "iputils" "dnsmasq")
+depends=("glibc" "sqlite" "nftables" "systemd" "iproute2" "iputils" "dnsmasq" "hwdata")
 makedepends=("rust" "cargo" "trunk" "git")
 # Do not inherit host-specific -march=native/-O3/LTO flags. C dependencies
 # (including cryptographic RNG implementations) control their own optimisation.

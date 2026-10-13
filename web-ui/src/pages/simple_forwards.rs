@@ -2,6 +2,7 @@
 use crate::api;
 use keystone_core::{CreateSimplePortForwardRequest, LanDevice, RuleProtocol};
 use leptos::prelude::*;
+use leptos_router::hooks::use_query_map;
 
 #[component]
 pub(super) fn SimpleForwardsTab(
@@ -38,6 +39,36 @@ pub(super) fn SimpleForwardsTab(
     let saving = RwSignal::new(false);
     let error = RwSignal::new(String::new());
     let notice = RwSignal::new(String::new());
+
+    // Opened from the Clients page as /firewall/port-forwards?mac=...: start a
+    // new forward for that device. Applied once per requested MAC, and only
+    // when the MAC is in the discovered device list, so refreshes or a
+    // cancelled editor do not reopen it.
+    let query = use_query_map();
+    let applied_mac = RwSignal::new(None::<String>);
+    Effect::new(move || {
+        let Some(requested) = query
+            .with(|q| q.get("mac"))
+            .map(|mac| mac.to_ascii_lowercase())
+        else {
+            return;
+        };
+        if applied_mac.get_untracked().as_deref() == Some(requested.as_str()) {
+            return;
+        }
+        let Some(Ok(items)) = devices.get() else {
+            return;
+        };
+        if !items.iter().any(|d| d.mac == requested) {
+            return;
+        }
+        applied_mac.set(Some(requested.clone()));
+        edit_id.set(None);
+        manual.set(false);
+        selected.set(requested);
+        error.set(String::new());
+        editing.set(true);
+    });
 
     let save = move |_| {
         if saving.get_untracked() {

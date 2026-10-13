@@ -70,10 +70,14 @@ pub fn generate_prerouting_chain(
                     }
                     // Hairpin NAT rules (if enabled)
                     if config.global_settings.hairpin_nat_enabled && !lan_interfaces.is_empty() {
-                        if let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "tcp") {
+                        if let Some(rule) =
+                            create_hairpin_dnat_rule(pf, &lan_interfaces, "tcp", &groups)
+                        {
                             batch.add(NfListObject::Rule(rule));
                         }
-                        if let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "udp") {
+                        if let Some(rule) =
+                            create_hairpin_dnat_rule(pf, &lan_interfaces, "udp", &groups)
+                        {
                             batch.add(NfListObject::Rule(rule));
                         }
                     }
@@ -86,7 +90,8 @@ pub fn generate_prerouting_chain(
                     }
                     if config.global_settings.hairpin_nat_enabled
                         && !lan_interfaces.is_empty()
-                        && let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "tcp")
+                        && let Some(rule) =
+                            create_hairpin_dnat_rule(pf, &lan_interfaces, "tcp", &groups)
                     {
                         batch.add(NfListObject::Rule(rule));
                     }
@@ -99,7 +104,8 @@ pub fn generate_prerouting_chain(
                     }
                     if config.global_settings.hairpin_nat_enabled
                         && !lan_interfaces.is_empty()
-                        && let Some(rule) = create_hairpin_dnat_rule(pf, &lan_interfaces, "udp")
+                        && let Some(rule) =
+                            create_hairpin_dnat_rule(pf, &lan_interfaces, "udp", &groups)
                     {
                         batch.add(NfListObject::Rule(rule));
                     }
@@ -254,15 +260,28 @@ fn create_hairpin_dnat_rule(
     pf: &PortForward,
     lan_interfaces: &[String],
     protocol: &'static str,
+    groups: &GroupIndex,
 ) -> Option<Rule<'static>> {
     if lan_interfaces.is_empty() || pf.dest_ip.parse::<std::net::Ipv4Addr>().is_err() {
         return None;
     }
+    let source = match port_forward_source_match(pf, groups) {
+        Ok(source) => source,
+        Err(error) => {
+            tracing::warn!("Skipping hairpin rule for '{}': {error}", pf.name);
+            return None;
+        }
+    };
 
     let mut exprs: Vec<Statement> = vec![
         create_ipv4_match(),
         // Match input from LAN interfaces
         create_iif_match(lan_interfaces),
+    ];
+    // The port forward's source restriction applies to LAN clients too: a
+    // client the forward excludes must not be redirected by hairpin.
+    exprs.extend(source);
+    exprs.extend([
         // Match protocol
         create_protocol_match(protocol),
         // Match destination port(s)
@@ -275,7 +294,7 @@ fn create_hairpin_dnat_rule(
         create_fib_daddr_not_on_iif_match(),
         // Counter
         Statement::Counter(Counter::Anonymous(None)),
-    ];
+    ]);
 
     // DNAT action
     exprs.push(Statement::DNAT(Some(nftables::stmt::NAT {
@@ -305,6 +324,8 @@ pub fn generate_postrouting_chain(
     config: &FirewallConfig,
     _zone_interfaces: &HashMap<String, Vec<String>>,
 ) {
+    let groups = GroupIndex::new(&config.address_groups, &config.port_groups);
+
     // Create postrouting chain
     batch.add(NfListObject::Chain(Chain {
         family: NfFamily::INet,
@@ -336,20 +357,28 @@ pub fn generate_postrouting_chain(
             if pf.enabled {
                 match pf.protocol {
                     RuleProtocol::TcpUdp => {
-                        if let Some(rule) = create_hairpin_snat_rule(pf, &lan_interfaces, "tcp") {
+                        if let Some(rule) =
+                            create_hairpin_snat_rule(pf, &lan_interfaces, "tcp", &groups)
+                        {
                             batch.add(NfListObject::Rule(rule));
                         }
-                        if let Some(rule) = create_hairpin_snat_rule(pf, &lan_interfaces, "udp") {
+                        if let Some(rule) =
+                            create_hairpin_snat_rule(pf, &lan_interfaces, "udp", &groups)
+                        {
                             batch.add(NfListObject::Rule(rule));
                         }
                     }
                     RuleProtocol::Tcp => {
-                        if let Some(rule) = create_hairpin_snat_rule(pf, &lan_interfaces, "tcp") {
+                        if let Some(rule) =
+                            create_hairpin_snat_rule(pf, &lan_interfaces, "tcp", &groups)
+                        {
                             batch.add(NfListObject::Rule(rule));
                         }
                     }
                     RuleProtocol::Udp => {
-                        if let Some(rule) = create_hairpin_snat_rule(pf, &lan_interfaces, "udp") {
+                        if let Some(rule) =
+                            create_hairpin_snat_rule(pf, &lan_interfaces, "udp", &groups)
+                        {
                             batch.add(NfListObject::Rule(rule));
                         }
                     }
@@ -382,15 +411,25 @@ fn create_hairpin_snat_rule(
     pf: &PortForward,
     lan_interfaces: &[String],
     protocol: &'static str,
+    groups: &GroupIndex,
 ) -> Option<Rule<'static>> {
     if lan_interfaces.is_empty() || pf.dest_ip.parse::<std::net::Ipv4Addr>().is_err() {
         return None;
     }
+    // Only the traffic the hairpin DNAT redirects may be masqueraded.
+    let source = match port_forward_source_match(pf, groups) {
+        Ok(source) => source,
+        Err(error) => {
+            tracing::warn!("Skipping hairpin SNAT for '{}': {error}", pf.name);
+            return None;
+        }
+    };
 
     let mut exprs: Vec<Statement> = vec![create_ipv4_match()];
 
     // Match source from LAN interfaces (original source is LAN client)
     exprs.push(create_iif_match(lan_interfaces));
+    exprs.extend(source);
 
     // Match protocol
     exprs.push(create_protocol_match(protocol));
@@ -491,7 +530,9 @@ mod tests {
     #[test]
     fn hairpin_dnat_excludes_router_address_on_ingress_interface() {
         let pf = forward(443, None, None);
-        let rule = create_hairpin_dnat_rule(&pf, &["lan0".to_string()], "tcp").unwrap();
+        let rule =
+            create_hairpin_dnat_rule(&pf, &["lan0".to_string()], "tcp", &GroupIndex::default())
+                .unwrap();
         let json = serde_json::to_string(&rule).unwrap();
         assert!(json.contains("\"op\":\"!=\""), "{json}");
         assert!(json.contains("\"iif\""), "{json}");
@@ -514,7 +555,9 @@ mod tests {
         let zones = HashMap::new();
         let rule = create_port_forward_rule(&pf, &zones, "tcp", &GroupIndex::default()).unwrap();
         assert!(matches!(dnat_port_of(&rule), Some(Expression::Number(80))));
-        let hairpin = create_hairpin_dnat_rule(&pf, &["eth1".to_string()], "tcp").unwrap();
+        let hairpin =
+            create_hairpin_dnat_rule(&pf, &["eth1".to_string()], "tcp", &GroupIndex::default())
+                .unwrap();
         assert!(matches!(
             dnat_port_of(&hairpin),
             Some(Expression::Number(80))
@@ -527,17 +570,78 @@ mod tests {
         let zones = HashMap::new();
         let rule = create_port_forward_rule(&pf, &zones, "tcp", &GroupIndex::default()).unwrap();
         assert!(dnat_port_of(&rule).is_none());
-        let hairpin = create_hairpin_dnat_rule(&pf, &["eth1".to_string()], "tcp").unwrap();
+        let hairpin =
+            create_hairpin_dnat_rule(&pf, &["eth1".to_string()], "tcp", &GroupIndex::default())
+                .unwrap();
         assert!(dnat_port_of(&hairpin).is_none());
     }
 
     #[test]
     fn hairpin_snat_matches_whole_range_when_port_preserved() {
         let pf = forward(5000, Some(5010), None);
-        let rule = create_hairpin_snat_rule(&pf, &["eth1".to_string()], "tcp").unwrap();
+        let rule =
+            create_hairpin_snat_rule(&pf, &["eth1".to_string()], "tcp", &GroupIndex::default())
+                .unwrap();
         let expected = create_dport_match(5000, Some(5010));
         assert!(rule.expr.iter().any(|stmt| {
             serde_json::to_value(stmt).unwrap() == serde_json::to_value(&expected).unwrap()
         }));
+    }
+
+    fn json(rule: &Rule<'static>) -> String {
+        serde_json::to_string(rule).unwrap()
+    }
+
+    fn restricted(source_ip: Option<&str>, source_group: Option<&str>) -> PortForward {
+        let mut pf = forward(27000, Some(27050), None);
+        pf.source_ip = source_ip.map(str::to_string);
+        pf.source_group = source_group.map(str::to_string);
+        pf
+    }
+
+    #[test]
+    fn hairpin_dnat_and_snat_honour_a_literal_source_restriction() {
+        let pf = restricted(Some("198.51.100.0/24"), None);
+        let lan = ["eth1".to_string()];
+        let groups = GroupIndex::default();
+        for text in [
+            json(&create_hairpin_dnat_rule(&pf, &lan, "udp", &groups).unwrap()),
+            json(&create_hairpin_snat_rule(&pf, &lan, "udp", &groups).unwrap()),
+        ] {
+            assert!(text.contains("\"field\":\"saddr\""), "{text}");
+            assert!(text.contains("198.51.100.0/24"), "{text}");
+        }
+    }
+
+    #[test]
+    fn hairpin_dnat_and_snat_honour_a_group_source_restriction() {
+        let pf = restricted(None, Some("trusted"));
+        let lan = ["eth1".to_string()];
+        let address_groups = vec![keystone_core::AddressGroup {
+            name: "trusted".into(),
+            entries: vec!["198.51.100.0/24".into()],
+            ..Default::default()
+        }];
+        let groups = GroupIndex::new(&address_groups, &[]);
+        for text in [
+            json(&create_hairpin_dnat_rule(&pf, &lan, "tcp", &groups).unwrap()),
+            json(&create_hairpin_snat_rule(&pf, &lan, "tcp", &groups).unwrap()),
+        ] {
+            assert!(text.contains("@trusted_v4"), "{text}");
+        }
+    }
+
+    #[test]
+    fn hairpin_rules_are_not_emitted_for_a_source_group_without_ipv4() {
+        let pf = restricted(None, Some("v6_only"));
+        let lan = ["eth1".to_string()];
+        let address_groups = vec![keystone_core::AddressGroup {
+            name: "v6_only".into(),
+            entries: vec!["2001:db8::/32".into()],
+            ..Default::default()
+        }];
+        let groups = GroupIndex::new(&address_groups, &[]);
+        assert!(create_hairpin_dnat_rule(&pf, &lan, "tcp", &groups).is_none());
+        assert!(create_hairpin_snat_rule(&pf, &lan, "tcp", &groups).is_none());
     }
 }

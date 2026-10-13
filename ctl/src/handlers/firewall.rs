@@ -54,8 +54,6 @@ pub async fn handle_firewall_command(
                     is_wan: wan,
                     masquerade_ipv4,
                     default_input_policy: input_policy,
-                    // Unused by the firewall generator; kept for storage compatibility.
-                    default_forward_policy: FirewallPolicy::Drop,
                 };
 
                 let request = SaveFirewallZoneRequest { zone };

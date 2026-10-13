@@ -12,8 +12,8 @@ use crate::firewall::groups::{Family, normalized_networks, normalized_ports};
 use crate::firewall::rules::{self, Addr, ChainSpec, Cond, Origin, Ports, RuleSpec, Side, Verdict};
 use ipnet::IpNet;
 use keystone_core::{
-    FirewallConfig, FirewallPolicy, RuleProtocol, TestPacketRequest, TestPacketResponse, TraceDnat,
-    TraceOrigin, TraceStage, TraceStep, TraceVerdict,
+    FirewallConfig, RuleProtocol, TestPacketRequest, TestPacketResponse, TraceDnat, TraceOrigin,
+    TraceStage, TraceStep, TraceVerdict,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -642,10 +642,11 @@ fn notes(config: &FirewallConfig, egress: Option<&str>, path: TraceStage) -> Vec
     if config.upnp_forward.is_some() {
         notes.push("UPnP / NAT-PMP is enabled. The mappings are made by miniupnpd, whose table is not modelled: a UPnP-mapped connection is accepted here only if this trace also DNATs it through a rule above.".to_string());
     }
-    if config.zones.iter().any(|zone| {
-        zone.default_forward_policy == FirewallPolicy::Accept && !zone.interfaces.is_empty()
-    }) {
-        notes.push("A zone's default forward policy of accept is stored but not generated: traffic that no forward rule accepts is dropped by the forward chain's policy.".to_string());
+    if path == TraceStage::Forward {
+        notes.push(
+            "Forwarded traffic that no rule accepts reaches the forward chain's final drop."
+                .to_string(),
+        );
     }
     notes
 }
@@ -1201,6 +1202,36 @@ mod tests {
                 .steps
                 .iter()
                 .all(|step| !step.label.starts_with("UPnP"))
+        );
+    }
+
+    #[test]
+    fn unmatched_forwarded_traffic_reaches_the_forward_chains_final_drop() {
+        // WAN to LAN has no zone forward or forward rule that accepts it.
+        let response = run(&rich(), &tcp("eth0", "198.51.100.7", "192.168.1.20", 9999));
+        assert_eq!(response.path, TraceStage::Forward);
+        assert_eq!(response.verdict, TraceVerdict::Drop);
+        assert_eq!(
+            chain_decision(&response, TraceStage::Forward).origin,
+            TraceOrigin::ChainPolicy
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note.contains("final drop"))
+        );
+    }
+
+    #[test]
+    fn forward_drop_note_is_only_given_for_forwarded_packets() {
+        let response = run(&rich(), &tcp("eth1", "192.168.1.20", "192.168.1.1", 22));
+        assert_eq!(response.path, TraceStage::Input);
+        assert!(
+            response
+                .notes
+                .iter()
+                .all(|note| !note.contains("final drop"))
         );
     }
 

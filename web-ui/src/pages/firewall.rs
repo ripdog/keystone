@@ -220,7 +220,6 @@ fn ZonesTab(
                             is_wan: false,
                             masquerade_ipv4: false,
                             default_input_policy: FirewallPolicy::Drop,
-                            default_forward_policy: FirewallPolicy::Drop,
                         }));
                     }
                 >
@@ -363,8 +362,6 @@ fn ZoneEditor(
     let is_wan = RwSignal::new(zone.is_wan);
     let masquerade_ipv4 = RwSignal::new(zone.masquerade_ipv4);
     let input_policy = RwSignal::new(zone.default_input_policy);
-    // Not user-editable: forwarding is controlled by zone-to-zone policies.
-    let forward_policy = zone.default_forward_policy;
     let saving = RwSignal::new(false);
     let zone_id = zone.id;
 
@@ -401,7 +398,6 @@ fn ZoneEditor(
             is_wan: is_wan.get(),
             masquerade_ipv4: masquerade_ipv4.get(),
             default_input_policy: input_policy.get(),
-            default_forward_policy: forward_policy,
         };
 
         leptos::task::spawn_local(async move {

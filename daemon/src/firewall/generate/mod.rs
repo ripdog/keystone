@@ -193,7 +193,6 @@ mod tests {
                     is_wan: true,
                     masquerade_ipv4: true,
                     default_input_policy: FirewallPolicy::Drop,
-                    default_forward_policy: FirewallPolicy::Drop,
                 },
                 FirewallZone {
                     id: Some(2),
@@ -203,7 +202,6 @@ mod tests {
                     is_wan: false,
                     masquerade_ipv4: false,
                     default_input_policy: FirewallPolicy::Accept,
-                    default_forward_policy: FirewallPolicy::Accept,
                 },
             ],
             zone_forwards: vec![ZoneForwardPolicy {
@@ -304,7 +302,6 @@ mod tests {
                 is_wan: true,
                 masquerade_ipv4: true,
                 default_input_policy: FirewallPolicy::Drop,
-                default_forward_policy: FirewallPolicy::Drop,
             },
             FirewallZone {
                 id: Some(2),
@@ -314,7 +311,6 @@ mod tests {
                 is_wan: false,
                 masquerade_ipv4: false,
                 default_input_policy: FirewallPolicy::Accept,
-                default_forward_policy: FirewallPolicy::Accept,
             },
             FirewallZone {
                 id: Some(3),
@@ -324,7 +320,6 @@ mod tests {
                 is_wan: false,
                 masquerade_ipv4: false,
                 default_input_policy: FirewallPolicy::Drop,
-                default_forward_policy: FirewallPolicy::Drop,
             },
         ];
 

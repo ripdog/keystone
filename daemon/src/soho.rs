@@ -233,7 +233,6 @@ async fn configure_zones(db: &Database, wan: &str, lans: &[String]) -> Result<()
         is_wan: true,
         masquerade_ipv4: true,
         default_input_policy: FirewallPolicy::Drop,
-        default_forward_policy: FirewallPolicy::Drop,
     })
     .await?;
 
@@ -249,7 +248,6 @@ async fn configure_zones(db: &Database, wan: &str, lans: &[String]) -> Result<()
         is_wan: false,
         masquerade_ipv4: false,
         default_input_policy: FirewallPolicy::Accept,
-        default_forward_policy: FirewallPolicy::Accept,
     })
     .await?;
 

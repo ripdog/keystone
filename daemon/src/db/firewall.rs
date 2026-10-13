@@ -50,20 +50,17 @@ impl<'a> FirewallDb<'a> {
     /// Get all firewall zones
     pub async fn get_firewall_zones(&self) -> Result<Vec<FirewallZone>> {
         // First get all zones
-        let zone_rows =
-            sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String, String)>(
-                r#"SELECT id, name, description, is_wan, masquerade_ipv4,
-                      default_input_policy, default_forward_policy
+        let zone_rows = sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String)>(
+            r#"SELECT id, name, description, is_wan, masquerade_ipv4,
+                      default_input_policy
                FROM firewall_zones ORDER BY name"#,
-            )
-            .fetch_all(self.pool)
-            .await
-            .context("Failed to fetch firewall zones")?;
+        )
+        .fetch_all(self.pool)
+        .await
+        .context("Failed to fetch firewall zones")?;
 
         let mut zones = Vec::with_capacity(zone_rows.len());
-        for (id, name, description, is_wan, masquerade_ipv4, input_policy, forward_policy) in
-            zone_rows
-        {
+        for (id, name, description, is_wan, masquerade_ipv4, input_policy) in zone_rows {
             // Get interfaces for this zone
             let interface_rows = sqlx::query_as::<_, (String,)>(
                 "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
@@ -83,7 +80,6 @@ impl<'a> FirewallDb<'a> {
                 is_wan,
                 masquerade_ipv4,
                 default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
-                default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
             });
         }
 
@@ -92,9 +88,9 @@ impl<'a> FirewallDb<'a> {
 
     /// Get a single firewall zone by ID
     pub async fn get_firewall_zone(&self, id: i64) -> Result<Option<FirewallZone>> {
-        let row = sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String, String)>(
+        let row = sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String)>(
             r#"SELECT id, name, description, is_wan, masquerade_ipv4,
-                      default_input_policy, default_forward_policy
+                      default_input_policy
                FROM firewall_zones WHERE id = ?"#,
         )
         .bind(id)
@@ -103,15 +99,7 @@ impl<'a> FirewallDb<'a> {
         .context("Failed to fetch firewall zone")?;
 
         match row {
-            Some((
-                id,
-                name,
-                description,
-                is_wan,
-                masquerade_ipv4,
-                input_policy,
-                forward_policy,
-            )) => {
+            Some((id, name, description, is_wan, masquerade_ipv4, input_policy)) => {
                 let interface_rows = sqlx::query_as::<_, (String,)>(
                     "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
                 )
@@ -131,7 +119,6 @@ impl<'a> FirewallDb<'a> {
                     is_wan,
                     masquerade_ipv4,
                     default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
-                    default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
                 }))
             }
             None => Ok(None),
@@ -140,9 +127,9 @@ impl<'a> FirewallDb<'a> {
 
     /// Get a firewall zone by name
     pub async fn get_firewall_zone_by_name(&self, name: &str) -> Result<Option<FirewallZone>> {
-        let row = sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String, String)>(
+        let row = sqlx::query_as::<_, (i64, String, Option<String>, bool, bool, String)>(
             r#"SELECT id, name, description, is_wan, masquerade_ipv4,
-                      default_input_policy, default_forward_policy
+                      default_input_policy
                FROM firewall_zones WHERE name = ?"#,
         )
         .bind(name)
@@ -151,15 +138,7 @@ impl<'a> FirewallDb<'a> {
         .context("Failed to fetch firewall zone by name")?;
 
         match row {
-            Some((
-                id,
-                name,
-                description,
-                is_wan,
-                masquerade_ipv4,
-                input_policy,
-                forward_policy,
-            )) => {
+            Some((id, name, description, is_wan, masquerade_ipv4, input_policy)) => {
                 let interface_rows = sqlx::query_as::<_, (String,)>(
                     "SELECT interface_name FROM firewall_zone_interfaces WHERE zone_id = ?",
                 )
@@ -179,7 +158,6 @@ impl<'a> FirewallDb<'a> {
                     is_wan,
                     masquerade_ipv4,
                     default_input_policy: input_policy.parse().unwrap_or(FirewallPolicy::Drop),
-                    default_forward_policy: forward_policy.parse().unwrap_or(FirewallPolicy::Drop),
                 }))
             }
             None => Ok(None),
@@ -199,7 +177,7 @@ impl<'a> FirewallDb<'a> {
             sqlx::query(
                 r#"UPDATE firewall_zones SET
                    name = ?, description = ?, is_wan = ?, masquerade_ipv4 = ?,
-                   default_input_policy = ?, default_forward_policy = ?,
+                   default_input_policy = ?,
                    updated_at = strftime('%s', 'now')
                    WHERE id = ?"#,
             )
@@ -208,7 +186,6 @@ impl<'a> FirewallDb<'a> {
             .bind(zone.is_wan)
             .bind(zone.masquerade_ipv4)
             .bind(zone.default_input_policy.to_string())
-            .bind(zone.default_forward_policy.to_string())
             .bind(id)
             .execute(&mut *tx)
             .await
@@ -227,15 +204,14 @@ impl<'a> FirewallDb<'a> {
             let result = sqlx::query(
                 r#"INSERT INTO firewall_zones
                    (name, description, is_wan, masquerade_ipv4, default_input_policy,
-                    default_forward_policy, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
             )
             .bind(&zone.name)
             .bind(&zone.description)
             .bind(zone.is_wan)
             .bind(zone.masquerade_ipv4)
             .bind(zone.default_input_policy.to_string())
-            .bind(zone.default_forward_policy.to_string())
             .execute(&mut *tx)
             .await
             .context("Failed to insert firewall zone")?;

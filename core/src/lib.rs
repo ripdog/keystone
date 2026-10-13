@@ -1720,8 +1720,6 @@ pub struct FirewallZone {
     pub masquerade_ipv4: bool,
     /// Default policy for incoming traffic to the router
     pub default_input_policy: FirewallPolicy,
-    /// Default policy for forwarded traffic from this zone
-    pub default_forward_policy: FirewallPolicy,
 }
 
 impl Default for FirewallZone {
@@ -1734,7 +1732,6 @@ impl Default for FirewallZone {
             is_wan: false,
             masquerade_ipv4: false,
             default_input_policy: FirewallPolicy::Drop,
-            default_forward_policy: FirewallPolicy::Drop,
         }
     }
 }
@@ -3521,13 +3518,31 @@ mod tests {
             is_wan: false,
             masquerade_ipv4: false,
             default_input_policy: FirewallPolicy::Accept,
-            default_forward_policy: FirewallPolicy::Accept,
         };
 
         let json = serde_json::to_string(&zone).unwrap();
         let deserialized: FirewallZone = serde_json::from_str(&json).unwrap();
 
         assert_eq!(zone, deserialized);
+    }
+
+    #[test]
+    fn firewall_zone_ignores_retired_forward_policy_field() {
+        // Clients written before the field was removed still send it.
+        let json = r#"{
+            "id": null,
+            "name": "lan",
+            "description": null,
+            "interfaces": ["eth1"],
+            "is_wan": false,
+            "masquerade_ipv4": false,
+            "default_input_policy": "accept",
+            "default_forward_policy": "accept"
+        }"#;
+        let zone: FirewallZone = serde_json::from_str(json).unwrap();
+
+        assert_eq!(zone.name, "lan");
+        assert_eq!(zone.default_input_policy, FirewallPolicy::Accept);
     }
 
     #[test]

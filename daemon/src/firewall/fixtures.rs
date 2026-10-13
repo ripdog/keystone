@@ -23,7 +23,6 @@ fn zone(
         is_wan,
         masquerade_ipv4,
         default_input_policy: input,
-        default_forward_policy: FirewallPolicy::Drop,
     }
 }
 

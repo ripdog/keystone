@@ -111,6 +111,13 @@ async fn save_config(
     Json(request): Json<Req<SaveDnsmasqConfig>>,
 ) -> Result<Json<Res<SaveDnsmasqConfig>>, AppError> {
     info!("Saving dnsmasq config");
+    let errors = crate::config_validation::validate_dnsmasq_config(&request.config);
+    if !errors.is_empty() {
+        return Ok(Json(SaveDnsmasqConfigResponse {
+            success: false,
+            message: errors.join("; "),
+        }));
+    }
     let pool = state.db.pool();
     dnsmasq::save_dnsmasq_config(pool, &request.config).await?;
     Ok(Json(SaveDnsmasqConfigResponse {
@@ -139,29 +146,6 @@ async fn save_range(
     Json(request): Json<Req<SaveDhcpRange>>,
 ) -> Result<Json<Res<SaveDhcpRange>>, AppError> {
     info!("Saving DHCP range: {}", request.range.name);
-
-    // Validate
-    if request.range.name.is_empty() {
-        return Ok(Json(SaveDhcpRangeResponse {
-            success: false,
-            message: "Range name is required".to_string(),
-            range_id: None,
-        }));
-    }
-    if request.range.interface.is_empty() {
-        return Ok(Json(SaveDhcpRangeResponse {
-            success: false,
-            message: "Interface is required".to_string(),
-            range_id: None,
-        }));
-    }
-    if request.range.start_address.is_empty() || request.range.end_address.is_empty() {
-        return Ok(Json(SaveDhcpRangeResponse {
-            success: false,
-            message: "Start and end addresses are required".to_string(),
-            range_id: None,
-        }));
-    }
 
     let configs = state.db.get_interface_configs().await?;
     let errors = crate::config_validation::validate_dhcp_range(&request.range, &configs);
@@ -220,22 +204,6 @@ async fn save_static_lease(
     Json(request): Json<Req<SaveStaticLease>>,
 ) -> Result<Json<Res<SaveStaticLease>>, AppError> {
     info!("Saving static lease: {}", request.lease.mac_address);
-
-    // Validate
-    if request.lease.mac_address.is_empty() && request.lease.client_id.is_none() {
-        return Ok(Json(SaveStaticLeaseResponse {
-            success: false,
-            message: "MAC address or client ID is required".to_string(),
-            lease_id: None,
-        }));
-    }
-    if request.lease.ip_address.is_empty() {
-        return Ok(Json(SaveStaticLeaseResponse {
-            success: false,
-            message: "IP address is required".to_string(),
-            lease_id: None,
-        }));
-    }
 
     let pool = state.db.pool();
     let configs = state.db.get_interface_configs().await?;
@@ -296,18 +264,11 @@ async fn save_option(
 ) -> Result<Json<Res<SaveDhcpOption>>, AppError> {
     info!("Saving DHCP option: {}", request.option.option);
 
-    // Validate
-    if request.option.option.is_empty() {
+    let errors = crate::config_validation::validate_dhcp_option(&request.option);
+    if !errors.is_empty() {
         return Ok(Json(SaveDhcpOptionResponse {
             success: false,
-            message: "Option name/number is required".to_string(),
-            option_id: None,
-        }));
-    }
-    if request.option.value.is_empty() {
-        return Ok(Json(SaveDhcpOptionResponse {
-            success: false,
-            message: "Option value is required".to_string(),
+            message: errors.join("; "),
             option_id: None,
         }));
     }
@@ -360,18 +321,11 @@ async fn save_host(
 ) -> Result<Json<Res<SaveHostRecord>>, AppError> {
     info!("Saving host record");
 
-    // Validate
-    if request.record.hostnames.is_empty() {
+    let errors = crate::config_validation::validate_host_record(&request.record);
+    if !errors.is_empty() {
         return Ok(Json(SaveHostRecordResponse {
             success: false,
-            message: "At least one hostname is required".to_string(),
-            record_id: None,
-        }));
-    }
-    if request.record.ipv4_address.is_none() && request.record.ipv6_address.is_none() {
-        return Ok(Json(SaveHostRecordResponse {
-            success: false,
-            message: "At least one IP address (IPv4 or IPv6) is required".to_string(),
+            message: errors.join("; "),
             record_id: None,
         }));
     }
@@ -427,18 +381,11 @@ async fn save_cname(
         request.record.alias, request.record.target
     );
 
-    // Validate
-    if request.record.alias.is_empty() {
+    let errors = crate::config_validation::validate_cname_record(&request.record);
+    if !errors.is_empty() {
         return Ok(Json(SaveCnameRecordResponse {
             success: false,
-            message: "Alias is required".to_string(),
-            record_id: None,
-        }));
-    }
-    if request.record.target.is_empty() {
-        return Ok(Json(SaveCnameRecordResponse {
-            success: false,
-            message: "Target is required".to_string(),
+            message: errors.join("; "),
             record_id: None,
         }));
     }
@@ -491,11 +438,11 @@ async fn save_override(
 ) -> Result<Json<Res<SaveAddressOverride>>, AppError> {
     info!("Saving address override: {}", request.override_entry.domain);
 
-    // Validate
-    if request.override_entry.domain.is_empty() {
+    let errors = crate::config_validation::validate_address_override(&request.override_entry);
+    if !errors.is_empty() {
         return Ok(Json(SaveAddressOverrideResponse {
             success: false,
-            message: "Domain is required".to_string(),
+            message: errors.join("; "),
             override_id: None,
         }));
     }

@@ -5,10 +5,11 @@
 
 use ipnet::{IpNet, Ipv4Net};
 use keystone_core::{
-    BridgeConfig, CaddyConfig, DhcpMode, DnsmasqDhcpRange, DnsmasqStaticLease, FirewallZone,
-    InterfaceConfig, InterfaceRole, VlanConfig,
+    BridgeConfig, CaddyConfig, DhcpMode, DnsmasqAddressAction, DnsmasqAddressOverride,
+    DnsmasqCnameRecord, DnsmasqConfig, DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord,
+    DnsmasqStaticLease, FirewallZone, InterfaceConfig, InterfaceRole, VlanConfig,
 };
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Static IPv4 networks (with host address) configured on an interface.
 pub fn static_ipv4(config: &InterfaceConfig) -> Vec<Ipv4Net> {
@@ -120,6 +121,16 @@ pub fn validate_interface_configs(configs: &[InterfaceConfig]) -> Vec<String> {
 /// Validate a DHCP range against the interface configurations.
 pub fn validate_dhcp_range(range: &DnsmasqDhcpRange, configs: &[InterfaceConfig]) -> Vec<String> {
     let mut errors = Vec::new();
+    if range.name.is_empty() {
+        errors.push("Range name is required".to_owned());
+    }
+    if range.interface.is_empty() {
+        errors.push("Interface is required".to_owned());
+    }
+    if range.start_address.is_empty() || range.end_address.is_empty() {
+        errors.push("Start and end addresses are required".to_owned());
+        return errors;
+    }
     let name = &range.name;
     let start = range.start_address.parse::<IpAddr>();
     let end = range.end_address.parse::<IpAddr>();
@@ -191,6 +202,152 @@ pub fn validate_dhcp_range(range: &DnsmasqDhcpRange, configs: &[InterfaceConfig]
     errors
 }
 
+/// A DNS name as dnsmasq takes it in host records, CNAMEs and overrides:
+/// dot-separated labels of letters, digits, hyphens and underscores, with no
+/// label starting or ending in a hyphen. One trailing dot is allowed.
+pub fn valid_dns_name(name: &str) -> bool {
+    let name = name.strip_suffix('.').unwrap_or(name);
+    !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+}
+
+/// A MAC address as written in a dhcp-host line: six colon-separated octets,
+/// each two hex digits or `*` as a wildcard.
+pub fn valid_mac_pattern(mac: &str) -> bool {
+    let octets: Vec<&str> = mac.split(':').collect();
+    octets.len() == 6
+        && octets.iter().all(|octet| {
+            *octet == "*" || (octet.len() == 2 && octet.bytes().all(|b| b.is_ascii_hexdigit()))
+        })
+}
+
+/// Validate the global dnsmasq settings that are written as directives: the
+/// local domain, and each upstream server's address, port and domain.
+pub fn validate_dnsmasq_config(config: &DnsmasqConfig) -> Vec<String> {
+    let mut errors = Vec::new();
+    if let Some(domain) = &config.local_domain
+        && !valid_dns_name(domain)
+    {
+        errors.push(format!(
+            "Local domain {domain:?} is not a valid domain name"
+        ));
+    }
+    for server in &config.upstream_servers {
+        if server.address.parse::<IpAddr>().is_err() && !valid_dns_name(&server.address) {
+            errors.push(format!(
+                "Upstream server {:?} is not an IP address or hostname",
+                server.address
+            ));
+        }
+        if server.port == Some(0) {
+            errors.push(format!("Upstream server {:?} uses port 0", server.address));
+        }
+        if let Some(domain) = &server.domain
+            && !valid_dns_name(domain)
+        {
+            errors.push(format!(
+                "Upstream server {:?} is limited to {domain:?}, which is not a valid domain name",
+                server.address
+            ));
+        }
+    }
+    errors
+}
+
+/// Validate a DNS host record: at least one name and address, and their syntax.
+pub fn validate_host_record(record: &DnsmasqHostRecord) -> Vec<String> {
+    let mut errors = Vec::new();
+    if record.hostnames.is_empty() {
+        errors.push("At least one hostname is required".to_owned());
+    }
+    if record.ipv4_address.is_none() && record.ipv6_address.is_none() {
+        errors.push("At least one IP address (IPv4 or IPv6) is required".to_owned());
+    }
+    for name in &record.hostnames {
+        if !valid_dns_name(name) {
+            errors.push(format!("Host record: {name:?} is not a valid hostname"));
+        }
+    }
+    if let Some(ipv4) = &record.ipv4_address
+        && ipv4.parse::<Ipv4Addr>().is_err()
+    {
+        errors.push(format!("Host record: {ipv4:?} is not a valid IPv4 address"));
+    }
+    if let Some(ipv6) = &record.ipv6_address
+        && ipv6.parse::<Ipv6Addr>().is_err()
+    {
+        errors.push(format!("Host record: {ipv6:?} is not a valid IPv6 address"));
+    }
+    errors
+}
+
+/// Validate the alias and target of a CNAME record.
+pub fn validate_cname_record(record: &DnsmasqCnameRecord) -> Vec<String> {
+    let mut errors = Vec::new();
+    for (role, label, name) in [
+        ("alias", "Alias", &record.alias),
+        ("target", "Target", &record.target),
+    ] {
+        if name.is_empty() {
+            errors.push(format!("{label} is required"));
+        } else if !valid_dns_name(name) {
+            errors.push(format!(
+                "CNAME record: {role} {name:?} is not a valid hostname"
+            ));
+        }
+    }
+    errors
+}
+
+/// Validate a custom DHCP option: both the option and its value are required.
+pub fn validate_dhcp_option(option: &DnsmasqDhcpOption) -> Vec<String> {
+    let mut errors = Vec::new();
+    if option.option.is_empty() {
+        errors.push("Option name/number is required".to_owned());
+    }
+    if option.value.is_empty() {
+        errors.push("Option value is required".to_owned());
+    }
+    errors
+}
+
+/// Validate an address override's domain pattern and, for redirects, its address.
+pub fn validate_address_override(entry: &DnsmasqAddressOverride) -> Vec<String> {
+    let mut errors = Vec::new();
+    if entry.domain.is_empty() {
+        errors.push("Domain is required".to_owned());
+        return errors;
+    }
+    let domain = entry.domain.strip_prefix("*.").unwrap_or(&entry.domain);
+    if !valid_dns_name(domain) {
+        errors.push(format!(
+            "Address override: {:?} is not a valid domain (wildcards are written as *.example.com)",
+            entry.domain
+        ));
+    }
+    if entry.action == DnsmasqAddressAction::Redirect
+        && entry
+            .redirect_address
+            .as_deref()
+            .is_none_or(|addr| addr.parse::<IpAddr>().is_err())
+    {
+        errors.push(format!(
+            "Address override: redirect target {:?} is not a valid IP address",
+            entry.redirect_address.as_deref().unwrap_or_default()
+        ));
+    }
+    errors
+}
+
 /// Validate a static lease against existing leases and router addresses.
 pub fn validate_static_lease(
     lease: &DnsmasqStaticLease,
@@ -198,6 +355,20 @@ pub fn validate_static_lease(
     configs: &[InterfaceConfig],
 ) -> Vec<String> {
     let mut errors = Vec::new();
+    if lease.mac_address.is_empty() && lease.client_id.is_none() {
+        errors.push("MAC address or client ID is required".to_owned());
+    }
+    if lease.ip_address.is_empty() {
+        errors.push("IP address is required".to_owned());
+        return errors;
+    }
+    // dhcp-host joins the MAC with commas, so a malformed value would inject fields.
+    if !lease.mac_address.is_empty() && !valid_mac_pattern(&lease.mac_address) {
+        errors.push(format!(
+            "Static lease: {:?} is not a valid MAC address (expected six colon-separated octets such as 00:11:22:33:44:55)",
+            lease.mac_address
+        ));
+    }
     let ip = match lease.ip_address.parse::<IpAddr>() {
         Ok(ip) => ip,
         Err(_) => {
@@ -333,7 +504,9 @@ pub fn interface_references(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use keystone_core::{DhcpPrefixDelegationConfig, StaticAddress, StaticRoute};
+    use keystone_core::{
+        DhcpPrefixDelegationConfig, DnsmasqUpstreamServer, StaticAddress, StaticRoute,
+    };
 
     fn addr(a: &str) -> StaticAddress {
         StaticAddress {
@@ -556,6 +729,198 @@ mod tests {
                 &cfgs
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn global_dnsmasq_names_and_upstreams_must_be_well_formed() {
+        let mut config = DnsmasqConfig {
+            local_domain: Some("lan".into()),
+            upstream_servers: vec![
+                DnsmasqUpstreamServer {
+                    address: "1.1.1.1".into(),
+                    port: Some(853),
+                    domain: None,
+                },
+                DnsmasqUpstreamServer {
+                    address: "dns.example".into(),
+                    port: None,
+                    domain: Some("corp.example".into()),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(validate_dnsmasq_config(&config).is_empty());
+
+        config.local_domain = Some("lan/x".into());
+        assert!(validate_dnsmasq_config(&config)[0].contains("Local domain"));
+        config.local_domain = Some(String::new());
+        assert!(!validate_dnsmasq_config(&config).is_empty());
+        config.local_domain = None;
+
+        config.upstream_servers[0].address = "1.1.1.1, 9.9.9.9".into();
+        config.upstream_servers[0].port = Some(0);
+        config.upstream_servers[1].domain = Some("corp example".into());
+        let errors = validate_dnsmasq_config(&config);
+        assert_eq!(errors.len(), 3, "{errors:?}");
+    }
+
+    #[test]
+    fn required_fields_are_reported_by_their_validators() {
+        let host = DnsmasqHostRecord::default();
+        let errors = validate_host_record(&host);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e == "At least one hostname is required")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.starts_with("At least one IP address"))
+        );
+        let cname = validate_cname_record(&DnsmasqCnameRecord::default());
+        assert_eq!(cname, ["Alias is required", "Target is required"]);
+        assert_eq!(
+            validate_address_override(&DnsmasqAddressOverride::default()),
+            ["Domain is required"]
+        );
+        assert_eq!(
+            validate_dhcp_option(&DnsmasqDhcpOption::default()),
+            ["Option name/number is required", "Option value is required"]
+        );
+        let lease = DnsmasqStaticLease {
+            ip_address: "192.168.1.10".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            validate_static_lease(&lease, &[], &[]),
+            ["MAC address or client ID is required"]
+        );
+        let range = DnsmasqDhcpRange::default();
+        let errors = validate_dhcp_range(&range, &[]);
+        assert!(
+            errors.contains(&"Range name is required".to_owned()),
+            "{errors:?}"
+        );
+        assert!(
+            errors.contains(&"Start and end addresses are required".to_owned()),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn mac_patterns_are_six_colon_separated_octets() {
+        assert!(valid_mac_pattern("00:11:22:33:44:55"));
+        assert!(valid_mac_pattern("AA:bb:*:*:*:*"));
+        for bad in [
+            "00:11:22:33:44",
+            "00:11:22:33:44,55",
+            "00-11-22-33-44-55",
+            "00:11:22:33:44:5g",
+            "00:11:22:33:44:555",
+            "0:1:2:3:4:5",
+            "00:11:22:33:44:55\n",
+        ] {
+            assert!(!valid_mac_pattern(bad), "{bad:?}");
+        }
+        let cfgs = [iface("lan", InterfaceRole::LAN, &["192.168.1.1/24"])];
+        let errors =
+            validate_static_lease(&lease(2, "00:11:22:33:44,55", "192.168.1.11"), &[], &cfgs);
+        assert!(
+            errors.iter().any(|e| e.contains("MAC address")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn host_records_cnames_and_overrides_need_names_and_addresses() {
+        let record = |names: &[&str], v4: Option<&str>, v6: Option<&str>| DnsmasqHostRecord {
+            hostnames: names.iter().map(|n| n.to_string()).collect(),
+            ipv4_address: v4.map(str::to_owned),
+            ipv6_address: v6.map(str::to_owned),
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(
+            validate_host_record(&record(
+                &["nas.lan.example", "nas"],
+                Some("192.168.1.20"),
+                None
+            ))
+            .is_empty()
+        );
+        assert!(validate_host_record(&record(&["nas"], None, Some("fd00::20"))).is_empty());
+        for bad in [
+            "nas.example
+dhcp-option=3,1.2.3.4",
+            "a,b",
+            "-bad.example",
+            "bad..example",
+            "",
+            "sp ace.example",
+        ] {
+            assert!(
+                !validate_host_record(&record(&[bad], Some("192.168.1.20"), None)).is_empty(),
+                "{bad:?}"
+            );
+        }
+        assert!(!validate_host_record(&record(&["nas"], Some("192.168.1.256"), None)).is_empty());
+        assert!(!validate_host_record(&record(&["nas"], Some(""), None)).is_empty());
+        assert!(!validate_host_record(&record(&["nas"], None, Some("nope"))).is_empty());
+
+        let cname = |alias: &str, target: &str| DnsmasqCnameRecord {
+            alias: alias.into(),
+            target: target.into(),
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(validate_cname_record(&cname("files.example", "nas.example.")).is_empty());
+        assert!(!validate_cname_record(&cname("files.example", "nas example")).is_empty());
+        assert!(!validate_cname_record(&cname("files\nexample", "nas.example")).is_empty());
+
+        let entry = |domain: &str, action, redirect: Option<&str>| DnsmasqAddressOverride {
+            domain: domain.into(),
+            action,
+            redirect_address: redirect.map(str::to_owned),
+            enabled: true,
+            ..Default::default()
+        };
+        assert!(
+            validate_address_override(&entry("*.ads.example", DnsmasqAddressAction::Block, None))
+                .is_empty()
+        );
+        assert!(
+            validate_address_override(&entry(
+                "ads.example",
+                DnsmasqAddressAction::Null,
+                Some("junk")
+            ))
+            .is_empty()
+        );
+        assert!(
+            validate_address_override(&entry(
+                "ads.example",
+                DnsmasqAddressAction::Redirect,
+                Some("10.0.0.1")
+            ))
+            .is_empty()
+        );
+        assert!(
+            !validate_address_override(&entry("ads.example", DnsmasqAddressAction::Redirect, None))
+                .is_empty()
+        );
+        assert!(
+            !validate_address_override(&entry(
+                "ads.example",
+                DnsmasqAddressAction::Redirect,
+                Some("nope")
+            ))
+            .is_empty()
+        );
+        assert!(
+            !validate_address_override(&entry("ads example", DnsmasqAddressAction::Block, None))
+                .is_empty()
         );
     }
 

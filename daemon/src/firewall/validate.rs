@@ -153,6 +153,13 @@ pub fn validate_firewall_config(cfg: &FirewallConfig) -> Vec<String> {
         .collect();
     let mut errors = Vec::new();
 
+    for (i, zone) in cfg.zones.iter().enumerate() {
+        errors.extend(crate::config_validation::zone_interface_conflicts(
+            zone,
+            &cfg.zones[i + 1..],
+        ));
+    }
+
     for rule in &cfg.input_rules {
         errors.extend(validate_input_rule(rule));
         if rule.enabled {

@@ -898,7 +898,7 @@ pub struct DhcpLease {
 // ============================================================================
 
 /// Complete dnsmasq state for UI
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DnsmasqStateResponse {
     pub config: DnsmasqConfig,
     pub dhcp_ranges: Vec<DnsmasqDhcpRange>,

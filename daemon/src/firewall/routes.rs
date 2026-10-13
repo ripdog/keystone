@@ -144,6 +144,16 @@ async fn save_zone(
         }));
     }
 
+    let zones = state.db.get_firewall_zones().await?;
+    let errors = crate::config_validation::zone_interface_conflicts(&zone, &zones);
+    if !errors.is_empty() {
+        return Ok(Json(SaveFirewallZoneResponse {
+            success: false,
+            message: errors.join("; "),
+            zone_id: None,
+        }));
+    }
+
     let id = state.db.save_firewall_zone(&zone).await?;
     Ok(Json(SaveFirewallZoneResponse {
         success: true,

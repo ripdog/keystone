@@ -7,6 +7,8 @@ mod apply;
 mod auth;
 mod caddy;
 mod config;
+mod config_validation;
+mod consistency;
 mod db;
 mod dnsmasq;
 mod firewall;
@@ -420,6 +422,21 @@ async fn get_system_status(
     }
 
     response.checks.push(db_check);
+
+    // Configuration consistency (warnings about settings that make no sense)
+    if settings.setup_complete {
+        for check in consistency::config_checks(&state.db).await {
+            match check.severity {
+                CheckSeverity::Error => {
+                    response.error_count += 1;
+                    response.all_checks_pass = false;
+                }
+                CheckSeverity::Warning => response.warning_count += 1,
+                CheckSeverity::Pass => {}
+            }
+            response.checks.push(check);
+        }
+    }
 
     Ok(Json(response))
 }
@@ -888,18 +905,14 @@ async fn save_interface_config(
         }));
     }
 
-    // Validate addresses format (basic CIDR check)
-    for addr in &request.config.addresses {
-        if !addr.address.contains('/') {
-            return Ok(Json(SaveInterfaceConfigResponse {
-                success: false,
-                message: format!(
-                    "Address '{}' must be in CIDR notation (e.g., 192.168.1.1/24)",
-                    addr.address
-                ),
-                config_id: None,
-            }));
-        }
+    // Reject addresses, gateways, routes, DNS servers, MTU and PD uplinks that make no sense
+    let errors = config_validation::validate_interface_config(&request.config);
+    if !errors.is_empty() {
+        return Ok(Json(SaveInterfaceConfigResponse {
+            success: false,
+            message: errors.join("; "),
+            config_id: None,
+        }));
     }
 
     // A bridge member's .network file replaces its own interface config
@@ -935,6 +948,34 @@ async fn delete_interface_config(
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Result<Json<SaveInterfaceConfigResponse>, AppError> {
     info!("Deleting interface config for: {}", name);
+
+    // Refuse while other configuration still depends on this interface
+    let configs = state.db.get_interface_configs().await?;
+    let zones = state.db.get_firewall_zones().await?;
+    let ranges = dnsmasq::load_dhcp_ranges(state.db.pool()).await?;
+    let caddy_config = caddy::load_caddy_config(state.db.pool()).await?;
+    let vlans = state.db.get_all_vlans().await?;
+    let bridges = state.db.get_all_bridges().await?;
+    let refs = config_validation::interface_references(
+        &name,
+        &configs,
+        &zones,
+        &ranges,
+        &caddy_config,
+        &vlans,
+        &bridges,
+    );
+    if !refs.is_empty() {
+        return Ok(Json(SaveInterfaceConfigResponse {
+            success: false,
+            message: format!(
+                "Cannot delete '{}': it is still referenced by {}. Remove those references first.",
+                name,
+                refs.join(", ")
+            ),
+            config_id: None,
+        }));
+    }
 
     state.db.delete_interface_config(&name).await?;
 

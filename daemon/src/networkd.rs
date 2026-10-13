@@ -145,7 +145,10 @@ pub fn apply_configuration(
         }
     }
 
-    let topology_errors = validate_topology(configs, vlans, bridges);
+    let mut topology_errors = validate_topology(configs, vlans, bridges);
+    topology_errors.extend(crate::config_validation::validate_interface_configs(
+        configs,
+    ));
     if !topology_errors.is_empty() {
         anyhow::bail!("{}", topology_errors.join("; "));
     }

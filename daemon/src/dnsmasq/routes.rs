@@ -158,6 +158,16 @@ async fn save_range(
         }));
     }
 
+    let configs = state.db.get_interface_configs().await?;
+    let errors = crate::config_validation::validate_dhcp_range(&request.range, &configs);
+    if !errors.is_empty() {
+        return Ok(Json(SaveDhcpRangeResponse {
+            success: false,
+            message: errors.join("; "),
+            range_id: None,
+        }));
+    }
+
     let pool = state.db.pool();
     let id = dnsmasq::save_dhcp_range(pool, &request.range).await?;
     Ok(Json(SaveDhcpRangeResponse {
@@ -223,6 +233,17 @@ async fn save_static_lease(
     }
 
     let pool = state.db.pool();
+    let configs = state.db.get_interface_configs().await?;
+    let existing = dnsmasq::load_static_leases(pool).await?;
+    let errors =
+        crate::config_validation::validate_static_lease(&request.lease, &existing, &configs);
+    if !errors.is_empty() {
+        return Ok(Json(SaveStaticLeaseResponse {
+            success: false,
+            message: errors.join("; "),
+            lease_id: None,
+        }));
+    }
     let id = dnsmasq::save_static_lease(pool, &request.lease).await?;
     Ok(Json(SaveStaticLeaseResponse {
         success: true,

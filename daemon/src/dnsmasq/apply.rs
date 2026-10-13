@@ -277,6 +277,19 @@ pub async fn apply_dnsmasq_config(pool: &SqlitePool) -> Result<()> {
         return Ok(());
     }
 
+    // Re-check ranges and leases against current interface configuration.
+    let interface_configs = crate::db::interfaces::InterfacesDb::new(pool)
+        .get_interface_configs()
+        .await?;
+    let semantic_errors = crate::config_validation::validate_dhcp_state(
+        &state.dhcp_ranges,
+        &state.static_leases,
+        &interface_configs,
+    );
+    if !semantic_errors.is_empty() {
+        anyhow::bail!("Invalid DHCP configuration: {}", semantic_errors.join("; "));
+    }
+
     // Generate configuration and validate it before touching the live file.
     let content = generate_dnsmasq_config(&state);
     validate_candidate_config(&content)?;

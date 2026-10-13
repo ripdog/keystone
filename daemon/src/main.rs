@@ -32,15 +32,18 @@ use axum::{
 };
 use config::Config;
 use db::Database;
+use keystone_core::api::{
+    ConfirmNetworkd, DeleteUser, Endpoint, Login, Req, Res, SaveBridge, SaveGlobalSettings,
+    SaveInterfaceConfig, SaveManagedInterfaces, SaveUser, SaveVlan,
+};
 use keystone_core::{
     ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse, DashboardResponse,
-    DeleteUserRequest, DeleteUserResponse, DeleteVlanResponse, GlobalSettingsResponse,
-    InterfaceConfigResponse, InterfaceConfigsResponse, InterfaceCounters, KeystoneError,
-    LoginRequest, LoginResponse, ManagedInterfacesResponse, RenewInterfaceResponse,
-    SaveGlobalSettingsRequest, SaveGlobalSettingsResponse, SaveInterfaceConfigRequest,
-    SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
-    SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest, SaveVlanConfigResponse, SystemCheck,
-    SystemState, SystemStatusResponse, UsersResponse, VlanConfigResponse, VlanConfigsResponse,
+    DeleteUserResponse, DeleteVlanResponse, GlobalSettingsResponse, InterfaceConfigResponse,
+    InterfaceConfigsResponse, InterfaceCounters, KeystoneError, LoginResponse,
+    ManagedInterfacesResponse, RenewInterfaceResponse, SaveGlobalSettingsResponse,
+    SaveInterfaceConfigResponse, SaveManagedInterfacesResponse, SaveUserResponse,
+    SaveVlanConfigResponse, SystemCheck, SystemState, SystemStatusResponse, UsersResponse,
+    VlanConfigResponse, VlanConfigsResponse,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -186,15 +189,15 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard", get(get_dashboard))
         .route("/apply-networkd", post(apply_networkd))
         .route("/apply-all", post(apply_all))
-        .route("/networkd/confirm", post(confirm_networkd))
+        .route(ConfirmNetworkd::PATH, post(confirm_networkd))
         .route("/networkd/rollback", post(rollback_networkd))
         .route("/networkd/status", get(networkd_status))
         .route("/networkd-preview", get(networkd_preview))
         .route("/managed-interfaces", get(get_managed_interfaces))
-        .route("/managed-interfaces", post(save_managed_interfaces))
+        .route(SaveManagedInterfaces::PATH, post(save_managed_interfaces))
         .route("/interface-config", get(get_interface_configs))
         .route("/interface-config/{name}", get(get_interface_config))
-        .route("/interface-config", post(save_interface_config))
+        .route(SaveInterfaceConfig::PATH, post(save_interface_config))
         .route("/interface-config/{name}", delete(delete_interface_config))
         .route("/interfaces/{name}/renew", post(renew_interface))
         .route(
@@ -203,17 +206,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/vlans", get(get_vlans))
         .route("/vlans/{id}", get(get_vlan))
-        .route("/vlans", post(save_vlan))
+        .route(SaveVlan::PATH, post(save_vlan))
         .route("/vlans/{id}", delete(delete_vlan))
         .route("/bridges", get(get_bridges))
         .route("/bridges/{id}", get(get_bridge))
-        .route("/bridges", post(save_bridge))
+        .route(SaveBridge::PATH, post(save_bridge))
         .route("/bridges/{id}", delete(delete_bridge))
         .route("/users", get(get_users))
-        .route("/users", post(save_user))
-        .route("/users", delete(delete_user))
+        .route(SaveUser::PATH, post(save_user))
+        .route(DeleteUser::PATH, delete(delete_user))
         .route("/settings", get(get_global_settings))
-        .route("/settings", post(save_global_settings))
+        .route(SaveGlobalSettings::PATH, post(save_global_settings))
         .route("/complete-setup", post(complete_setup))
         // Merge firewall routes
         .merge(firewall::routes::firewall_routes(firewall_state))
@@ -233,7 +236,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/health", get(health_check))
-        .route("/login", post(login))
+        .route(Login::PATH, post(login))
         .route("/system-status", get(get_system_status))
         .route("/lan-bind-addresses", get(lan_bind_addresses))
         .merge(protected)
@@ -455,8 +458,8 @@ async fn get_system_status(
 /// POST /login - Authenticate and receive JWT token
 async fn login(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<LoginRequest>,
-) -> Result<Json<LoginResponse>, AppError> {
+    Json(request): Json<Req<Login>>,
+) -> Result<Json<Res<Login>>, AppError> {
     info!("Login attempt for user: {}", request.username);
 
     // Bound simultaneous expensive Argon2 verification and limit guesses per
@@ -863,8 +866,8 @@ async fn get_managed_interfaces(
 /// POST /managed-interfaces - Save managed interfaces configuration
 async fn save_managed_interfaces(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<SaveManagedInterfacesRequest>,
-) -> Result<Json<SaveManagedInterfacesResponse>, AppError> {
+    Json(request): Json<Req<SaveManagedInterfaces>>,
+) -> Result<Json<Res<SaveManagedInterfaces>>, AppError> {
     info!("Saving {} managed interfaces", request.interfaces.len());
 
     state
@@ -908,8 +911,8 @@ async fn get_interface_config(
 /// POST /interface-config - Save an interface configuration
 async fn save_interface_config(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<SaveInterfaceConfigRequest>,
-) -> Result<Json<SaveInterfaceConfigResponse>, AppError> {
+    Json(request): Json<Req<SaveInterfaceConfig>>,
+) -> Result<Json<Res<SaveInterfaceConfig>>, AppError> {
     info!("Saving interface config for: {}", request.config.name);
 
     // Validate interface name
@@ -1102,8 +1105,8 @@ async fn get_vlan(
 /// POST /vlans - Save a VLAN configuration
 async fn save_vlan(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<SaveVlanConfigRequest>,
-) -> Result<Json<SaveVlanConfigResponse>, AppError> {
+    Json(request): Json<Req<SaveVlan>>,
+) -> Result<Json<Res<SaveVlan>>, AppError> {
     info!("Saving VLAN config: {}", request.config.name);
 
     // Validate VLAN name
@@ -1214,8 +1217,8 @@ async fn get_bridge(
 /// POST /bridges - Save a bridge configuration
 async fn save_bridge(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<keystone_core::SaveBridgeConfigRequest>,
-) -> Result<Json<keystone_core::SaveBridgeConfigResponse>, AppError> {
+    Json(request): Json<Req<SaveBridge>>,
+) -> Result<Json<Res<SaveBridge>>, AppError> {
     info!("Saving bridge config: {:?}", request.config.name);
 
     // Validate bridge name
@@ -1436,8 +1439,8 @@ async fn apply_networkd(
 /// firewall + networkd session).
 async fn confirm_networkd(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<keystone_core::NetworkdConfirmRequest>,
-) -> Result<Json<keystone_core::NetworkdConfirmResponse>, AppError> {
+    Json(request): Json<Req<ConfirmNetworkd>>,
+) -> Result<Json<Res<ConfirmNetworkd>>, AppError> {
     Ok(Json(
         state.firewall_manager.confirm(&request.session_id).await?,
     ))
@@ -1480,8 +1483,8 @@ async fn get_users(State(state): State<Arc<AppState>>) -> Result<Json<UsersRespo
 /// POST /users - Create or update a user
 async fn save_user(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<SaveUserRequest>,
-) -> Result<Json<SaveUserResponse>, AppError> {
+    Json(request): Json<Req<SaveUser>>,
+) -> Result<Json<Res<SaveUser>>, AppError> {
     info!("Saving user: {}", request.username);
 
     // Validate username
@@ -1557,8 +1560,8 @@ async fn save_user(
 /// DELETE /users - Delete a user
 async fn delete_user(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<DeleteUserRequest>,
-) -> Result<Json<DeleteUserResponse>, AppError> {
+    Json(request): Json<Req<DeleteUser>>,
+) -> Result<Json<Res<DeleteUser>>, AppError> {
     info!("Deleting user id: {}", request.id);
 
     // Don't allow deleting the last user
@@ -1596,8 +1599,8 @@ async fn get_global_settings(
 /// POST /settings - Save global application settings
 async fn save_global_settings(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<SaveGlobalSettingsRequest>,
-) -> Result<Json<SaveGlobalSettingsResponse>, AppError> {
+    Json(request): Json<Req<SaveGlobalSettings>>,
+) -> Result<Json<Res<SaveGlobalSettings>>, AppError> {
     info!(
         "Saving global settings: config_changes_disabled={}",
         request.settings.config_changes_disabled
@@ -1670,6 +1673,123 @@ where
 #[cfg(test)]
 mod tests {
     use super::is_blocked_before_setup;
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use keystone_core::api::{SaveCaddyConfig, SaveDnsmasqConfig, SaveFirewallZone, SaveInputRule};
+    use keystone_core::{
+        CaddyConfig, DnsmasqConfig, FirewallZone, InputRule, SaveCaddyConfigRequest,
+        SaveDnsmasqConfigRequest, SaveFirewallZoneRequest, SaveInputRuleRequest,
+    };
+
+    /// Router built from the same sub-routers as production, on an in-memory
+    /// database, without the auth layer or any system access.
+    async fn test_router() -> Router {
+        let db = Database::new_in_memory().await.unwrap();
+        let networkd = Arc::new(networkd::NetworkdApplyManager::system());
+        let manager = Arc::new(firewall::FirewallApplyManager::new(
+            Arc::new(db.clone()),
+            networkd,
+        ));
+        let state = Arc::new(AppState::new(
+            Arc::new(AuthManager::new(vec![7; 32])),
+            db.clone(),
+            manager.clone(),
+        ));
+        Router::new()
+            .merge(firewall::routes::firewall_routes(
+                firewall::routes::FirewallState {
+                    db: db.clone(),
+                    apply_manager: manager,
+                },
+            ))
+            .merge(dnsmasq::routes::dnsmasq_routes(
+                dnsmasq::routes::DnsmasqState { db: db.clone() },
+            ))
+            .merge(caddy::routes::caddy_routes(caddy::routes::CaddyState {
+                db,
+            }))
+            .with_state(state)
+    }
+
+    /// Send a typed request to the endpoint and assert it reached the handler
+    /// (not unrouted, wrong method, or a body-shape rejection).
+    async fn assert_routed<E: Endpoint>(app: &Router, body: &E::Request) {
+        let request = Request::builder()
+            .method(E::METHOD.as_str())
+            .uri(E::PATH)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(body).unwrap()))
+            .unwrap();
+        let status = app.clone().oneshot(request).await.unwrap().status();
+        assert!(
+            ![
+                StatusCode::NOT_FOUND,
+                StatusCode::METHOD_NOT_ALLOWED,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                StatusCode::BAD_REQUEST,
+            ]
+            .contains(&status),
+            "{} {} was not routed to its handler: {status}",
+            E::METHOD.as_str(),
+            E::PATH
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_endpoints_are_routed_with_their_request_bodies() {
+        let app = test_router().await;
+        assert_routed::<SaveDnsmasqConfig>(
+            &app,
+            &SaveDnsmasqConfigRequest {
+                config: DnsmasqConfig::default(),
+            },
+        )
+        .await;
+        assert_routed::<SaveCaddyConfig>(
+            &app,
+            &SaveCaddyConfigRequest {
+                config: CaddyConfig::default(),
+            },
+        )
+        .await;
+        assert_routed::<SaveFirewallZone>(
+            &app,
+            &SaveFirewallZoneRequest {
+                zone: FirewallZone {
+                    name: "lan".into(),
+                    ..Default::default()
+                },
+            },
+        )
+        .await;
+        assert_routed::<SaveInputRule>(
+            &app,
+            &SaveInputRuleRequest {
+                rule: InputRule {
+                    name: "ssh".into(),
+                    ..Default::default()
+                },
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn bare_body_without_wrapper_is_rejected() {
+        let app = test_router().await;
+        let request = Request::builder()
+            .method("PUT")
+            .uri(SaveDnsmasqConfig::PATH)
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&DnsmasqConfig::default()).unwrap(),
+            ))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
 
     #[test]
     fn pre_setup_allows_firewall_recovery_but_not_mutation() {

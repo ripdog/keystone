@@ -1,5 +1,6 @@
 //! Keystone-managed OpenSSH listener. Changes only our own drop-in, never the
 //! administrator's sshd_config or other files in sshd_config.d.
+use keystone_core::api::{ApplySsh, Endpoint, Req, Res};
 use std::{
     collections::BTreeSet,
     fs::{self, OpenOptions},
@@ -412,8 +413,8 @@ async fn state(State(state): State<Arc<AppState>>) -> Result<Json<SshStateRespon
 
 async fn save(
     State(state): State<Arc<AppState>>,
-    Json(config): Json<SshConfig>,
-) -> Result<Json<SshApplyResponse>, AppError> {
+    Json(config): Json<Req<ApplySsh>>,
+) -> Result<Json<Res<ApplySsh>>, AppError> {
     if state
         .db
         .get_global_settings()
@@ -613,7 +614,7 @@ async fn apply_config(db: &Database, config: &SshConfig) -> Result<()> {
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/ssh", get(state))
-        .route("/ssh/apply", post(save))
+        .route(ApplySsh::PATH, post(save))
 }
 
 #[cfg(test)]

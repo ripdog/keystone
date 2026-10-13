@@ -18,14 +18,17 @@ use axum::{
     extract::{Path, State},
     routing::{delete, get, post, put},
 };
+use keystone_core::api::{
+    Endpoint, Req, Res, SaveAddressOverride, SaveCnameRecord, SaveDhcpOption, SaveDhcpRange,
+    SaveDnsmasqConfig, SaveHostRecord, SaveStaticLease,
+};
 use keystone_core::{
     AddressOverridesResponse, CnameRecordsResponse, DeleteResponse, DhcpLeasesResponse,
     DhcpOptionsResponse, DhcpRangesResponse, DnsmasqApplyResponse, DnsmasqConfig,
-    DnsmasqPreviewResponse, DnsmasqStateResponse, HostRecordsResponse, SaveAddressOverrideRequest,
-    SaveAddressOverrideResponse, SaveCnameRecordRequest, SaveCnameRecordResponse,
-    SaveDhcpOptionRequest, SaveDhcpOptionResponse, SaveDhcpRangeRequest, SaveDhcpRangeResponse,
-    SaveDnsmasqConfigRequest, SaveDnsmasqConfigResponse, SaveHostRecordRequest,
-    SaveHostRecordResponse, SaveStaticLeaseRequest, SaveStaticLeaseResponse, StaticLeasesResponse,
+    DnsmasqPreviewResponse, DnsmasqStateResponse, HostRecordsResponse, SaveAddressOverrideResponse,
+    SaveCnameRecordResponse, SaveDhcpOptionResponse, SaveDhcpRangeResponse,
+    SaveDnsmasqConfigResponse, SaveHostRecordResponse, SaveStaticLeaseResponse,
+    StaticLeasesResponse,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -44,30 +47,30 @@ pub fn dnsmasq_routes(state: DnsmasqState) -> Router<Arc<crate::AppState>> {
         // Global state
         .route("/dnsmasq", get(get_dnsmasq_state))
         .route("/dnsmasq/config", get(get_config))
-        .route("/dnsmasq/config", put(save_config))
+        .route(SaveDnsmasqConfig::PATH, put(save_config))
         // DHCP ranges
         .route("/dnsmasq/ranges", get(get_ranges))
-        .route("/dnsmasq/ranges", post(save_range))
+        .route(SaveDhcpRange::PATH, post(save_range))
         .route("/dnsmasq/ranges/{id}", delete(delete_range))
         // Static leases
         .route("/dnsmasq/leases", get(get_static_leases))
-        .route("/dnsmasq/leases", post(save_static_lease))
+        .route(SaveStaticLease::PATH, post(save_static_lease))
         .route("/dnsmasq/leases/{id}", delete(delete_static_lease))
         // DHCP options
         .route("/dnsmasq/options", get(get_options))
-        .route("/dnsmasq/options", post(save_option))
+        .route(SaveDhcpOption::PATH, post(save_option))
         .route("/dnsmasq/options/{id}", delete(delete_option))
         // Host records
         .route("/dnsmasq/hosts", get(get_hosts))
-        .route("/dnsmasq/hosts", post(save_host))
+        .route(SaveHostRecord::PATH, post(save_host))
         .route("/dnsmasq/hosts/{id}", delete(delete_host))
         // CNAME records
         .route("/dnsmasq/cnames", get(get_cnames))
-        .route("/dnsmasq/cnames", post(save_cname))
+        .route(SaveCnameRecord::PATH, post(save_cname))
         .route("/dnsmasq/cnames/{id}", delete(delete_cname))
         // Address overrides
         .route("/dnsmasq/overrides", get(get_overrides))
-        .route("/dnsmasq/overrides", post(save_override))
+        .route(SaveAddressOverride::PATH, post(save_override))
         .route("/dnsmasq/overrides/{id}", delete(delete_override))
         // Active leases (from lease file)
         .route("/dnsmasq/active-leases", get(get_active_leases_endpoint))
@@ -103,8 +106,8 @@ async fn get_config(State(state): State<DnsmasqState>) -> Result<Json<DnsmasqCon
 /// PUT /dnsmasq/config - Save global dnsmasq config
 async fn save_config(
     State(state): State<DnsmasqState>,
-    Json(request): Json<SaveDnsmasqConfigRequest>,
-) -> Result<Json<SaveDnsmasqConfigResponse>, AppError> {
+    Json(request): Json<Req<SaveDnsmasqConfig>>,
+) -> Result<Json<Res<SaveDnsmasqConfig>>, AppError> {
     info!("Saving dnsmasq config");
     let pool = state.db.pool();
     dnsmasq::save_dnsmasq_config(pool, &request.config).await?;
@@ -131,8 +134,8 @@ async fn get_ranges(
 /// POST /dnsmasq/ranges - Create or update a DHCP range
 async fn save_range(
     State(state): State<DnsmasqState>,
-    Json(request): Json<SaveDhcpRangeRequest>,
-) -> Result<Json<SaveDhcpRangeResponse>, AppError> {
+    Json(request): Json<Req<SaveDhcpRange>>,
+) -> Result<Json<Res<SaveDhcpRange>>, AppError> {
     info!("Saving DHCP range: {}", request.range.name);
 
     // Validate
@@ -212,8 +215,8 @@ async fn get_static_leases(
 /// POST /dnsmasq/leases - Create or update a static lease
 async fn save_static_lease(
     State(state): State<DnsmasqState>,
-    Json(request): Json<SaveStaticLeaseRequest>,
-) -> Result<Json<SaveStaticLeaseResponse>, AppError> {
+    Json(request): Json<Req<SaveStaticLease>>,
+) -> Result<Json<Res<SaveStaticLease>>, AppError> {
     info!("Saving static lease: {}", request.lease.mac_address);
 
     // Validate
@@ -287,8 +290,8 @@ async fn get_options(
 /// POST /dnsmasq/options - Create or update a DHCP option
 async fn save_option(
     State(state): State<DnsmasqState>,
-    Json(request): Json<SaveDhcpOptionRequest>,
-) -> Result<Json<SaveDhcpOptionResponse>, AppError> {
+    Json(request): Json<Req<SaveDhcpOption>>,
+) -> Result<Json<Res<SaveDhcpOption>>, AppError> {
     info!("Saving DHCP option: {}", request.option.option);
 
     // Validate
@@ -351,8 +354,8 @@ async fn get_hosts(
 /// POST /dnsmasq/hosts - Create or update a host record
 async fn save_host(
     State(state): State<DnsmasqState>,
-    Json(request): Json<SaveHostRecordRequest>,
-) -> Result<Json<SaveHostRecordResponse>, AppError> {
+    Json(request): Json<Req<SaveHostRecord>>,
+) -> Result<Json<Res<SaveHostRecord>>, AppError> {
     info!("Saving host record");
 
     // Validate
@@ -415,8 +418,8 @@ async fn get_cnames(
 /// POST /dnsmasq/cnames - Create or update a CNAME record
 async fn save_cname(
     State(state): State<DnsmasqState>,
-    Json(request): Json<SaveCnameRecordRequest>,
-) -> Result<Json<SaveCnameRecordResponse>, AppError> {
+    Json(request): Json<Req<SaveCnameRecord>>,
+) -> Result<Json<Res<SaveCnameRecord>>, AppError> {
     info!(
         "Saving CNAME record: {} -> {}",
         request.record.alias, request.record.target
@@ -482,8 +485,8 @@ async fn get_overrides(
 /// POST /dnsmasq/overrides - Create or update an address override
 async fn save_override(
     State(state): State<DnsmasqState>,
-    Json(request): Json<SaveAddressOverrideRequest>,
-) -> Result<Json<SaveAddressOverrideResponse>, AppError> {
+    Json(request): Json<Req<SaveAddressOverride>>,
+) -> Result<Json<Res<SaveAddressOverride>>, AppError> {
     info!("Saving address override: {}", request.override_entry.domain);
 
     // Validate

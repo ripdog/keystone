@@ -17,17 +17,20 @@ use crate::firewall::{FirewallApplyManager, generate_json, generate_preview};
 use axum::{
     Json, Router,
     extract::{Path, State},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
+};
+use keystone_core::api::{
+    ConfirmFirewall, CreateSimpleForward, Endpoint, ReorderForwardRules, ReorderInputRules, Req,
+    Res, SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule, SaveInputRule,
+    SavePortForward, SaveZoneForward, UpdateSimpleForward,
 };
 use keystone_core::{
-    DeleteResponse, FirewallApplyResponse, FirewallConfigResponse, FirewallConfirmRequest,
-    FirewallConfirmResponse, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
-    FirewallRollbackResponse, FirewallStatusResponse, FirewallZone, FirewallZonesResponse,
-    ForwardRulesResponse, InputRulesResponse, PortForwardsResponse, ReorderRulesRequest,
-    ReorderRulesResponse, SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
-    SaveFirewallZoneRequest, SaveFirewallZoneResponse, SaveForwardRuleRequest,
-    SaveForwardRuleResponse, SaveInputRuleRequest, SaveInputRuleResponse, SavePortForwardRequest,
-    SavePortForwardResponse, SaveZoneForwardRequest, SaveZoneForwardResponse, ZoneForwardsResponse,
+    DeleteResponse, FirewallApplyResponse, FirewallConfigResponse, FirewallGlobalSettingsResponse,
+    FirewallPreviewResponse, FirewallRollbackResponse, FirewallStatusResponse, FirewallZone,
+    FirewallZonesResponse, ForwardRulesResponse, InputRulesResponse, PortForwardsResponse,
+    ReorderRulesResponse, SaveFirewallGlobalSettingsResponse, SaveFirewallZoneResponse,
+    SaveForwardRuleResponse, SaveInputRuleResponse, SavePortForwardResponse,
+    SaveZoneForwardResponse, ZoneForwardsResponse,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -47,49 +50,45 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
         // Zones
         .route("/firewall/zones", get(get_zones))
         .route("/firewall/zones/{id}", get(get_zone))
-        .route("/firewall/zones", post(save_zone))
+        .route(SaveFirewallZone::PATH, post(save_zone))
         .route("/firewall/zones/{id}", delete(delete_zone))
         // Zone forwards
         .route("/firewall/zone-forwards", get(get_zone_forwards))
-        .route("/firewall/zone-forwards", post(save_zone_forward))
+        .route(SaveZoneForward::PATH, post(save_zone_forward))
         .route("/firewall/zone-forwards/{id}", delete(delete_zone_forward))
         // Input rules
         .route("/firewall/input-rules", get(get_input_rules))
-        .route("/firewall/input-rules", post(save_input_rule))
+        .route(SaveInputRule::PATH, post(save_input_rule))
         .route("/firewall/input-rules/{id}", delete(delete_input_rule))
-        .route("/firewall/input-rules/reorder", post(reorder_input_rules))
+        .route(ReorderInputRules::PATH, post(reorder_input_rules))
         // Forward rules
         .route("/firewall/forward-rules", get(get_forward_rules))
-        .route("/firewall/forward-rules", post(save_forward_rule))
+        .route(SaveForwardRule::PATH, post(save_forward_rule))
         .route("/firewall/forward-rules/{id}", delete(delete_forward_rule))
-        .route(
-            "/firewall/forward-rules/reorder",
-            post(reorder_forward_rules),
-        )
+        .route(ReorderForwardRules::PATH, post(reorder_forward_rules))
         // Convenience WAN forwards, derived from regular forward/NAT rules
-        .route(
-            "/firewall/simple-forwards",
-            get(super::simple::list).post(super::simple::create),
-        )
+        .route("/firewall/simple-forwards", get(super::simple::list))
+        .route(CreateSimpleForward::PATH, post(super::simple::create))
         .route(
             "/firewall/simple-forwards/{id}",
-            delete(super::simple::remove).put(super::simple::update),
+            delete(super::simple::remove),
         )
+        .route(UpdateSimpleForward::PATH, put(super::simple::update))
         .route("/firewall/lan-devices", get(super::simple::devices))
         // Legacy DNAT-only endpoints (advanced clients)
         .route("/firewall/port-forwards", get(get_port_forwards))
-        .route("/firewall/port-forwards", post(save_port_forward))
+        .route(SavePortForward::PATH, post(save_port_forward))
         .route("/firewall/port-forwards/{id}", delete(delete_port_forward))
         // Global settings
         .route("/firewall/settings", get(get_global_settings))
-        .route("/firewall/settings", post(save_global_settings))
+        .route(SaveFirewallGlobalSettings::PATH, post(save_global_settings))
         // Config overview
         .route("/firewall/config", get(get_firewall_config))
         // Preview and Apply
         .route("/firewall/preview", get(preview_firewall))
         .route("/firewall/preview/json", get(preview_firewall_json))
         .route("/firewall/apply", post(apply_firewall))
-        .route("/firewall/confirm", post(confirm_firewall))
+        .route(ConfirmFirewall::PATH, post(confirm_firewall))
         .route("/firewall/rollback", post(rollback_firewall))
         .route("/firewall/status", get(firewall_status))
         .with_state(state)
@@ -121,8 +120,8 @@ async fn get_zone(
 /// POST /firewall/zones - Create or update a zone
 async fn save_zone(
     State(state): State<FirewallState>,
-    Json(request): Json<SaveFirewallZoneRequest>,
-) -> Result<Json<SaveFirewallZoneResponse>, AppError> {
+    Json(request): Json<Req<SaveFirewallZone>>,
+) -> Result<Json<Res<SaveFirewallZone>>, AppError> {
     let zone = request.zone;
     info!("Saving firewall zone: {}", zone.name);
 
@@ -195,8 +194,8 @@ async fn get_zone_forwards(
 /// POST /firewall/zone-forwards - Create or update a zone forward policy
 async fn save_zone_forward(
     State(state): State<FirewallState>,
-    Json(request): Json<SaveZoneForwardRequest>,
-) -> Result<Json<SaveZoneForwardResponse>, AppError> {
+    Json(request): Json<Req<SaveZoneForward>>,
+) -> Result<Json<Res<SaveZoneForward>>, AppError> {
     let forward = request.forward;
     info!(
         "Saving zone forward: {} -> {}",
@@ -244,8 +243,8 @@ async fn get_input_rules(
 /// POST /firewall/input-rules - Create or update an input rule
 async fn save_input_rule(
     State(state): State<FirewallState>,
-    Json(request): Json<SaveInputRuleRequest>,
-) -> Result<Json<SaveInputRuleResponse>, AppError> {
+    Json(request): Json<Req<SaveInputRule>>,
+) -> Result<Json<Res<SaveInputRule>>, AppError> {
     let rule = request.rule;
     info!("Saving input rule: {}", rule.name);
 
@@ -294,8 +293,8 @@ async fn delete_input_rule(
 /// POST /firewall/input-rules/reorder - Reorder input rules
 async fn reorder_input_rules(
     State(state): State<FirewallState>,
-    Json(request): Json<ReorderRulesRequest>,
-) -> Result<Json<ReorderRulesResponse>, AppError> {
+    Json(request): Json<Req<ReorderInputRules>>,
+) -> Result<Json<Res<ReorderInputRules>>, AppError> {
     info!("Reordering {} input rules", request.rule_ids.len());
 
     // Update positions based on array order
@@ -329,8 +328,8 @@ async fn get_forward_rules(
 /// POST /firewall/forward-rules - Create or update a forward rule
 async fn save_forward_rule(
     State(state): State<FirewallState>,
-    Json(request): Json<SaveForwardRuleRequest>,
-) -> Result<Json<SaveForwardRuleResponse>, AppError> {
+    Json(request): Json<Req<SaveForwardRule>>,
+) -> Result<Json<Res<SaveForwardRule>>, AppError> {
     let rule = request.rule;
     info!("Saving forward rule: {}", rule.name);
 
@@ -379,8 +378,8 @@ async fn delete_forward_rule(
 /// POST /firewall/forward-rules/reorder - Reorder forward rules
 async fn reorder_forward_rules(
     State(state): State<FirewallState>,
-    Json(request): Json<ReorderRulesRequest>,
-) -> Result<Json<ReorderRulesResponse>, AppError> {
+    Json(request): Json<Req<ReorderForwardRules>>,
+) -> Result<Json<Res<ReorderForwardRules>>, AppError> {
     info!("Reordering {} forward rules", request.rule_ids.len());
 
     for (position, id) in request.rule_ids.iter().enumerate() {
@@ -412,8 +411,8 @@ async fn get_port_forwards(
 /// POST /firewall/port-forwards - Create or update a port forward
 async fn save_port_forward(
     State(state): State<FirewallState>,
-    Json(request): Json<SavePortForwardRequest>,
-) -> Result<Json<SavePortForwardResponse>, AppError> {
+    Json(request): Json<Req<SavePortForward>>,
+) -> Result<Json<Res<SavePortForward>>, AppError> {
     let pf = request.port_forward;
     info!("Saving port forward: {}", pf.name);
 
@@ -483,8 +482,8 @@ async fn get_global_settings(
 /// POST /firewall/settings - Save global firewall settings
 async fn save_global_settings(
     State(state): State<FirewallState>,
-    Json(request): Json<SaveFirewallGlobalSettingsRequest>,
-) -> Result<Json<SaveFirewallGlobalSettingsResponse>, AppError> {
+    Json(request): Json<Req<SaveFirewallGlobalSettings>>,
+) -> Result<Json<Res<SaveFirewallGlobalSettings>>, AppError> {
     info!("Saving firewall global settings");
     state
         .db
@@ -555,8 +554,8 @@ async fn apply_firewall(
 /// POST /firewall/confirm - Confirm pending firewall changes
 async fn confirm_firewall(
     State(state): State<FirewallState>,
-    Json(request): Json<FirewallConfirmRequest>,
-) -> Result<Json<FirewallConfirmResponse>, AppError> {
+    Json(request): Json<Req<ConfirmFirewall>>,
+) -> Result<Json<Res<ConfirmFirewall>>, AppError> {
     info!("Confirming firewall changes");
     let response = state.apply_manager.confirm(&request.session_id).await?;
     Ok(Json(response))

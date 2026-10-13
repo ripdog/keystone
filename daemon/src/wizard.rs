@@ -1,5 +1,6 @@
 //! Setup wizard API routes.
 
+use keystone_core::api::{AdvanceWizard, Endpoint, Req, Res, SaveWizardInterfaces, SkipWizard};
 use std::sync::Arc;
 
 use axum::{
@@ -8,9 +9,8 @@ use axum::{
     routing::{get, post},
 };
 use keystone_core::{
-    InterfaceRole, WizardAdvanceRequest, WizardAdvanceResponse, WizardSaveInterfacesRequest,
-    WizardSaveInterfacesResponse, WizardSkipRequest, WizardSkipResponse, WizardState,
-    WizardStateResponse, WizardStep,
+    InterfaceRole, WizardAdvanceResponse, WizardSaveInterfacesResponse, WizardSkipResponse,
+    WizardState, WizardStateResponse, WizardStep,
 };
 use tracing::{info, warn};
 
@@ -20,9 +20,9 @@ use crate::{AppError, AppState, apply, soho, status};
 pub fn wizard_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/wizard", get(get_wizard_state))
-        .route("/wizard/advance", post(advance_wizard))
-        .route("/wizard/skip", post(skip_wizard))
-        .route("/wizard/interfaces", post(save_wizard_interfaces))
+        .route(AdvanceWizard::PATH, post(advance_wizard))
+        .route(SkipWizard::PATH, post(skip_wizard))
+        .route(SaveWizardInterfaces::PATH, post(save_wizard_interfaces))
 }
 
 /// GET /wizard - Get current wizard state.
@@ -54,8 +54,8 @@ async fn get_wizard_state(
 /// POST /wizard/advance - Advance to the next wizard step.
 async fn advance_wizard(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<WizardAdvanceRequest>,
-) -> Result<Json<WizardAdvanceResponse>, AppError> {
+    Json(request): Json<Req<AdvanceWizard>>,
+) -> Result<Json<Res<AdvanceWizard>>, AppError> {
     info!("Advancing wizard from step: {:?}", request.completing_step);
 
     let settings = state.db.get_global_settings().await?;
@@ -136,8 +136,8 @@ async fn advance_wizard(
 /// POST /wizard/skip - Skip the wizard entirely.
 async fn skip_wizard(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<WizardSkipRequest>,
-) -> Result<Json<WizardSkipResponse>, AppError> {
+    Json(request): Json<Req<SkipWizard>>,
+) -> Result<Json<Res<SkipWizard>>, AppError> {
     if !request.confirm_skip {
         return Ok(Json(WizardSkipResponse {
             success: false,
@@ -158,8 +158,8 @@ async fn skip_wizard(
 /// POST /wizard/interfaces - Build and activate a basic SOHO router profile.
 async fn save_wizard_interfaces(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<WizardSaveInterfacesRequest>,
-) -> Result<Json<WizardSaveInterfacesResponse>, AppError> {
+    Json(request): Json<Req<SaveWizardInterfaces>>,
+) -> Result<Json<Res<SaveWizardInterfaces>>, AppError> {
     info!(assignments = ?request.assignments, "Activating wizard router profile");
 
     let summary = match soho::configure_soho_profile(&state.db, &request.assignments).await {

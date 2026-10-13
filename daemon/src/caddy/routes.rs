@@ -12,9 +12,10 @@ use axum::{
     extract::State,
     routing::{get, post, put},
 };
+use keystone_core::api::{Endpoint, Req, Res, SaveCaddyConfig};
 use keystone_core::{
     CaddyApplyResponse, CaddyConfig, CaddyPreviewResponse, CaddyStateResponse,
-    CaddyValidateResponse, SaveCaddyConfigRequest, SaveCaddyConfigResponse,
+    CaddyValidateResponse, SaveCaddyConfigResponse,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -33,7 +34,7 @@ pub fn caddy_routes(state: CaddyState) -> Router<Arc<crate::AppState>> {
         // State and config
         .route("/caddy", get(get_caddy_state))
         .route("/caddy/config", get(get_config))
-        .route("/caddy/config", put(save_config))
+        .route(SaveCaddyConfig::PATH, put(save_config))
         // Preview, validate, and apply
         .route("/caddy/preview", get(preview_caddy))
         .route("/caddy/validate", post(validate_caddy))
@@ -79,8 +80,8 @@ async fn get_config(State(state): State<CaddyState>) -> Result<Json<CaddyConfig>
 /// PUT /caddy/config - Save Caddy configuration
 async fn save_config(
     State(state): State<CaddyState>,
-    Json(request): Json<SaveCaddyConfigRequest>,
-) -> Result<Json<SaveCaddyConfigResponse>, AppError> {
+    Json(request): Json<Req<SaveCaddyConfig>>,
+) -> Result<Json<Res<SaveCaddyConfig>>, AppError> {
     info!("Saving Caddy config");
 
     // Validate required fields if enabled

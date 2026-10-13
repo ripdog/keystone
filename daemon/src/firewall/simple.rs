@@ -6,6 +6,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
+use keystone_core::api::{CreateSimpleForward, Req, Res, UpdateSimpleForward};
 use keystone_core::{
     CreateSimplePortForwardRequest, DeleteResponse, FirewallAction, FirewallConfig, InterfaceRole,
     LanDevice, LanDevicesResponse, PortForward, RuleProtocol, SimplePortForward,
@@ -358,8 +359,8 @@ fn normalize_comment(req: &CreateSimplePortForwardRequest) -> Option<String> {
 
 pub async fn create(
     State(state): State<FirewallState>,
-    Json(req): Json<CreateSimplePortForwardRequest>,
-) -> Result<Json<SimplePortForwardsResponse>, AppError> {
+    Json(req): Json<Req<CreateSimpleForward>>,
+) -> Result<Json<Res<CreateSimpleForward>>, AppError> {
     let addresses = validate(&req).map_err(anyhow::Error::msg)?;
     let zones = state.db.get_firewall_zones().await?;
     let wan: Vec<_> = zones
@@ -402,8 +403,8 @@ pub async fn create(
 pub async fn update(
     State(state): State<FirewallState>,
     Path(rule_id): Path<i64>,
-    Json(req): Json<CreateSimplePortForwardRequest>,
-) -> Result<Json<SimplePortForwardsResponse>, AppError> {
+    Json(req): Json<Req<UpdateSimpleForward>>,
+) -> Result<Json<Res<UpdateSimpleForward>>, AppError> {
     let addresses = validate(&req).map_err(anyhow::Error::msg)?;
     let (config, groups) = load_forwards(&state).await?;
     let current = groups

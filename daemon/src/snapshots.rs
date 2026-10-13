@@ -471,27 +471,6 @@ pub async fn get_snapshot(db: &Database, id: i64) -> Result<Option<SnapshotInfo>
     .transpose()
 }
 
-/// The newest active snapshot that is the applied baseline for `component`.
-/// Pending, rolled-back, manual, imported and pre-restore snapshots never
-/// qualify, and neither does a snapshot taken for other components only.
-pub async fn latest_applied_for(
-    db: &Database,
-    component: Component,
-) -> Result<Option<SnapshotInfo>> {
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {SNAPSHOT_COLUMNS} FROM config_snapshots
-         WHERE status = 'active'
-           AND instr(',' || components || ',', ',' || ? || ',') > 0
-         ORDER BY id DESC LIMIT 1"
-    )))
-    .bind(component.as_str())
-    .fetch_optional(db.pool())
-    .await?
-    .as_ref()
-    .map(info_from_row)
-    .transpose()
-}
-
 /// The snapshot the running system matches for `component`, which is the
 /// baseline for pending changes. That is the newest snapshot covering the
 /// component that is either active, or pending on a session that is still
@@ -1831,7 +1810,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
         assert_eq!(
-            latest_applied_for(&db, Component::Firewall)
+            baseline_for(&db, Component::Firewall, &[])
                 .await
                 .unwrap()
                 .map(|s| s.id),
@@ -1843,7 +1822,7 @@ pub(crate) mod tests {
                 .unwrap()
         );
         assert!(
-            latest_applied_for(&db, Component::Firewall)
+            baseline_for(&db, Component::Firewall, &[])
                 .await
                 .unwrap()
                 .is_none()
@@ -1944,14 +1923,14 @@ pub(crate) mod tests {
         )
         .await;
 
-        let dnsmasq = latest_applied_for(&db, Component::Dnsmasq)
+        let dnsmasq = baseline_for(&db, Component::Dnsmasq, &[])
             .await
             .unwrap()
             .expect("dnsmasq baseline");
         assert_eq!(dnsmasq.components, vec![Component::Dnsmasq]);
         for other in [Component::Networkd, Component::Firewall, Component::Caddy] {
             assert!(
-                latest_applied_for(&db, other).await.unwrap().is_none(),
+                baseline_for(&db, other, &[]).await.unwrap().is_none(),
                 "{other} must not be marked applied by a dnsmasq apply"
             );
         }
@@ -1984,14 +1963,14 @@ pub(crate) mod tests {
             .unwrap();
         }
         assert_eq!(
-            latest_applied_for(&db, Component::Firewall)
+            baseline_for(&db, Component::Firewall, &[])
                 .await
                 .unwrap()
                 .map(|s| s.id),
             Some(firewall.id)
         );
         assert!(
-            latest_applied_for(&db, Component::Dnsmasq)
+            baseline_for(&db, Component::Dnsmasq, &[])
                 .await
                 .unwrap()
                 .is_none()
@@ -2009,7 +1988,7 @@ pub(crate) mod tests {
         .await;
         let pending = list_snapshots(&db).await.unwrap()[0].id;
         assert_eq!(
-            latest_applied_for(&db, Component::Firewall)
+            baseline_for(&db, Component::Firewall, &[])
                 .await
                 .unwrap()
                 .map(|s| s.id),
@@ -2018,7 +1997,7 @@ pub(crate) mod tests {
         );
         settle_session(&db, "session-pending", SnapshotStatus::Active).await;
         assert_eq!(
-            latest_applied_for(&db, Component::Firewall)
+            baseline_for(&db, Component::Firewall, &[])
                 .await
                 .unwrap()
                 .map(|s| s.id),
@@ -2160,7 +2139,7 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(remaining, vec![manual.id, networkd.id]);
         assert_eq!(
-            latest_applied_for(&db, Component::Networkd)
+            baseline_for(&db, Component::Networkd, &[])
                 .await
                 .unwrap()
                 .map(|s| s.id),
@@ -2191,7 +2170,7 @@ pub(crate) mod tests {
         assert_eq!(imported.status, SnapshotStatus::Active);
         assert!(imported.components.is_empty());
         for component in Component::ALL {
-            assert!(latest_applied_for(&db, component).await.unwrap().is_none());
+            assert!(baseline_for(&db, component, &[]).await.unwrap().is_none());
         }
 
         let copy = open_sqlite(&snapshot_path(&db, imported.id).await.unwrap(), true)

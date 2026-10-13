@@ -299,6 +299,10 @@ pub struct PendingChangesResponse {
     /// or it rolls back. `None` when nothing awaits confirmation.
     #[serde(default)]
     pub awaiting_confirmation: Option<AwaitingConfirmation>,
+    /// Daemon clock, Unix seconds, when this response was built. Clients use it
+    /// to count down a deadline without trusting their own clock.
+    #[serde(default)]
+    pub server_time: u64,
 }
 
 /// An applied configuration that awaits confirmation before its rollback timer

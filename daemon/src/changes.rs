@@ -235,6 +235,14 @@ fn file_diff(
 // Pending changes and snapshot diffs
 // ============================================================================
 
+/// Current Unix time in seconds, as the daemon's clock reads it.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
+}
+
 /// Session ids of the live applies that await confirmation.
 fn session_ids(live: &[PendingInfo]) -> Vec<&str> {
     live.iter().map(|info| info.session_id.as_str()).collect()
@@ -303,6 +311,7 @@ pub(crate) async fn pending_changes(
         components,
         baseline_ids: baselines,
         awaiting_confirmation: awaiting_confirmation(db, live).await?,
+        server_time: now_secs(),
     })
 }
 
@@ -349,6 +358,7 @@ pub(crate) async fn snapshot_diff(db: &Database, id: i64) -> Result<PendingChang
         components,
         baseline_ids: baselines,
         awaiting_confirmation: None,
+        server_time: now_secs(),
     })
 }
 
@@ -947,7 +957,7 @@ mod tests {
     async fn snapshot_diff_shows_what_restoring_would_change() {
         let scratch = Scratch::new();
         let db = applied_baseline(&scratch).await;
-        let baseline = snapshots::latest_applied_for(&db, Component::Dnsmasq)
+        let baseline = snapshots::baseline_for(&db, Component::Dnsmasq, &[])
             .await
             .unwrap()
             .unwrap();
@@ -1040,7 +1050,7 @@ mod tests {
     async fn a_rolled_back_apply_stops_being_the_baseline_and_its_changes_are_pending_again() {
         let scratch = Scratch::new();
         let db = applied_baseline(&scratch).await;
-        let earlier = snapshots::latest_applied_for(&db, Component::Dnsmasq)
+        let earlier = snapshots::baseline_for(&db, Component::Dnsmasq, &[])
             .await
             .unwrap()
             .unwrap()
@@ -1239,7 +1249,7 @@ mod tests {
     async fn restore_route_reports_the_components_it_restored() {
         let scratch = Scratch::new();
         let db = applied_baseline(&scratch).await;
-        let baseline = snapshots::latest_applied_for(&db, Component::Dnsmasq)
+        let baseline = snapshots::baseline_for(&db, Component::Dnsmasq, &[])
             .await
             .unwrap()
             .unwrap();

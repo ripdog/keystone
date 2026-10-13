@@ -5,6 +5,7 @@
 //! the filter text and an open reservation form survive each refresh.
 
 use crate::api;
+use crate::components::use_config_changed;
 use gloo_timers::callback::Interval;
 use keystone_core::{Client, DnsmasqStaticLease};
 use leptos::prelude::*;
@@ -45,6 +46,7 @@ pub fn ClientsPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let clients = RwSignal::new(None::<Vec<Client>>);
     let load_error = RwSignal::new(None::<String>);
     let notice = RwSignal::new(None::<String>);
@@ -119,8 +121,9 @@ pub fn ClientsPage(
                 Ok(_) => {
                     reserve.mac.set(None);
                     notice.set(Some(format!(
-                        "Reservation saved for {mac}. Click Apply Changes on the DNS & DHCP page to activate it."
+                        "Reservation saved for {mac}. Use Apply all in the pending changes bar to activate it."
                     )));
+                    config_changed.run(());
                     poll();
                 }
                 Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
@@ -397,7 +400,7 @@ fn reserve_form(ctx: PageContext) -> impl IntoView {
                 <span class="font-mono text-sm">{move || reserve.mac.get().unwrap_or_default()}</span>
             </div>
             <p class="text-xs text-gray-400">
-                "DHCP will always give this device the IPv4 address below. Click Apply Changes on the DNS & DHCP page to activate it."
+                "DHCP will always give this device the IPv4 address below. It takes effect after Apply all in the pending changes bar."
             </p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>

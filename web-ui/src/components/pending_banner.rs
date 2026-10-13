@@ -1,20 +1,24 @@
-//! Global banner for network changes awaiting confirmation.
+//! Global banner for applied changes awaiting confirmation.
 //!
-//! Changing the LAN address can disconnect the administrator, so the banner
-//! polls the daemon and survives page reloads: after reconnecting on the new
-//! address, the pending change can still be confirmed (or it rolls back).
+//! Applying the firewall or the network can disconnect the administrator, so
+//! the banner polls the daemon and survives page reloads: after reconnecting on
+//! the new address, the pending apply can still be confirmed (or it rolls back).
+//! One session covers firewall and networkd applies, so this is the only
+//! confirmation banner in the app.
 
 use crate::api;
+use crate::components::ConfigRefresh;
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
 pub fn PendingConfirmBanner(auth_token: ReadSignal<Option<String>>) -> impl IntoView {
+    let refresh = expect_context::<ConfigRefresh>();
+    // (session id, seconds remaining) while an apply awaits confirmation.
     let status = RwSignal::new(Option::<(String, u32)>::None);
     let message = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
-    let location = leptos_router::hooks::use_location();
 
     let poll = move || {
         let Some(token) = auth_token.get_untracked() else {
@@ -22,7 +26,7 @@ pub fn PendingConfirmBanner(auth_token: ReadSignal<Option<String>>) -> impl Into
         };
         spawn_local(async move {
             if let Ok(response) = api::fetch_pending_status(&token).await {
-                status.set(match (response.networkd_pending, response.session_id) {
+                status.set(match (response.pending_confirmation, response.session_id) {
                     (true, Some(session)) => {
                         Some((session, response.seconds_remaining.unwrap_or(0)))
                     }
@@ -31,8 +35,10 @@ pub fn PendingConfirmBanner(auth_token: ReadSignal<Option<String>>) -> impl Into
             }
         });
     };
-    // The Effect keeps the Interval alive and drops it on unmount.
+    // The Effect keeps the Interval alive and drops it on unmount. A bump of
+    // the refresh counter (after an apply) restarts it and polls at once.
     Effect::new(move |_prev: Option<Option<Interval>>| {
+        let _ = refresh.0.get();
         if auth_token.get().is_some() {
             poll();
             Some(Interval::new(2000, poll))
@@ -68,21 +74,20 @@ pub fn PendingConfirmBanner(auth_token: ReadSignal<Option<String>>) -> impl Into
                 Err(e) => message.set(e),
             }
             busy.set(false);
+            refresh.bump();
         });
     };
 
     view! {
         {move || {
-            // The Firewall page already shows its own confirmation banner.
-            let on_firewall_page = location.pathname.get().starts_with("/firewall");
             match status.get() {
-                Some((_, remaining)) if !on_firewall_page => view! {
+                Some((_, remaining)) => view! {
                     <div class="mb-5 bg-yellow-900/50 border border-yellow-600 text-yellow-200 px-4 py-3 rounded flex flex-wrap items-center justify-between gap-3">
                         <div>
-                            <span class="font-medium">"Network changes pending confirmation!"</span>
+                            <span class="font-medium">"Configuration changes pending confirmation!"</span>
                             " Confirm within "
                             <span class="font-bold">{remaining}</span>
-                            " seconds or the previous network configuration is restored."
+                            " seconds or the previous configuration is restored."
                             {move || {
                                 let text = message.get();
                                 (!text.is_empty()).then(|| view! { <div class="mt-1 text-sm">{text}</div> })
@@ -102,7 +107,7 @@ pub fn PendingConfirmBanner(auth_token: ReadSignal<Option<String>>) -> impl Into
                         </div>
                     </div>
                 }.into_any(),
-                _ => view! { <div></div> }.into_any(),
+                None => view! { <div></div> }.into_any(),
             }
         }}
     }

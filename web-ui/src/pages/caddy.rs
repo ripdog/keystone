@@ -6,6 +6,7 @@
 //! - Status (service status, validation)
 
 use crate::api;
+use crate::components::use_config_changed;
 use keystone_core::{CaddyConfig, CaddyHttpsMode};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -101,16 +102,11 @@ pub fn CaddyPage(
 
     view! {
         <div class="space-y-6">
-            <div class="flex justify-between items-start">
+            <div>
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"Caddy Web Server"</h1>
                     <p class="text-gray-400">"Reverse proxy configuration for Keystone web UI"</p>
                 </div>
-                <ApplyButton
-                    token=token
-                    success_msg=success_msg
-                    error_msg=error_msg
-                />
             </div>
 
             <Show when=move || success_msg.get().is_some()>
@@ -160,52 +156,6 @@ pub fn CaddyPage(
 }
 
 // ============================================================================
-// Apply Button
-// ============================================================================
-
-#[component]
-fn ApplyButton(
-    token: Signal<String>,
-    success_msg: RwSignal<Option<String>>,
-    error_msg: RwSignal<Option<String>>,
-) -> impl IntoView {
-    let applying = RwSignal::new(false);
-
-    let on_apply = move |_| {
-        applying.set(true);
-        error_msg.set(None);
-        success_msg.set(None);
-        let token_val = token.get();
-
-        spawn_local(async move {
-            match api::apply_caddy(&token_val).await {
-                Ok(response) => {
-                    if response.success {
-                        success_msg.set(Some(response.message));
-                    } else {
-                        error_msg.set(Some(response.message));
-                    }
-                }
-                Err(e) => {
-                    error_msg.set(Some(format!("Error applying config: {}", e)));
-                }
-            }
-            applying.set(false);
-        });
-    };
-
-    view! {
-        <button
-            class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium disabled:opacity-50"
-            on:click=on_apply
-            disabled=move || applying.get()
-        >
-            {move || if applying.get() { "Applying..." } else { "Apply Changes" }}
-        </button>
-    }
-}
-
-// ============================================================================
 // Settings Tab
 // ============================================================================
 
@@ -217,6 +167,7 @@ fn SettingsTab(
     success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let saving = RwSignal::new(false);
 
     // Local form state
@@ -251,6 +202,7 @@ fn SettingsTab(
             match api::save_caddy_config(&token_val, new_config.clone()).await {
                 Ok(()) => {
                     config.set(new_config);
+                    config_changed.run(());
                     success_msg.set(Some("Caddy settings saved".to_string()));
                 }
                 Err(e) => {

@@ -10,20 +10,13 @@
 
 use super::simple_forwards::SimpleForwardsTab;
 use crate::api;
+use crate::components::use_config_changed;
 use keystone_core::{
     FirewallAction, FirewallGlobalSettings, FirewallPolicy, FirewallZone, ForwardRule, InputRule,
     RuleProtocol, ZoneForwardPolicy,
 };
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
-use wasm_bindgen::prelude::*;
-
-// JS binding to get current time
-#[wasm_bindgen]
-extern "C" {
-    #[wasm_bindgen(js_namespace = Date)]
-    fn now() -> f64;
-}
 
 /// Active firewall section selected by URL
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -103,79 +96,26 @@ pub fn FirewallPage(
 
     let location = use_location();
 
-    // Status message for apply/confirm workflow
-    let status_message = RwSignal::new(String::new());
-    let pending_session = RwSignal::new(Option::<String>::None);
-    let seconds_remaining = RwSignal::new(0u32);
-
     // Trigger for reloading data
     let reload_trigger = RwSignal::new(0);
 
+    // Every save or delete in the tabs bumps the reload trigger. Pages report
+    // those changes to the pending-changes bar through this one effect.
+    let config_changed = use_config_changed();
+    Effect::new(move |previous: Option<i32>| {
+        let current = reload_trigger.get();
+        if previous.is_some() {
+            config_changed.run(());
+        }
+        current
+    });
+
     view! {
         <div class="space-y-6">
-            <div class="flex justify-between items-start">
-                <div>
-                    <h1 class="text-2xl font-semibold text-blue-300">"Firewall"</h1>
-                    <p class="text-gray-400">"Zone-based firewall configuration"</p>
-                </div>
-                <div class="flex gap-2">
-                    <ApplyButton
-                        token=token
-                        status_message=status_message
-                        pending_session=pending_session
-                        seconds_remaining=seconds_remaining
-                        on_unauthorized=on_unauthorized
-                    />
-                </div>
+            <div>
+                <h1 class="text-2xl font-semibold text-blue-300">"Firewall"</h1>
+                <p class="text-gray-400">"Zone-based firewall configuration"</p>
             </div>
-
-            // Status message
-            {move || {
-                let msg = status_message.get();
-                if msg.is_empty() {
-                    view! { <div></div> }.into_any()
-                } else {
-                    view! {
-                        <div class="bg-blue-900/50 border border-blue-700 text-blue-200 px-4 py-3 rounded">
-                            {msg}
-                        </div>
-                    }.into_any()
-                }
-            }}
-
-            // Pending confirmation banner
-            {move || {
-                if let Some(session_id) = pending_session.get() {
-                    let remaining = seconds_remaining.get();
-                    view! {
-                        <div class="bg-yellow-900/50 border border-yellow-600 text-yellow-200 px-4 py-3 rounded flex items-center justify-between">
-                            <div>
-                                <span class="font-medium">"Changes pending confirmation!"</span>
-                                " Confirm within "
-                                <span class="font-bold">{remaining}</span>
-                                " seconds or changes will be rolled back."
-                            </div>
-                            <div class="flex gap-2">
-                                <ConfirmButton
-                                    token=token.get()
-                                    session_id=session_id.clone()
-                                    status_message=status_message
-                                    pending_session=pending_session
-                                    on_unauthorized=on_unauthorized
-                                />
-                                <RollbackButton
-                                    token=token.get()
-                                    status_message=status_message
-                                    pending_session=pending_session
-                                    on_unauthorized=on_unauthorized
-                                />
-                            </div>
-                        </div>
-                    }.into_any()
-                } else {
-                    view! { <div></div> }.into_any()
-                }
-            }}
 
             // Tab content
             <div class="bg-gray-800 rounded-lg shadow-lg p-6">
@@ -190,158 +130,6 @@ pub fn FirewallPage(
                 }}
             </div>
         </div>
-    }
-}
-
-// ============================================================================
-// Apply/Confirm/Rollback Buttons
-// ============================================================================
-
-#[component]
-fn ApplyButton(
-    token: Signal<String>,
-    status_message: RwSignal<String>,
-    pending_session: RwSignal<Option<String>>,
-    seconds_remaining: RwSignal<u32>,
-    on_unauthorized: Callback<()>,
-) -> impl IntoView {
-    let applying = RwSignal::new(false);
-
-    let on_apply = move |_| {
-        applying.set(true);
-        let token = token.get();
-        leptos::task::spawn_local(async move {
-            match api::apply_firewall(&token).await {
-                Ok(response) => {
-                    if response.success {
-                        status_message.set(response.message);
-                        if response.pending_confirmation {
-                            pending_session.set(response.session_id);
-                            if let Some(deadline) = response.confirm_deadline {
-                                let now_ms = now() as u64 / 1000;
-                                let remaining = deadline.saturating_sub(now_ms) as u32;
-                                seconds_remaining.set(remaining);
-                            }
-                        }
-                    } else {
-                        status_message.set(format!("Apply failed: {}", response.message));
-                    }
-                }
-                Err(e) => {
-                    if e.contains("Unauthorized") {
-                        on_unauthorized.run(());
-                    } else {
-                        status_message.set(format!("Error: {}", e));
-                    }
-                }
-            }
-            applying.set(false);
-        });
-    };
-
-    view! {
-        <button
-            class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium disabled:opacity-50"
-            on:click=on_apply
-            disabled=move || applying.get() || pending_session.get().is_some()
-        >
-            {move || if applying.get() { "Applying..." } else { "Apply Changes" }}
-        </button>
-    }
-}
-
-#[component]
-fn ConfirmButton(
-    token: String,
-    session_id: String,
-    status_message: RwSignal<String>,
-    pending_session: RwSignal<Option<String>>,
-    on_unauthorized: Callback<()>,
-) -> impl IntoView {
-    let confirming = RwSignal::new(false);
-    let token = token.clone();
-    let session_id = session_id.clone();
-
-    let on_confirm = move |_| {
-        confirming.set(true);
-        let token = token.clone();
-        let session_id = session_id.clone();
-        leptos::task::spawn_local(async move {
-            match api::confirm_firewall(&token, &session_id).await {
-                Ok(response) => {
-                    if response.success {
-                        status_message.set(response.message);
-                        pending_session.set(None);
-                    } else {
-                        status_message.set(format!("Confirm failed: {}", response.message));
-                    }
-                }
-                Err(e) => {
-                    if e.contains("Unauthorized") {
-                        on_unauthorized.run(());
-                    } else {
-                        status_message.set(format!("Error: {}", e));
-                    }
-                }
-            }
-            confirming.set(false);
-        });
-    };
-
-    view! {
-        <button
-            class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium disabled:opacity-50"
-            on:click=on_confirm
-            disabled=move || confirming.get()
-        >
-            {move || if confirming.get() { "Confirming..." } else { "Confirm" }}
-        </button>
-    }
-}
-
-#[component]
-fn RollbackButton(
-    token: String,
-    status_message: RwSignal<String>,
-    pending_session: RwSignal<Option<String>>,
-    on_unauthorized: Callback<()>,
-) -> impl IntoView {
-    let rolling_back = RwSignal::new(false);
-    let token = token.clone();
-
-    let on_rollback = move |_| {
-        rolling_back.set(true);
-        let token = token.clone();
-        leptos::task::spawn_local(async move {
-            match api::rollback_firewall(&token).await {
-                Ok(response) => {
-                    if response.success {
-                        status_message.set(response.message);
-                        pending_session.set(None);
-                    } else {
-                        status_message.set(format!("Rollback failed: {}", response.message));
-                    }
-                }
-                Err(e) => {
-                    if e.contains("Unauthorized") {
-                        on_unauthorized.run(());
-                    } else {
-                        status_message.set(format!("Error: {}", e));
-                    }
-                }
-            }
-            rolling_back.set(false);
-        });
-    };
-
-    view! {
-        <button
-            class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-medium disabled:opacity-50"
-            on:click=on_rollback
-            disabled=move || rolling_back.get()
-        >
-            {move || if rolling_back.get() { "Rolling back..." } else { "Rollback" }}
-        </button>
     }
 }
 
@@ -2074,6 +1862,7 @@ fn ForwardRuleEditor(
 
 #[component]
 fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl IntoView {
+    let config_changed = use_config_changed();
     let settings = LocalResource::new(move || {
         let token = token.get();
         async move { api::fetch_firewall_global_settings(&token).await }
@@ -2115,6 +1904,7 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
             match api::save_firewall_global_settings(&token, settings).await {
                 Ok(response) => {
                     if response.success {
+                        config_changed.run(());
                         status_message.set("Settings saved successfully".to_string());
                     } else {
                         status_message.set(format!("Error: {}", response.message));
@@ -2222,7 +2012,7 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
                                         {move || if is_saving.get() { "Saving..." } else { "Save Settings" }}
                                     </button>
                                     <p class="text-sm text-gray-500 mt-2">
-                                        "Note: Changes take effect when you apply the firewall configuration."
+                                        "Note: Changes take effect when you apply them with Apply all in the pending changes bar."
                                     </p>
                                 </div>
                             </div>

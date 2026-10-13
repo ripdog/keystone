@@ -5,12 +5,14 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api;
+use crate::components::use_config_changed;
 
 #[component]
 pub fn BridgesPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let (bridges, set_bridges) = signal(Vec::<BridgeConfig>::new());
     let (managed_interfaces, set_managed_interfaces) = signal(Vec::<ManagedInterface>::new());
     let (loading, set_loading) = signal(true);
@@ -149,6 +151,7 @@ pub fn BridgesPage(
             match api::save_bridge(&token, config).await {
                 Ok(response) => {
                     if response.success {
+                        config_changed.run(());
                         set_show_modal.set(false);
                         set_success_msg.set(Some(response.message.clone()));
                         // Reload bridges
@@ -190,6 +193,7 @@ pub fn BridgesPage(
             match api::delete_bridge(&token, bridge_id).await {
                 Ok(response) => {
                     if response.success {
+                        config_changed.run(());
                         set_success_msg.set(Some(response.message.clone()));
                         // Reload bridges
                         if let Ok(bridge_list) = api::fetch_bridges(&token).await {

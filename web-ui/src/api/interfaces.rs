@@ -2,10 +2,10 @@
 
 use keystone_core::api::{SaveInterfaceConfig, SaveManagedInterfaces};
 use keystone_core::{
-    ApplyConfigResponse, InterfaceConfig, InterfaceConfigResponse, ManagedInterface,
-    ManagedInterfacesResponse, NetworkdPreviewResponse, RenewInterfaceResponse,
-    SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
-    SaveManagedInterfacesResponse, SystemState,
+    InterfaceConfig, InterfaceConfigResponse, ManagedInterface, ManagedInterfacesResponse,
+    NetworkdPreviewResponse, RenewInterfaceResponse, SaveInterfaceConfigRequest,
+    SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
+    SystemState,
 };
 
 use super::client::{call, get, post_empty};
@@ -64,11 +64,6 @@ pub async fn save_interface_config(
 // ============================================================================
 // Networkd Operations
 // ============================================================================
-
-/// Apply networkd configuration - writes .network files and reloads systemd-networkd
-pub async fn apply_networkd(token: &str) -> Result<ApplyConfigResponse, String> {
-    post_empty("/api/apply-networkd", token).await
-}
 
 /// Request networkd to renew the dynamic configuration of one managed link.
 pub async fn renew_interface(token: &str, name: &str) -> Result<RenewInterfaceResponse, String> {

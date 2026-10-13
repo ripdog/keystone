@@ -5,12 +5,14 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api;
+use crate::components::use_config_changed;
 
 #[component]
 pub fn VlansPage(
     auth_token: ReadSignal<Option<String>>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let (vlans, set_vlans) = signal(Vec::<VlanConfig>::new());
     let (managed_interfaces, set_managed_interfaces) = signal(Vec::<ManagedInterface>::new());
     let (loading, set_loading) = signal(true);
@@ -142,6 +144,7 @@ pub fn VlansPage(
             match api::save_vlan(&token, config).await {
                 Ok(response) => {
                     if response.success {
+                        config_changed.run(());
                         set_show_modal.set(false);
                         set_success_msg.set(Some(response.message.clone()));
                         // Reload VLANs
@@ -183,6 +186,7 @@ pub fn VlansPage(
             match api::delete_vlan(&token, vlan_id).await {
                 Ok(response) => {
                     if response.success {
+                        config_changed.run(());
                         set_success_msg.set(Some(response.message.clone()));
                         // Reload VLANs
                         if let Ok(vlan_list) = api::fetch_vlans(&token).await {

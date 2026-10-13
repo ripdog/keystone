@@ -12,6 +12,7 @@
 //! - Preview (generated config file)
 
 use crate::api;
+use crate::components::use_config_changed;
 use keystone_core::{
     DhcpLease, DnsmasqAddressAction, DnsmasqAddressOverride, DnsmasqCnameRecord, DnsmasqConfig,
     DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord, DnsmasqStaticLease,
@@ -186,16 +187,11 @@ pub fn DnsmasqPage(
 
     view! {
         <div class="space-y-6">
-            <div class="flex justify-between items-start">
+            <div>
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"DNS & DHCP"</h1>
                     <p class="text-gray-400">"Dnsmasq configuration for DNS and DHCP services"</p>
                 </div>
-                <ApplyButton
-                    token=token
-                    success_msg=success_msg
-                    error_msg=error_msg
-                />
             </div>
 
             <Show when=move || success_msg.get().is_some()>
@@ -310,52 +306,6 @@ pub fn DnsmasqPage(
 }
 
 // ============================================================================
-// Apply Button
-// ============================================================================
-
-#[component]
-fn ApplyButton(
-    token: Signal<String>,
-    success_msg: RwSignal<Option<String>>,
-    error_msg: RwSignal<Option<String>>,
-) -> impl IntoView {
-    let applying = RwSignal::new(false);
-
-    let on_apply = move |_| {
-        applying.set(true);
-        error_msg.set(None);
-        success_msg.set(None);
-        let token_val = token.get();
-
-        spawn_local(async move {
-            match api::apply_dnsmasq(&token_val).await {
-                Ok(response) => {
-                    if response.success {
-                        success_msg.set(Some(response.message));
-                    } else {
-                        error_msg.set(Some(response.message));
-                    }
-                }
-                Err(e) => {
-                    error_msg.set(Some(format!("Error applying config: {}", e)));
-                }
-            }
-            applying.set(false);
-        });
-    };
-
-    view! {
-        <button
-            class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium disabled:opacity-50"
-            on:click=on_apply
-            disabled=move || applying.get()
-        >
-            {move || if applying.get() { "Applying..." } else { "Apply Changes" }}
-        </button>
-    }
-}
-
-// ============================================================================
 // Overview Tab
 // ============================================================================
 
@@ -464,6 +414,7 @@ fn DnsSettingsTab(
     success_msg: RwSignal<Option<String>>,
     error_msg: RwSignal<Option<String>>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let saving = RwSignal::new(false);
 
     // Local form state
@@ -513,6 +464,7 @@ fn DnsSettingsTab(
             match api::save_dnsmasq_config(&token_val, new_config.clone()).await {
                 Ok(()) => {
                     config.set(new_config);
+                    config_changed.run(());
                     success_msg.set(Some("DNS settings saved".to_string()));
                 }
                 Err(e) => {
@@ -683,6 +635,7 @@ fn DhcpRangesTab(
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     // Modal state
     let show_modal = RwSignal::new(false);
     let editing_range = RwSignal::new(Option::<DnsmasqDhcpRange>::None);
@@ -760,6 +713,7 @@ fn DhcpRangesTab(
             match api::save_dhcp_range(&token_val, range).await {
                 Ok(_) => {
                     show_modal.set(false);
+                    config_changed.run(());
                     success_msg.set(Some("DHCP range saved".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -782,6 +736,7 @@ fn DhcpRangesTab(
         spawn_local(async move {
             match api::delete_dhcp_range(&token_val, id).await {
                 Ok(()) => {
+                    config_changed.run(());
                     success_msg.set(Some("DHCP range deleted".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -1010,6 +965,7 @@ fn StaticLeasesTab(
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     // Modal state
     let show_modal = RwSignal::new(false);
     let editing_lease = RwSignal::new(Option::<DnsmasqStaticLease>::None);
@@ -1074,6 +1030,7 @@ fn StaticLeasesTab(
             match api::save_static_lease(&token_val, lease).await {
                 Ok(_) => {
                     show_modal.set(false);
+                    config_changed.run(());
                     success_msg.set(Some("Static lease saved".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -1096,6 +1053,7 @@ fn StaticLeasesTab(
         spawn_local(async move {
             match api::delete_static_lease(&token_val, id).await {
                 Ok(()) => {
+                    config_changed.run(());
                     success_msg.set(Some("Static lease deleted".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -1275,6 +1233,7 @@ fn ActiveLeasesTab(
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let refreshing = RwSignal::new(false);
 
     let refresh_leases = move |_| {
@@ -1309,6 +1268,7 @@ fn ActiveLeasesTab(
         spawn_local(async move {
             match api::save_static_lease(&token_val, new_lease).await {
                 Ok(_) => {
+                    config_changed.run(());
                     success_msg.set(Some("Static lease created from active lease".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -1498,6 +1458,7 @@ fn DhcpOptionsTab(
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     // Modal state
     let show_modal = RwSignal::new(false);
     let editing_option = RwSignal::new(Option::<DnsmasqDhcpOption>::None);
@@ -1568,6 +1529,7 @@ fn DhcpOptionsTab(
             match api::save_dhcp_option(&token_val, opt).await {
                 Ok(_) => {
                     show_modal.set(false);
+                    config_changed.run(());
                     success_msg.set(Some("DHCP option saved".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -1590,6 +1552,7 @@ fn DhcpOptionsTab(
         spawn_local(async move {
             match api::delete_dhcp_option(&token_val, id).await {
                 Ok(()) => {
+                    config_changed.run(());
                     success_msg.set(Some("DHCP option deleted".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -1801,6 +1764,7 @@ fn HostRecordsSection(
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let show_modal = RwSignal::new(false);
     let editing_record = RwSignal::new(Option::<DnsmasqHostRecord>::None);
     let modal_hostnames = RwSignal::new(String::new()); // comma-separated
@@ -1870,6 +1834,7 @@ fn HostRecordsSection(
             match api::save_host_record(&token_val, record).await {
                 Ok(_) => {
                     show_modal.set(false);
+                    config_changed.run(());
                     success_msg.set(Some("Host record saved".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -1892,6 +1857,7 @@ fn HostRecordsSection(
         spawn_local(async move {
             match api::delete_host_record(&token_val, id).await {
                 Ok(()) => {
+                    config_changed.run(());
                     success_msg.set(Some("Host record deleted".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -2073,6 +2039,7 @@ fn CnameRecordsSection(
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let show_modal = RwSignal::new(false);
     let editing_record = RwSignal::new(Option::<DnsmasqCnameRecord>::None);
     let modal_alias = RwSignal::new(String::new());
@@ -2126,6 +2093,7 @@ fn CnameRecordsSection(
             match api::save_cname_record(&token_val, record).await {
                 Ok(_) => {
                     show_modal.set(false);
+                    config_changed.run(());
                     success_msg.set(Some("CNAME record saved".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -2148,6 +2116,7 @@ fn CnameRecordsSection(
         spawn_local(async move {
             match api::delete_cname_record(&token_val, id).await {
                 Ok(()) => {
+                    config_changed.run(());
                     success_msg.set(Some("CNAME record deleted".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -2318,6 +2287,7 @@ fn AddressOverridesTab(
     error_msg: RwSignal<Option<String>>,
     reload_trigger: RwSignal<u32>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let show_modal = RwSignal::new(false);
     let editing_override = RwSignal::new(Option::<DnsmasqAddressOverride>::None);
     let modal_domain = RwSignal::new(String::new());
@@ -2386,6 +2356,7 @@ fn AddressOverridesTab(
             match api::save_address_override(&token_val, ovr).await {
                 Ok(_) => {
                     show_modal.set(false);
+                    config_changed.run(());
                     success_msg.set(Some("Address override saved".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }
@@ -2408,6 +2379,7 @@ fn AddressOverridesTab(
         spawn_local(async move {
             match api::delete_address_override(&token_val, id).await {
                 Ok(()) => {
+                    config_changed.run(());
                     success_msg.set(Some("Address override deleted".to_string()));
                     reload_trigger.update(|v| *v += 1);
                 }

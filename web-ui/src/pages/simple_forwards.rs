@@ -1,5 +1,6 @@
 //! A device-oriented WAN forwarding editor. It writes ordinary firewall rules.
 use crate::api;
+use crate::components::use_config_changed;
 use keystone_core::{CreateSimplePortForwardRequest, LanDevice, RuleProtocol};
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
@@ -10,6 +11,7 @@ pub(super) fn SimpleForwardsTab(
     reload_trigger: RwSignal<i32>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    let config_changed = use_config_changed();
     let forwards = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -141,7 +143,11 @@ pub(super) fn SimpleForwardsTab(
                 Ok(()) => {
                     editing.set(false);
                     edit_id.set(None);
-                    notice.set("Forward saved. Click Apply Changes above to activate it.".into());
+                    notice.set(
+                        "Forward saved. Use Apply all in the pending changes bar to activate it."
+                            .into(),
+                    );
+                    config_changed.run(());
                     reload_trigger.update(|v| *v += 1);
                 }
                 Err(e) => {
@@ -337,7 +343,8 @@ pub(super) fn SimpleForwardsTab(
                                                             leptos::task::spawn_local(async move {
                                                                 match api::delete_simple_forward(&token, id).await {
                                                                     Ok(resp) if resp.success => {
-                                                                        notice.set("Forward removed. Click Apply Changes to activate.".into());
+                                                                        notice.set("Forward removed. Use Apply all in the pending changes bar to activate it.".into());
+                                                                        config_changed.run(());
                                                                         reload_trigger.update(|v| *v += 1);
                                                                     }
                                                                     Ok(resp) => error.set(resp.message),
@@ -409,7 +416,8 @@ pub(super) fn SimpleForwardsTab(
                                                         leptos::task::spawn_local(async move {
                                                             match api::delete_port_forward(&token, id).await {
                                                                 Ok(resp) if resp.success => {
-                                                                    notice.set("Port forward removed. Click Apply Changes to activate.".into());
+                                                                    notice.set("Port forward removed. Use Apply all in the pending changes bar to activate it.".into());
+                                                                    config_changed.run(());
                                                                     reload_trigger.update(|v| *v += 1);
                                                                 }
                                                                 Ok(resp) => error.set(resp.message),

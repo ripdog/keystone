@@ -7,6 +7,7 @@ use leptos_router::components::A;
 use std::collections::HashMap;
 
 use crate::api;
+use crate::components::use_config_changed;
 
 #[component]
 pub fn InterfacesPage(
@@ -23,8 +24,8 @@ pub fn InterfacesPage(
         signal::<HashMap<String, Option<InterfaceRole>>>(HashMap::new());
     let (loading, set_loading) = signal(true);
     let (saving, set_saving) = signal(false);
-    let (applying, set_applying) = signal(false);
     let (renewing, set_renewing) = signal::<Option<String>>(None);
+    let config_changed = use_config_changed();
     let (error, set_error) = signal::<Option<String>>(None);
     let (success, set_success) = signal::<Option<String>>(None);
 
@@ -138,6 +139,7 @@ pub fn InterfacesPage(
                         if response.success {
                             set_managed_interfaces.set(interfaces);
                             set_pending_changes.set(HashMap::new());
+                            config_changed.run(());
                             set_success.set(Some(response.message));
                         } else {
                             set_error.set(Some(response.message));
@@ -161,40 +163,6 @@ pub fn InterfacesPage(
         set_pending_changes.set(HashMap::new());
         set_error.set(None);
         set_success.set(None);
-    };
-
-    // Apply configuration to system (write networkd files and reload)
-    let apply_to_system = move |_| {
-        spawn_local(async move {
-            set_applying.set(true);
-            set_error.set(None);
-            set_success.set(None);
-
-            if let Some(token) = auth_token.get() {
-                match api::apply_networkd(&token).await {
-                    Ok(response) => {
-                        if response.success {
-                            set_success.set(Some(response.message));
-                        } else {
-                            let errors_msg = if response.errors.is_empty() {
-                                response.message
-                            } else {
-                                format!("{}: {}", response.message, response.errors.join(", "))
-                            };
-                            set_error.set(Some(errors_msg));
-                        }
-                    }
-                    Err(e) => {
-                        if e == "Unauthorized" {
-                            on_unauthorized.run(());
-                        } else {
-                            set_error.set(Some(e));
-                        }
-                    }
-                }
-            }
-            set_applying.set(false);
-        });
     };
 
     let renew_link = move |name: String| {
@@ -368,26 +336,6 @@ pub fn InterfacesPage(
                         </button>
                     </div>
                 </Show>
-
-                // Apply to System button (always visible when not loading)
-                <div class="pt-4 border-t border-gray-700">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <h3 class="text-lg font-medium text-gray-200">"Apply Configuration"</h3>
-                            <p class="text-sm text-gray-400">"Write interface configs to systemd-networkd and reload the network"</p>
-                        </div>
-                        <button
-                            class="bg-green-600 hover:bg-green-700 disabled:bg-green-800 disabled:cursor-not-allowed text-white px-6 py-2.5 rounded font-medium"
-                            disabled=move || applying.get() || has_changes()
-                            on:click=apply_to_system
-                        >
-                            {move || if applying.get() { "Applying..." } else { "Apply to System" }}
-                        </button>
-                    </div>
-                    <Show when=move || has_changes()>
-                        <p class="text-yellow-400 text-sm mt-2">"Save your changes before applying to the system."</p>
-                    </Show>
-                </div>
             </Show>
         </div>
     }

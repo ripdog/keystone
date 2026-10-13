@@ -5,7 +5,7 @@ use keystone_core::api::{
     SaveForwardRule, SaveInputRule, SaveZoneForward, UpdateSimpleForward,
 };
 use keystone_core::{
-    CreateSimplePortForwardRequest, DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest,
+    CreateSimplePortForwardRequest, DeleteResponse, FirewallConfirmRequest,
     FirewallConfirmResponse, FirewallGlobalSettings, FirewallGlobalSettingsResponse,
     FirewallPreviewResponse, FirewallRollbackResponse, FirewallZone, FirewallZonesResponse,
     ForwardRule, InputRule, LanDevice, LanDevicesResponse, PortForward,
@@ -180,11 +180,6 @@ pub async fn save_firewall_global_settings(
 pub async fn fetch_firewall_preview(token: &str) -> Result<String, String> {
     let response: FirewallPreviewResponse = get("/api/firewall/preview", token).await?;
     Ok(response.ruleset)
-}
-
-/// Apply firewall configuration
-pub async fn apply_firewall(token: &str) -> Result<FirewallApplyResponse, String> {
-    post_empty("/api/firewall/apply", token).await
 }
 
 /// Confirm firewall changes

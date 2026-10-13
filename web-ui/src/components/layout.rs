@@ -1,11 +1,19 @@
 //! Main application layout with navigation
 
-use crate::components::SidebarNavigation;
+use crate::components::{ConfigRefresh, PendingChangesBar, SidebarNavigation};
 use leptos::prelude::*;
+
 /// Main layout wrapper with sidebar navigation
 #[component]
-pub fn AppLayout(on_logout: Callback<()>, children: Children) -> impl IntoView {
+pub fn AppLayout(
+    auth_token: ReadSignal<Option<String>>,
+    on_unauthorized: Callback<()>,
+    on_logout: Callback<()>,
+    children: Children,
+) -> impl IntoView {
     let (sidebar_open, set_sidebar_open) = signal(false);
+    // Pages bump this after saving so the pending-changes bar refetches at once.
+    provide_context(ConfigRefresh(RwSignal::new(0)));
 
     let logout_click = move |_| on_logout.run(());
 
@@ -90,6 +98,7 @@ pub fn AppLayout(on_logout: Callback<()>, children: Children) -> impl IntoView {
                             </div>
                         </div>
                     </div>
+                    <PendingChangesBar auth_token=auth_token on_unauthorized=on_unauthorized />
                     <main class="flex-1 min-w-0 w-full p-5 sm:p-7 xl:p-10 2xl:p-12">
                         {children()}
                     </main>

@@ -2,8 +2,8 @@
 
 use keystone_core::api::SaveCaddyConfig;
 use keystone_core::{
-    CaddyApplyResponse, CaddyConfig, CaddyPreviewResponse, CaddyStateResponse,
-    CaddyValidateResponse, SaveCaddyConfigRequest,
+    CaddyConfig, CaddyPreviewResponse, CaddyStateResponse, CaddyValidateResponse,
+    SaveCaddyConfigRequest,
 };
 
 use super::client::{call, get, post_empty};
@@ -44,11 +44,6 @@ pub async fn fetch_caddy_preview(token: &str) -> Result<String, String> {
 /// Validate Caddy configuration
 pub async fn validate_caddy(token: &str) -> Result<CaddyValidateResponse, String> {
     post_empty("/api/caddy/validate", token).await
-}
-
-/// Apply Caddy configuration
-pub async fn apply_caddy(token: &str) -> Result<CaddyApplyResponse, String> {
-    post_empty("/api/caddy/apply", token).await
 }
 
 /// Caddy service status

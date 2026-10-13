@@ -10,8 +10,8 @@ use leptos::task::spawn_local;
 use leptos_router::hooks::use_params_map;
 
 use crate::api;
-use crate::components::StaticIpSettings;
 use crate::components::form_utils::{event_target_checked, event_target_value};
+use crate::components::{StaticIpSettings, use_config_changed};
 
 #[component]
 pub fn InterfaceEditPage(
@@ -28,11 +28,11 @@ pub fn InterfaceEditPage(
     let (error, set_error) = signal::<Option<String>>(None);
     let (success, set_success) = signal::<Option<String>>(None);
     let (is_new, set_is_new) = signal(false);
-    // Saving only updates the database; these track the follow-up steps that
-    // write the networkd files and re-apply them to the running link.
+    // Saving only updates the database. The pending-changes bar writes the
+    // networkd files; this tracks the follow-up that re-reads them on this link.
     let (needs_apply, set_needs_apply) = signal(false);
-    let (applying, set_applying) = signal(false);
     let (reconfiguring, set_reconfiguring) = signal(false);
+    let config_changed = use_config_changed();
 
     // Form fields
     let (role, set_role) = signal(InterfaceRole::LAN);
@@ -431,6 +431,7 @@ pub fn InterfaceEditPage(
                             set_is_new.set(false);
                             set_success.set(Some("Configuration saved".to_string()));
                             set_needs_apply.set(true);
+                            config_changed.run(());
                         } else {
                             set_error.set(Some(response.message));
                         }
@@ -445,28 +446,6 @@ pub fn InterfaceEditPage(
                 }
             }
             set_saving.set(false);
-        });
-    };
-
-    let apply_to_system = move |_| {
-        let Some(token) = auth_token.get_untracked() else {
-            return;
-        };
-        set_applying.set(true);
-        set_error.set(None);
-        set_success.set(None);
-        spawn_local(async move {
-            match api::apply_networkd(&token).await {
-                Ok(response) if response.success => set_success.set(Some(response.message)),
-                Ok(response) => set_error.set(Some(if response.errors.is_empty() {
-                    response.message
-                } else {
-                    format!("{}: {}", response.message, response.errors.join(", "))
-                })),
-                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
-                Err(e) => set_error.set(Some(e)),
-            }
-            set_applying.set(false);
         });
     };
 
@@ -549,18 +528,11 @@ pub fn InterfaceEditPage(
             <Show when=move || needs_apply.get() && !is_new.get()>
                 <div class="bg-yellow-900/30 border border-yellow-600 text-yellow-200 px-4 py-3 rounded flex items-center gap-3 flex-wrap">
                     <span class="flex-1">
-                        "Saved, but not live yet. Apply to System writes the networkd files; Reconfigure Link then makes networkd re-read them on this link (a link with DHCP may briefly lose its lease)."
+                        "Saved, but not live yet. Apply all in the pending changes bar writes the networkd files; then Reconfigure Link makes networkd re-read them on this link (a link with DHCP may briefly lose its lease)."
                     </span>
                     <button
-                        class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
-                        disabled=move || applying.get() || reconfiguring.get()
-                        on:click=apply_to_system
-                    >
-                        {move || if applying.get() { "Applying..." } else { "Apply to System" }}
-                    </button>
-                    <button
                         class="bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
-                        disabled=move || applying.get() || reconfiguring.get()
+                        disabled=move || reconfiguring.get()
                         on:click=reconfigure_link
                     >
                         {move || if reconfiguring.get() { "Reconfiguring..." } else { "Reconfigure Link" }}

@@ -5,14 +5,14 @@ use keystone_core::api::{
     SaveHostRecord, SaveStaticLease,
 };
 use keystone_core::{
-    DhcpLease, DhcpLeasesResponse, DnsmasqAddressOverride, DnsmasqApplyResponse,
-    DnsmasqCnameRecord, DnsmasqConfig, DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord,
-    DnsmasqPreviewResponse, DnsmasqStateResponse, DnsmasqStaticLease, SaveAddressOverrideRequest,
-    SaveCnameRecordRequest, SaveDhcpOptionRequest, SaveDhcpRangeRequest, SaveDnsmasqConfigRequest,
-    SaveHostRecordRequest, SaveStaticLeaseRequest,
+    DhcpLease, DhcpLeasesResponse, DnsmasqAddressOverride, DnsmasqCnameRecord, DnsmasqConfig,
+    DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord, DnsmasqPreviewResponse,
+    DnsmasqStateResponse, DnsmasqStaticLease, SaveAddressOverrideRequest, SaveCnameRecordRequest,
+    SaveDhcpOptionRequest, SaveDhcpRangeRequest, SaveDnsmasqConfigRequest, SaveHostRecordRequest,
+    SaveStaticLeaseRequest,
 };
 
-use super::client::{call, delete_no_response, get, post_empty};
+use super::client::{call, delete_no_response, get};
 
 /// Turn a `{success, message, id}` save response into the saved id.
 fn saved_id(success: bool, message: String, id: Option<i64>) -> Result<i64, String> {
@@ -154,9 +154,4 @@ pub async fn delete_address_override(token: &str, id: i64) -> Result<(), String>
 pub async fn fetch_dnsmasq_preview(token: &str) -> Result<String, String> {
     let response: DnsmasqPreviewResponse = get("/api/dnsmasq/preview", token).await?;
     Ok(response.config_content)
-}
-
-/// Apply dnsmasq configuration
-pub async fn apply_dnsmasq(token: &str) -> Result<DnsmasqApplyResponse, String> {
-    post_empty("/api/dnsmasq/apply", token).await
 }

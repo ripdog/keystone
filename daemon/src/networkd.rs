@@ -433,17 +433,19 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
     }
 
     // [DHCPv4] section if DHCP includes IPv4
-    if let Some(dhcp_cfg) = &config.dhcpv4_client
-        && (config.dhcp_mode == DhcpMode::Yes || config.dhcp_mode == DhcpMode::Ipv4)
-    {
-        output.push_str(&generate_dhcpv4_section(dhcp_cfg));
+    if config.dhcp_mode == DhcpMode::Yes || config.dhcp_mode == DhcpMode::Ipv4 {
+        match &config.dhcpv4_client {
+            Some(dhcp_cfg) => output.push_str(&generate_dhcpv4_section(dhcp_cfg)),
+            None => output.push_str(DHCP_NO_RELEASE_V4),
+        }
     }
 
     // [DHCPv6] section if DHCP includes IPv6
-    if let Some(dhcp_cfg) = &config.dhcpv6_client
-        && (config.dhcp_mode == DhcpMode::Yes || config.dhcp_mode == DhcpMode::Ipv6)
-    {
-        output.push_str(&generate_dhcpv6_section(dhcp_cfg));
+    if config.dhcp_mode == DhcpMode::Yes || config.dhcp_mode == DhcpMode::Ipv6 {
+        match &config.dhcpv6_client {
+            Some(dhcp_cfg) => output.push_str(&generate_dhcpv6_section(dhcp_cfg)),
+            None => output.push_str(DHCP_NO_RELEASE_V6),
+        }
     }
 
     // [IPv6AcceptRA] section if accepting RAs with custom settings
@@ -460,9 +462,16 @@ pub fn generate_network_file(config: &InterfaceConfig) -> String {
     output
 }
 
+/// networkd releases leases whenever a client stops, including on reconfigure.
+/// Some ISP BNGs tear the subscriber session down on release and then end up
+/// with a stale session after an immediate re-DISCOVER, so never release.
+const DHCP_NO_RELEASE_V4: &str = "[DHCPv4]\nSendRelease=no\n\n";
+const DHCP_NO_RELEASE_V6: &str = "[DHCPv6]\nSendRelease=no\n\n";
+
 fn generate_dhcpv4_section(cfg: &Dhcpv4ClientConfig) -> String {
     let mut output = String::new();
     writeln!(output, "[DHCPv4]").unwrap();
+    writeln!(output, "SendRelease=no").unwrap();
     if let Some(identifier) = cfg.client_identifier {
         writeln!(output, "ClientIdentifier={identifier}").unwrap();
     }
@@ -488,6 +497,7 @@ fn generate_dhcpv4_section(cfg: &Dhcpv4ClientConfig) -> String {
 fn generate_dhcpv6_section(cfg: &Dhcpv6ClientConfig) -> String {
     let mut output = String::new();
     writeln!(output, "[DHCPv6]").unwrap();
+    writeln!(output, "SendRelease=no").unwrap();
     writeln!(output, "UseDNS={}", bool_to_yesno(cfg.use_dns)).unwrap();
     writeln!(output, "UseNTP={}", bool_to_yesno(cfg.use_ntp)).unwrap();
     if cfg.use_domains != "yes" {
@@ -1212,5 +1222,30 @@ mod tests {
         assert!(!is_keystone_networkd_file(&other));
 
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn dhcp_clients_never_send_release() {
+        let configured = InterfaceConfig {
+            name: "wan0".to_string(),
+            dhcp_mode: DhcpMode::Yes,
+            dhcpv4_client: Some(Dhcpv4ClientConfig::default()),
+            dhcpv6_client: Some(Dhcpv6ClientConfig::default()),
+            ..Default::default()
+        };
+        let bare = InterfaceConfig {
+            dhcpv4_client: None,
+            dhcpv6_client: None,
+            ..configured.clone()
+        };
+        for config in [configured, bare] {
+            let output = generate_network_file(&config);
+            assert_eq!(output.matches("SendRelease=no").count(), 2, "{output}");
+        }
+        let static_lan = InterfaceConfig {
+            dhcp_mode: DhcpMode::No,
+            ..Default::default()
+        };
+        assert!(!generate_network_file(&static_lan).contains("SendRelease"));
     }
 }

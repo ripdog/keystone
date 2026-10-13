@@ -31,6 +31,7 @@ use uuid::Uuid;
 pub use keystone_core::changes::{Component, SnapshotKind, SnapshotStatus};
 
 use crate::db::Database;
+use crate::snapshot_validation::validate_configuration;
 
 /// Newest snapshots kept. Older ones, and their files, are pruned after each
 /// new snapshot.
@@ -859,6 +860,17 @@ async fn restore_from_copies(
         prepare_copy(work).await?;
     }
 
+    let sources: Vec<(String, PathBuf, Vec<Component>)> = copies
+        .iter()
+        .zip(by_snapshot.values())
+        .enumerate()
+        .map(|(index, ((_, work), components))| {
+            (source_alias(index), work.clone(), components.clone())
+        })
+        .collect();
+    // Refuse before the backup is taken or any live row is replaced.
+    validate_restored_configuration(db, &sources).await?;
+
     let ids: Vec<String> = by_snapshot.keys().map(i64::to_string).collect();
     let note = format!(
         "Automatic backup before restoring snapshot {}",
@@ -879,14 +891,6 @@ async fn restore_from_copies(
     )
     .await?;
 
-    let sources: Vec<(String, PathBuf, Vec<Component>)> = copies
-        .iter()
-        .zip(by_snapshot.values())
-        .enumerate()
-        .map(|(index, ((_, work), components))| {
-            (source_alias(index), work.clone(), components.clone())
-        })
-        .collect();
     replace_configuration(db.pool(), &sources).await?;
 
     let mut components: Vec<Component> = by_snapshot.values().flatten().copied().collect();
@@ -897,6 +901,38 @@ async fn restore_from_copies(
         components,
         pre_restore,
     })
+}
+
+/// Check the configuration a restore would produce, before anything live is
+/// changed. The merged result is built in a scratch copy of the live database
+/// with the same replacement the restore runs, then validated there.
+async fn validate_restored_configuration(
+    db: &Database,
+    sources: &[(String, PathBuf, Vec<Component>)],
+) -> Result<()> {
+    let dir = snapshot_dir(db).await?;
+    let scratch = dir.join(format!("restore-check-{}.db", Uuid::new_v4().simple()));
+    let result: Result<()> = async {
+        vacuum_into(db.pool(), &scratch).await?;
+        strip_to_configuration(&scratch).await?;
+        let pool = open_sqlite(&scratch, false).await?;
+        let outcome: Result<()> = async {
+            replace_configuration(&pool, sources).await?;
+            let errors = validate_configuration(&Database::from_pool(pool.clone())).await;
+            ensure!(
+                errors.is_empty(),
+                "restored configuration is invalid: {}",
+                errors.join("; ")
+            );
+            Ok(())
+        }
+        .await;
+        pool.close().await;
+        outcome
+    }
+    .await;
+    remove_snapshot_files(&scratch);
+    result
 }
 
 /// Open a snapshot read-only, so preview generators can run against the
@@ -956,12 +992,19 @@ pub async fn import_snapshot(
         precheck_read_only(&staged).await?;
         prepare_copy(&staged).await?;
         strip_to_configuration(&staged).await?;
-        let schema = {
+        let (schema, errors) = {
             let pool = open_sqlite(&staged, true).await?;
-            let version = schema_version(&pool).await;
-            pool.close().await;
-            version?
+            let staged_db = Database::from_pool(pool);
+            let errors = validate_configuration(&staged_db).await;
+            let version = schema_version(staged_db.pool()).await;
+            staged_db.pool().close().await;
+            (version?, errors)
         };
+        ensure!(
+            errors.is_empty(),
+            "uploaded snapshot holds invalid configuration: {}",
+            errors.join("; ")
+        );
 
         std::fs::rename(&staged, &final_path).context("Failed to store the imported snapshot")?;
         restrict_file(&final_path)?;
@@ -2168,5 +2211,125 @@ pub(crate) mod tests {
             before
         );
         assert_eq!(list_snapshots(&db).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn import_rejects_invalid_configuration_and_registers_nothing() {
+        use crate::snapshot_validation::tests::populate_valid_configuration;
+
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        populate_valid_configuration(&db).await;
+
+        // An upload whose host record name would inject a dnsmasq directive.
+        std::fs::create_dir_all(scratch.snapshot_dir()).unwrap();
+        let copy_path = scratch.snapshot_dir().join("tampered-copy.db");
+        sqlx::query("VACUUM INTO ?")
+            .bind(copy_path.to_str().unwrap())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let copy = open_sqlite(&copy_path, false).await.unwrap();
+        sqlx::query(
+            "UPDATE dnsmasq_host_record_names
+             SET hostname = 'nas.example' || char(10) || 'dhcp-script=/bin/sh'",
+        )
+        .execute(&copy)
+        .await
+        .unwrap();
+        copy.close().await;
+        let bytes = std::fs::read(&copy_path).unwrap();
+        std::fs::remove_file(&copy_path).unwrap();
+        let before = std::fs::read_dir(scratch.snapshot_dir()).unwrap().count();
+
+        let error = import_snapshot(&db, &bytes, Some("admin"))
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("invalid configuration"), "{message}");
+        assert!(message.contains("dnsmasq:"), "{message}");
+        assert!(list_snapshots(&db).await.unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_dir(scratch.snapshot_dir()).unwrap().count(),
+            before,
+            "a refused upload must leave no files behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_refuses_invalid_snapshot_and_keeps_live_configuration() {
+        use crate::snapshot_validation::tests::populate_valid_configuration;
+
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        populate_valid_configuration(&db).await;
+        let snapshot = create_snapshot(&db, applied_now()).await.unwrap();
+
+        // Tamper with the stored copy: an interface description that would
+        // write a second directive into the generated networkd file.
+        let path = snapshot_path(&db, snapshot.id).await.unwrap();
+        let copy = open_sqlite(&path, false).await.unwrap();
+        sqlx::query(
+            "UPDATE interface_config
+             SET description = 'uplink' || char(10) || 'Table=1'
+             WHERE interface_name = 'wan0'",
+        )
+        .execute(&copy)
+        .await
+        .unwrap();
+        copy.close().await;
+
+        insert_zone(&db, "guest").await;
+        let snapshots_before = list_snapshots(&db).await.unwrap().len();
+        let files_before = std::fs::read_dir(scratch.snapshot_dir()).unwrap().count();
+
+        let error = restore_snapshot(&db, snapshot.id, None, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("networkd:"), "{error:#}");
+
+        assert!(
+            zone_exists(&db, "guest").await,
+            "refused restore must not change live data"
+        );
+        assert_eq!(db.get_interface_configs().await.unwrap().len(), 2);
+        assert_eq!(
+            list_snapshots(&db).await.unwrap().len(),
+            snapshots_before,
+            "no pre-restore backup should be taken for a refused restore"
+        );
+        assert_eq!(
+            std::fs::read_dir(scratch.snapshot_dir()).unwrap().count(),
+            files_before,
+            "the scratch copy must be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn valid_configuration_round_trips_through_import_and_restore() {
+        use crate::snapshot_validation::tests::populate_valid_configuration;
+
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        populate_valid_configuration(&db).await;
+        let snapshot = create_snapshot(&db, applied_now()).await.unwrap();
+        let bytes = std::fs::read(snapshot_path(&db, snapshot.id).await.unwrap()).unwrap();
+
+        insert_zone(&db, "guest").await;
+        restore_snapshot(&db, snapshot.id, None, None)
+            .await
+            .expect("a snapshot the daemon created must restore");
+        assert!(!zone_exists(&db, "guest").await);
+        assert!(zone_exists(&db, "office").await);
+
+        let imported = import_snapshot(&db, &bytes, None)
+            .await
+            .expect("a valid upload must be accepted");
+        insert_zone(&db, "guest").await;
+        restore_snapshot(&db, imported.id, None, None)
+            .await
+            .expect("an imported valid snapshot must restore");
+        assert!(!zone_exists(&db, "guest").await);
+        assert_eq!(db.get_interface_configs().await.unwrap().len(), 2);
     }
 }

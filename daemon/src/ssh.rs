@@ -15,7 +15,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::State,
     routing::{get, post},
 };
@@ -27,7 +27,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::{AppError, AppState, db::Database};
+use crate::snapshots::{self, Component};
+use crate::{Actor, AppError, AppState, db::Database};
 
 const SETTINGS: &str = "/var/lib/keystone/ssh.json";
 const DROP_IN: &str = "/etc/ssh/sshd_config.d/00-keystone.conf";
@@ -413,6 +414,7 @@ async fn state(State(state): State<Arc<AppState>>) -> Result<Json<SshStateRespon
 
 async fn save(
     State(state): State<Arc<AppState>>,
+    actor: Option<Extension<Actor>>,
     Json(config): Json<Req<ApplySsh>>,
 ) -> Result<Json<Res<ApplySsh>>, AppError> {
     if state
@@ -436,6 +438,19 @@ async fn save(
     }
     let _guard = APPLY_LOCK.lock().await;
     let result = apply_with_firewall(&state, &config).await;
+    if let Ok(Some(session)) = &result {
+        // The firewall change awaits confirmation, so it is recorded the same
+        // way as a firewall apply: as a snapshot pending on that session.
+        let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
+        snapshots::record_applied(
+            &state.db,
+            actor,
+            Some(session),
+            &[Component::Firewall],
+            "ssh apply",
+        )
+        .await;
+    }
     Ok(Json(match result {
         Ok(session_id) => SshApplyResponse {
             success: true,

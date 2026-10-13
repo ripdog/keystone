@@ -3,7 +3,7 @@ members = ["core", "daemon", "web-ui", "ctl"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 rust-version = "1.99"
 authors = ["Keystone Project"]

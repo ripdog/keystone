@@ -72,9 +72,11 @@ pub fn generate_input_chain(
     )));
 
     // Priority 3.5: ICMP safety rules (hardcoded - always block dangerous types)
-    generate_icmp_input_rules(batch, config, zone_interfaces);
+    generate_icmp_drop_rules(batch);
 
-    // Priority 4: User input rules (position-ordered)
+    // Priority 4: User input rules (position-ordered). These run before the
+    // built-in ping/essential-ICMP accepts so a user rule can drop or limit
+    // ping; the dangerous-ICMP drops above can never be overridden.
     let mut sorted_rules: Vec<_> = config.input_rules.iter().filter(|r| r.enabled).collect();
     sorted_rules.sort_by_key(|r| r.position);
 
@@ -83,6 +85,9 @@ pub fn generate_input_chain(
             batch.add(NfListObject::Rule(nf_rule));
         }
     }
+
+    // Priority 4.5: Built-in ICMP accepts (ping per global settings, essential types)
+    generate_icmp_accept_rules(batch, config, zone_interfaces);
 
     // Priority 5: Zone default policies
     for zone in &config.zones {
@@ -217,15 +222,10 @@ pub fn create_loopback_rule(table: &'static str, chain: &'static str) -> Rule<'s
     }
 }
 
-/// Generate hardcoded ICMP safety rules
-/// - Always block dangerous ICMP types: timestamp, redirect, address-mask
-/// - Allow ping (echo-request) based on global settings per zone type
-fn generate_icmp_input_rules(
-    batch: &mut Batch<'static>,
-    config: &FirewallConfig,
-    zone_interfaces: &HashMap<String, Vec<String>>,
-) {
-    // First: Drop dangerous ICMP types from everywhere (hardcoded security)
+/// Generate hardcoded ICMP drop rules: always block dangerous ICMP types
+/// (timestamp, redirect, address-mask) before any user rule can accept them.
+fn generate_icmp_drop_rules(batch: &mut Batch<'static>) {
+    // Drop dangerous ICMP types from everywhere (hardcoded security)
     // ICMP types to block:
     // - Timestamp Request (13) / Reply (14) - can leak system info
     // - Redirect (5) - can be used for MITM attacks
@@ -256,7 +256,16 @@ fn generate_icmp_input_rules(
         18,
         "Drop ICMP address-mask-reply",
     )));
+}
 
+/// Generate the built-in ICMP accepts, placed after user input rules:
+/// - Allow ping (echo-request) based on global settings per zone type
+/// - Allow essential ICMP/ICMPv6 needed for correct network operation
+fn generate_icmp_accept_rules(
+    batch: &mut Batch<'static>,
+    config: &FirewallConfig,
+    zone_interfaces: &HashMap<String, Vec<String>>,
+) {
     // Identify WAN vs LAN zones
     let wan_zones = find_wan_zones(&config.zones);
     let wan_zone_names: Vec<&str> = wan_zones.iter().map(|z| z.name.as_str()).collect();

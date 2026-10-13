@@ -386,4 +386,59 @@ mod tests {
         assert!(text.contains("80") && !text.contains("8080"));
         assert_eq!(accept["add"]["rule"]["chain"], "forward");
     }
+
+    /// Comments of the input-chain rules, in evaluation order.
+    fn input_rule_comments(config: &FirewallConfig) -> Vec<String> {
+        let json = serde_json::to_value(&generate_ruleset(config).nftables).unwrap();
+        json["nftables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["add"]["rule"]["chain"] == "input")
+            .map(|r| {
+                r["add"]["rule"]["comment"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn user_input_rules_sit_between_icmp_drops_and_icmp_accepts() {
+        let mut config = create_test_config();
+        config.input_rules[0].name = "Drop LAN ping".to_string();
+        let comments = input_rule_comments(&config);
+        let first = |needle: &str| {
+            comments
+                .iter()
+                .position(|c| c.contains(needle))
+                .unwrap_or_else(|| panic!("missing rule {needle:?} in {comments:?}"))
+        };
+        let last = |needle: &str| {
+            comments
+                .iter()
+                .rposition(|c| c.contains(needle))
+                .unwrap_or_else(|| panic!("missing rule {needle:?} in {comments:?}"))
+        };
+
+        let loopback = first("Accept loopback");
+        let last_drop = last("Drop ICMP");
+        let user_rule = first("Drop LAN ping");
+        let first_ping = first("Allow IPv4 ping");
+        let first_essential = first("Accept ICMP destination-unreachable");
+        let zone_default = first("zone default: accept input");
+
+        assert!(first("Drop ICMP") > loopback);
+        assert!(
+            user_rule > last_drop,
+            "user rules follow dangerous-ICMP drops"
+        );
+        assert!(first_ping > user_rule, "ping accepts follow user rules");
+        assert!(
+            first_essential > user_rule,
+            "essential ICMP follows user rules"
+        );
+        assert!(zone_default > first_ping.max(first_essential));
+    }
 }

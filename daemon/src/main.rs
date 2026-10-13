@@ -268,6 +268,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(firewall::routes::firewall_routes(firewall_state))
         // Merge dnsmasq routes
         .merge(dnsmasq::routes::dnsmasq_routes(dnsmasq_state))
+        // Unified LAN client inventory
+        .merge(clients::clients_routes(db.clone()))
         // Merge Caddy routes
         .merge(caddy::routes::caddy_routes(caddy_state))
         // Merge pending-change and snapshot routes
@@ -601,6 +603,7 @@ fn is_blocked_before_setup(path: &str) -> bool {
     );
 
     path == "/dashboard"
+        || path == "/clients"
         || path == "/apply-networkd"
         || path == "/apply-all"
         || path == "/networkd-preview"
@@ -1913,6 +1916,7 @@ mod tests {
         assert!(!is_blocked_before_setup("/complete-setup"));
         assert!(!is_blocked_before_setup("/state"));
         assert!(is_blocked_before_setup("/dashboard"));
+        assert!(is_blocked_before_setup("/clients"));
         assert!(is_blocked_before_setup("/apply-all"));
         assert!(is_blocked_before_setup("/interfaces/enp3s0/renew"));
         assert!(is_blocked_before_setup("/interfaces/enp3s0/reconfigure"));

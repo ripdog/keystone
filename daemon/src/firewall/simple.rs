@@ -3,6 +3,7 @@
 use super::routes::FirewallState;
 use crate::AppError;
 use crate::clients::lan_neighbours;
+use crate::db::Database;
 use axum::{
     Json,
     extract::{Path, State},
@@ -264,13 +265,15 @@ fn derive_forwards(config: &FirewallConfig) -> Vec<SimplePortForward> {
     group_forwards(&derive_entries(config), &HashMap::new())
 }
 
-async fn load_forwards(
-    state: &FirewallState,
+/// The simple forwards currently derived from the firewall rules, plus the
+/// config they were derived from.
+pub(crate) async fn load_forwards(
+    db: &Database,
 ) -> Result<(FirewallConfig, Vec<SimplePortForward>), AppError> {
-    let config = state.db.get_firewall_config().await?;
+    let config = db.get_firewall_config().await?;
     let keys: Vec<(i64, String)> = sqlx::query_as(
         "SELECT id, simple_forward_group FROM firewall_forward_rules WHERE simple_forward_group IS NOT NULL"
-    ).fetch_all(state.db.pool()).await?;
+    ).fetch_all(db.pool()).await?;
     let list = group_forwards(&derive_entries(&config), &keys.into_iter().collect());
     Ok((config, list))
 }
@@ -327,7 +330,7 @@ fn validate(request: &CreateSimplePortForwardRequest) -> Result<Vec<IpAddr>, Str
 pub async fn list(
     State(state): State<FirewallState>,
 ) -> Result<Json<SimplePortForwardsResponse>, AppError> {
-    let (config, forwards) = load_forwards(&state).await?;
+    let (config, forwards) = load_forwards(&state.db).await?;
     let other_port_forwards = other_port_forwards(&config);
     Ok(Json(SimplePortForwardsResponse {
         forwards,
@@ -405,7 +408,7 @@ pub async fn update(
     Json(req): Json<Req<UpdateSimpleForward>>,
 ) -> Result<Json<Res<UpdateSimpleForward>>, AppError> {
     let addresses = validate(&req).map_err(anyhow::Error::msg)?;
-    let (config, groups) = load_forwards(&state).await?;
+    let (config, groups) = load_forwards(&state.db).await?;
     let current = groups
         .into_iter()
         .find(|f| f.rule_id == rule_id)
@@ -539,7 +542,7 @@ pub async fn remove(
     State(state): State<FirewallState>,
     Path(rule_id): Path<i64>,
 ) -> Result<Json<DeleteResponse>, AppError> {
-    let (config, groups) = load_forwards(&state).await?;
+    let (config, groups) = load_forwards(&state.db).await?;
     let Some(group) = groups.into_iter().find(|f| f.rule_id == rule_id) else {
         return Ok(Json(DeleteResponse {
             success: false,

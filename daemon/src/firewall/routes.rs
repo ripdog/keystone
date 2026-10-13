@@ -11,6 +11,9 @@
 
 use crate::Actor;
 use crate::db::Database;
+use crate::firewall::groups::{
+    GroupIndex, validate_address_group, validate_group_names, validate_port_group,
+};
 use crate::firewall::validate::{
     validate_forward_rule, validate_input_rule, validate_port_forward, validate_zone,
     validate_zone_forward,
@@ -24,16 +27,18 @@ use axum::{
 };
 use keystone_core::api::{
     ConfirmFirewall, CreateSimpleForward, Endpoint, ReorderForwardRules, ReorderInputRules, Req,
-    Res, SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule, SaveInputRule,
-    SavePortForward, SaveZoneForward, UpdateSimpleForward,
+    Res, SaveAddressGroup, SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule,
+    SaveInputRule, SavePortForward, SavePortGroup, SaveZoneForward, UpdateSimpleForward,
 };
 use keystone_core::{
-    DeleteResponse, FirewallApplyResponse, FirewallConfigResponse, FirewallGlobalSettingsResponse,
+    AddressGroup, AddressGroupsResponse, DeleteResponse, FirewallApplyResponse,
+    FirewallConfigResponse, FirewallCountersResponse, FirewallGlobalSettingsResponse,
     FirewallPreviewResponse, FirewallRollbackResponse, FirewallStatusResponse, FirewallZone,
     FirewallZonesResponse, ForwardRulesResponse, InputRulesResponse, PortForwardsResponse,
-    ReorderRulesResponse, SaveFirewallGlobalSettingsResponse, SaveFirewallZoneResponse,
-    SaveForwardRuleResponse, SaveInputRuleResponse, SavePortForwardResponse,
-    SaveZoneForwardResponse, ZoneForwardsResponse,
+    PortGroup, PortGroupsResponse, ReorderRulesResponse, SaveAddressGroupResponse,
+    SaveFirewallGlobalSettingsResponse, SaveFirewallZoneResponse, SaveForwardRuleResponse,
+    SaveInputRuleResponse, SavePortForwardResponse, SavePortGroupResponse, SaveZoneForwardResponse,
+    ZoneForwardsResponse,
 };
 use std::sync::Arc;
 use tracing::info;
@@ -85,8 +90,20 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
         // Global settings
         .route("/firewall/settings", get(get_global_settings))
         .route(SaveFirewallGlobalSettings::PATH, post(save_global_settings))
+        // Address and port groups
+        .route("/firewall/address-groups", get(get_address_groups))
+        .route(SaveAddressGroup::PATH, post(save_address_group))
+        .route(
+            "/firewall/address-groups/{id}",
+            delete(delete_address_group),
+        )
+        .route("/firewall/port-groups", get(get_port_groups))
+        .route(SavePortGroup::PATH, post(save_port_group))
+        .route("/firewall/port-groups/{id}", delete(delete_port_group))
         // Config overview
         .route("/firewall/config", get(get_firewall_config))
+        // Hit counters for user rules
+        .route("/firewall/counters", get(get_rule_counters))
         // Preview and Apply
         .route("/firewall/preview", get(preview_firewall))
         .route("/firewall/preview/json", get(preview_firewall_json))
@@ -95,6 +112,163 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
         .route("/firewall/rollback", post(rollback_firewall))
         .route("/firewall/status", get(firewall_status))
         .with_state(state)
+}
+
+// ============================================================================
+// Group Endpoints
+// ============================================================================
+
+/// Groups as stored, owned here so that a [`GroupIndex`] can borrow them.
+struct StoredGroups {
+    address: Vec<AddressGroup>,
+    port: Vec<PortGroup>,
+}
+
+impl StoredGroups {
+    async fn load(db: &Database) -> Result<Self, AppError> {
+        Ok(Self {
+            address: db.get_address_groups().await?,
+            port: db.get_port_groups().await?,
+        })
+    }
+
+    fn index(&self) -> GroupIndex<'_> {
+        GroupIndex::new(&self.address, &self.port)
+    }
+}
+
+/// Trim entries and descriptions from the form and drop blank entry lines.
+fn tidy_group(entries: Vec<String>, description: Option<String>) -> (Vec<String>, Option<String>) {
+    let entries = entries
+        .into_iter()
+        .map(|entry| entry.trim().to_string())
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    let description = description
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty());
+    (entries, description)
+}
+
+/// GET /firewall/address-groups - Get all address groups
+async fn get_address_groups(
+    State(state): State<FirewallState>,
+) -> Result<Json<AddressGroupsResponse>, AppError> {
+    info!("Getting address groups");
+    let groups = state.db.get_address_groups().await?;
+    Ok(Json(AddressGroupsResponse { groups }))
+}
+
+/// POST /firewall/address-groups - Create or update an address group
+async fn save_address_group(
+    State(state): State<FirewallState>,
+    Json(request): Json<Req<SaveAddressGroup>>,
+) -> Result<Json<Res<SaveAddressGroup>>, AppError> {
+    let mut group = request.group;
+    info!("Saving address group: {}", group.name);
+    (group.entries, group.description) = tidy_group(group.entries, group.description);
+
+    let stored = StoredGroups::load(&state.db).await?;
+    let mut errors = validate_address_group(&group);
+    // The group's own stored row may keep its name; any other row may not.
+    let mut addresses: Vec<AddressGroup> = stored
+        .address
+        .into_iter()
+        .filter(|other| other.id != group.id)
+        .collect();
+    addresses.push(group.clone());
+    errors.extend(validate_group_names(&addresses, &stored.port));
+    if !errors.is_empty() {
+        return Ok(Json(SaveAddressGroupResponse {
+            success: false,
+            message: errors.join("; "),
+            group_id: None,
+        }));
+    }
+
+    let id = state.db.save_address_group(&group).await?;
+    Ok(Json(SaveAddressGroupResponse {
+        success: true,
+        message: "Address group saved".to_string(),
+        group_id: Some(id),
+    }))
+}
+
+/// DELETE /firewall/address-groups/:id - Delete an address group
+async fn delete_address_group(
+    State(state): State<FirewallState>,
+    Path(id): Path<i64>,
+) -> Result<Json<DeleteResponse>, AppError> {
+    info!("Deleting address group id: {}", id);
+    let deleted = state.db.delete_address_group(id).await?;
+    Ok(Json(DeleteResponse {
+        success: deleted,
+        message: if deleted {
+            "Address group deleted".to_string()
+        } else {
+            "Address group not found".to_string()
+        },
+    }))
+}
+
+/// GET /firewall/port-groups - Get all port groups
+async fn get_port_groups(
+    State(state): State<FirewallState>,
+) -> Result<Json<PortGroupsResponse>, AppError> {
+    info!("Getting port groups");
+    let groups = state.db.get_port_groups().await?;
+    Ok(Json(PortGroupsResponse { groups }))
+}
+
+/// POST /firewall/port-groups - Create or update a port group
+async fn save_port_group(
+    State(state): State<FirewallState>,
+    Json(request): Json<Req<SavePortGroup>>,
+) -> Result<Json<Res<SavePortGroup>>, AppError> {
+    let mut group = request.group;
+    info!("Saving port group: {}", group.name);
+    (group.entries, group.description) = tidy_group(group.entries, group.description);
+
+    let stored = StoredGroups::load(&state.db).await?;
+    let mut errors = validate_port_group(&group);
+    let mut ports: Vec<PortGroup> = stored
+        .port
+        .into_iter()
+        .filter(|other| other.id != group.id)
+        .collect();
+    ports.push(group.clone());
+    errors.extend(validate_group_names(&stored.address, &ports));
+    if !errors.is_empty() {
+        return Ok(Json(SavePortGroupResponse {
+            success: false,
+            message: errors.join("; "),
+            group_id: None,
+        }));
+    }
+
+    let id = state.db.save_port_group(&group).await?;
+    Ok(Json(SavePortGroupResponse {
+        success: true,
+        message: "Port group saved".to_string(),
+        group_id: Some(id),
+    }))
+}
+
+/// DELETE /firewall/port-groups/:id - Delete a port group
+async fn delete_port_group(
+    State(state): State<FirewallState>,
+    Path(id): Path<i64>,
+) -> Result<Json<DeleteResponse>, AppError> {
+    info!("Deleting port group id: {}", id);
+    let deleted = state.db.delete_port_group(id).await?;
+    Ok(Json(DeleteResponse {
+        success: deleted,
+        message: if deleted {
+            "Port group deleted".to_string()
+        } else {
+            "Port group not found".to_string()
+        },
+    }))
 }
 
 // ============================================================================
@@ -271,7 +445,8 @@ async fn save_input_rule(
         }));
     }
 
-    let errors = validate_input_rule(&rule);
+    let stored = StoredGroups::load(&state.db).await?;
+    let errors = validate_input_rule(&rule, &stored.index());
     if !errors.is_empty() {
         return Ok(Json(SaveInputRuleResponse {
             success: false,
@@ -356,7 +531,8 @@ async fn save_forward_rule(
         }));
     }
 
-    let errors = validate_forward_rule(&rule);
+    let stored = StoredGroups::load(&state.db).await?;
+    let errors = validate_forward_rule(&rule, &stored.index());
     if !errors.is_empty() {
         return Ok(Json(SaveForwardRuleResponse {
             success: false,
@@ -447,7 +623,8 @@ async fn save_port_forward(
         }));
     }
 
-    let errors = validate_port_forward(&pf);
+    let stored = StoredGroups::load(&state.db).await?;
+    let errors = validate_port_forward(&pf, &stored.index());
     if !errors.is_empty() {
         return Ok(Json(SavePortForwardResponse {
             success: false,
@@ -542,6 +719,12 @@ async fn preview_firewall_json(State(state): State<FirewallState>) -> Result<Str
 // ============================================================================
 // Apply/Confirm/Rollback Endpoints
 // ============================================================================
+
+/// GET /firewall/counters - Hit counters of the applied user rules
+async fn get_rule_counters() -> Result<Json<FirewallCountersResponse>, AppError> {
+    let counters = super::counters::read_rule_counters().await?;
+    Ok(Json(FirewallCountersResponse { counters }))
+}
 
 /// POST /firewall/apply - Apply firewall configuration
 async fn apply_firewall(

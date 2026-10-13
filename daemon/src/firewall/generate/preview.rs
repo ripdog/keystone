@@ -3,8 +3,13 @@
 //! This module generates a human-readable representation of the firewall
 //! configuration in nftables syntax format.
 
+use crate::firewall::generate::statements::Side;
 use crate::firewall::generate::{
-    FILTER_TABLE, NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones,
+    FILTER_TABLE, NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones, rule_comment,
+};
+use crate::firewall::groups::{
+    Family, GroupIndex, address_set_name, family_variants, normalized_networks, normalized_ports,
+    port_set_name, side_families,
 };
 use keystone_core::{
     FirewallConfig, FirewallPolicy, ForwardRule, InputRule, PortForward, RuleProtocol,
@@ -32,6 +37,7 @@ pub fn generate_preview(
 
     // Filter table
     output.push_str(&format!("table inet {} {{\n", FILTER_TABLE));
+    output.push_str(&set_definitions(config));
 
     // Input chain
     output.push_str("    # ========================================\n");
@@ -129,11 +135,11 @@ pub fn generate_preview(
     let mut sorted_input_rules: Vec<_> = config.input_rules.iter().filter(|r| r.enabled).collect();
     sorted_input_rules.sort_by_key(|r| r.position);
 
+    let groups = GroupIndex::new(&config.address_groups, &config.port_groups);
     for rule in &sorted_input_rules {
-        output.push_str(&format!(
-            "        {}\n",
-            format_input_rule(rule, zone_interfaces)
-        ));
+        for line in format_input_rule(rule, zone_interfaces, &groups) {
+            output.push_str(&format!("        {}\n", line));
+        }
     }
 
     output.push_str("        \n");
@@ -170,10 +176,9 @@ pub fn generate_preview(
     sorted_forward_rules.sort_by_key(|r| r.position);
 
     for rule in &sorted_forward_rules {
-        output.push_str(&format!(
-            "        {}\n",
-            format_forward_rule(rule, zone_interfaces)
-        ));
+        for line in format_forward_rule(rule, zone_interfaces, &groups) {
+            output.push_str(&format!("        {}\n", line));
+        }
     }
 
     output.push_str("        \n");
@@ -209,6 +214,7 @@ pub fn generate_preview(
 
     // NAT table
     output.push_str(&format!("table inet {} {{\n", NAT_TABLE));
+    output.push_str(&set_definitions(config));
 
     // Prerouting chain
     output.push_str("    # ========================================\n");
@@ -220,11 +226,11 @@ pub fn generate_preview(
     output.push_str("        # Port forwards\n");
 
     for pf in &config.port_forwards {
-        if pf.enabled && pf.dest_ip.parse::<std::net::Ipv4Addr>().is_ok() {
-            output.push_str(&format!(
-                "        {}\n",
-                format_port_forward(pf, zone_interfaces)
-            ));
+        if pf.enabled
+            && pf.dest_ip.parse::<std::net::Ipv4Addr>().is_ok()
+            && let Some(line) = format_port_forward(pf, zone_interfaces, &groups)
+        {
+            output.push_str(&format!("        {}\n", line));
         }
     }
 
@@ -319,131 +325,217 @@ pub fn generate_preview(
     output
 }
 
-/// Format an input rule for preview
-fn format_input_rule(rule: &InputRule, zone_interfaces: &HashMap<String, Vec<String>>) -> String {
-    let mut parts = Vec::new();
-
-    if let Some(ref zone_name) = rule.zone
-        && let Some(interfaces) = zone_interfaces.get(zone_name)
-        && !interfaces.is_empty()
-    {
-        parts.push(format!("iifname {}", format_interface_set(interfaces)));
+/// Address match text for one side of a rule in one family. Literal addresses
+/// print as written; a group prints the named set for that family.
+fn address_text(
+    side: Side,
+    literal: Option<&str>,
+    group: Option<&str>,
+    family: Option<Family>,
+) -> Option<String> {
+    let field = match side {
+        Side::Source => "saddr",
+        Side::Destination => "daddr",
+    };
+    if let Some(literal) = literal {
+        return Some(format!("{} {} {}", address_family(literal), field, literal));
     }
-
-    if let Some(ref src_ip) = rule.source_ip {
-        parts.push(format!("{} saddr {}", address_family(src_ip), src_ip));
-    }
-
-    if let Some(protocol) = &rule.protocol {
-        match protocol {
-            RuleProtocol::Any => {}
-            RuleProtocol::Tcp | RuleProtocol::Udp => {
-                parts.push(format!("{}", protocol));
-                if let Some(port) = rule.port_start {
-                    parts.push(format!("dport {}", format_port_range(port, rule.port_end)));
-                }
-            }
-            RuleProtocol::TcpUdp => {
-                parts.push("meta l4proto { tcp, udp }".to_string());
-                if let Some(port) = rule.port_start {
-                    parts.push(format!("dport {}", format_port_range(port, rule.port_end)));
-                }
-            }
-            RuleProtocol::Icmp => parts.push("icmp".to_string()),
-            RuleProtocol::Icmpv6 => parts.push("icmpv6".to_string()),
-        }
-    }
-
-    if let Some(ref rate) = rule.rate_limit {
-        parts.push(format!("limit rate {}", rate));
-    }
-
-    if rule.log_enabled {
-        let prefix = rule.log_prefix.as_deref().unwrap_or(&rule.name);
-        parts.push(format!("log prefix \"{}\"", prefix));
-    }
-
-    parts.push(format!("{}", rule.action));
-    parts.push(format!("comment \"{}\"", rule.name));
-
-    parts.join(" ")
+    let (group, family) = (group?, family?);
+    Some(format!(
+        "{} {} @{}",
+        family.payload(),
+        field,
+        address_set_name(group, family)
+    ))
 }
 
-/// Format a forward rule for preview
+/// Protocol and destination-port text for a rule. A port group prints as a set
+/// lookup, a literal range as a range.
+fn push_protocol_and_ports(
+    parts: &mut Vec<String>,
+    protocol: Option<&RuleProtocol>,
+    port_start: Option<u16>,
+    port_end: Option<u16>,
+    port_group: Option<&str>,
+) {
+    let port = match port_group {
+        Some(group) => Some(format!("@{}", port_set_name(group))),
+        None => port_start.map(|start| format_port_range(start, port_end)),
+    };
+    match protocol {
+        None | Some(RuleProtocol::Any) => {}
+        Some(RuleProtocol::Tcp | RuleProtocol::Udp) => {
+            parts.push(protocol.map(|p| p.to_string()).unwrap_or_default());
+            if let Some(port) = port {
+                parts.push(format!("dport {}", port));
+            }
+        }
+        Some(RuleProtocol::TcpUdp) => {
+            parts.push("meta l4proto { tcp, udp }".to_string());
+            if let Some(port) = port {
+                parts.push(format!("dport {}", port));
+            }
+        }
+        Some(RuleProtocol::Icmp) => parts.push("icmp".to_string()),
+        Some(RuleProtocol::Icmpv6) => parts.push("icmpv6".to_string()),
+    }
+}
+
+/// Format an input rule for preview: one line per address family it covers.
+fn format_input_rule(
+    rule: &InputRule,
+    zone_interfaces: &HashMap<String, Vec<String>>,
+    groups: &GroupIndex,
+) -> Vec<String> {
+    let Ok(source) = side_families(
+        rule.source_ip.as_deref(),
+        rule.source_group.as_deref(),
+        groups,
+    ) else {
+        return Vec::new();
+    };
+    family_variants(&[source])
+        .into_iter()
+        .map(|family| {
+            let mut parts = Vec::new();
+
+            if let Some(ref zone_name) = rule.zone
+                && let Some(interfaces) = zone_interfaces.get(zone_name)
+                && !interfaces.is_empty()
+            {
+                parts.push(format!("iifname {}", format_interface_set(interfaces)));
+            }
+
+            if let Some(text) = address_text(
+                Side::Source,
+                rule.source_ip.as_deref(),
+                rule.source_group.as_deref(),
+                family,
+            ) {
+                parts.push(text);
+            }
+
+            push_protocol_and_ports(
+                &mut parts,
+                rule.protocol.as_ref(),
+                rule.port_start,
+                rule.port_end,
+                rule.dest_port_group.as_deref(),
+            );
+
+            if let Some(ref rate) = rule.rate_limit {
+                parts.push(format!("limit rate {}", rate));
+            }
+
+            if rule.log_enabled {
+                let prefix = rule.log_prefix.as_deref().unwrap_or(&rule.name);
+                parts.push(format!("log prefix \"{}\"", prefix));
+            }
+
+            parts.push(format!("{}", rule.action));
+            parts.push(format!(
+                "comment \"{}\"",
+                rule_comment("input", rule.id, &rule.name)
+            ));
+
+            parts.join(" ")
+        })
+        .collect()
+}
+
+/// Format a forward rule for preview: one line per address family it covers.
 fn format_forward_rule(
     rule: &ForwardRule,
     zone_interfaces: &HashMap<String, Vec<String>>,
-) -> String {
-    let mut parts = Vec::new();
+    groups: &GroupIndex,
+) -> Vec<String> {
+    let source = side_families(
+        rule.source_ip.as_deref(),
+        rule.source_group.as_deref(),
+        groups,
+    );
+    let dest = side_families(rule.dest_ip.as_deref(), rule.dest_group.as_deref(), groups);
+    let (Ok(source), Ok(dest)) = (source, dest) else {
+        return Vec::new();
+    };
+    family_variants(&[source, dest])
+        .into_iter()
+        .map(|family| {
+            let mut parts = Vec::new();
 
-    if let Some(ref zone_name) = rule.source_zone
-        && let Some(interfaces) = zone_interfaces.get(zone_name)
-        && !interfaces.is_empty()
-    {
-        parts.push(format!("iifname {}", format_interface_set(interfaces)));
-    }
-
-    if let Some(ref zone_name) = rule.dest_zone
-        && let Some(interfaces) = zone_interfaces.get(zone_name)
-        && !interfaces.is_empty()
-    {
-        parts.push(format!("oifname {}", format_interface_set(interfaces)));
-    }
-
-    if let Some(ref src_ip) = rule.source_ip {
-        parts.push(format!("{} saddr {}", address_family(src_ip), src_ip));
-    }
-
-    if let Some(ref dst_ip) = rule.dest_ip {
-        parts.push(format!("{} daddr {}", address_family(dst_ip), dst_ip));
-    }
-
-    if let Some(protocol) = &rule.protocol {
-        match protocol {
-            RuleProtocol::Any => {}
-            RuleProtocol::Tcp | RuleProtocol::Udp => {
-                parts.push(format!("{}", protocol));
-                if let Some(port) = rule.dest_port_start {
-                    parts.push(format!(
-                        "dport {}",
-                        format_port_range(port, rule.dest_port_end)
-                    ));
-                }
+            if let Some(ref zone_name) = rule.source_zone
+                && let Some(interfaces) = zone_interfaces.get(zone_name)
+                && !interfaces.is_empty()
+            {
+                parts.push(format!("iifname {}", format_interface_set(interfaces)));
             }
-            RuleProtocol::TcpUdp => {
-                parts.push("meta l4proto { tcp, udp }".to_string());
-                if let Some(port) = rule.dest_port_start {
-                    parts.push(format!(
-                        "dport {}",
-                        format_port_range(port, rule.dest_port_end)
-                    ));
-                }
+
+            if let Some(ref zone_name) = rule.dest_zone
+                && let Some(interfaces) = zone_interfaces.get(zone_name)
+                && !interfaces.is_empty()
+            {
+                parts.push(format!("oifname {}", format_interface_set(interfaces)));
             }
-            RuleProtocol::Icmp => parts.push("icmp".to_string()),
-            RuleProtocol::Icmpv6 => parts.push("icmpv6".to_string()),
-        }
-    }
 
-    if let Some(ref rate) = rule.rate_limit {
-        parts.push(format!("limit rate {}", rate));
-    }
+            if let Some(text) = address_text(
+                Side::Source,
+                rule.source_ip.as_deref(),
+                rule.source_group.as_deref(),
+                family,
+            ) {
+                parts.push(text);
+            }
 
-    if rule.log_enabled {
-        let prefix = rule.log_prefix.as_deref().unwrap_or(&rule.name);
-        parts.push(format!("log prefix \"{}\"", prefix));
-    }
+            if let Some(text) = address_text(
+                Side::Destination,
+                rule.dest_ip.as_deref(),
+                rule.dest_group.as_deref(),
+                family,
+            ) {
+                parts.push(text);
+            }
 
-    parts.push(format!("{}", rule.action));
-    parts.push(format!("comment \"{}\"", rule.name));
+            push_protocol_and_ports(
+                &mut parts,
+                rule.protocol.as_ref(),
+                rule.dest_port_start,
+                rule.dest_port_end,
+                rule.dest_port_group.as_deref(),
+            );
 
-    parts.join(" ")
+            if let Some(ref rate) = rule.rate_limit {
+                parts.push(format!("limit rate {}", rate));
+            }
+
+            if rule.log_enabled {
+                let prefix = rule.log_prefix.as_deref().unwrap_or(&rule.name);
+                parts.push(format!("log prefix \"{}\"", prefix));
+            }
+
+            parts.push(format!("{}", rule.action));
+            parts.push(format!(
+                "comment \"{}\"",
+                rule_comment("forward", rule.id, &rule.name)
+            ));
+
+            parts.join(" ")
+        })
+        .collect()
 }
 
-/// Format a port forward for preview
+/// Format a port forward for preview. Port forwards are DNAT and therefore
+/// IPv4 only: a source group without IPv4 entries yields no line.
 pub fn format_port_forward(
     pf: &PortForward,
     zone_interfaces: &HashMap<String, Vec<String>>,
-) -> String {
+    groups: &GroupIndex,
+) -> Option<String> {
+    let families =
+        side_families(pf.source_ip.as_deref(), pf.source_group.as_deref(), groups).ok()?;
+    if families.is_some_and(|families| !families.contains(&Family::V4)) {
+        return None;
+    }
+
     let mut parts = Vec::new();
 
     if let Some(ref zone_name) = pf.source_zone
@@ -453,8 +545,13 @@ pub fn format_port_forward(
         parts.push(format!("iifname {}", format_interface_set(interfaces)));
     }
 
-    if let Some(ref src_ip) = pf.source_ip {
-        parts.push(format!("ip saddr {}", src_ip));
+    if let Some(text) = address_text(
+        Side::Source,
+        pf.source_ip.as_deref(),
+        pf.source_group.as_deref(),
+        Some(Family::V4),
+    ) {
+        parts.push(text);
     }
 
     parts.push(format!("{}", pf.protocol));
@@ -465,9 +562,52 @@ pub fn format_port_forward(
 
     let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
     parts.push(format!("dnat to {}:{}", pf.dest_ip, dest_port));
-    parts.push(format!("comment \"{}\"", pf.name));
+    parts.push(format!(
+        "comment \"{}\"",
+        rule_comment("portfwd", pf.id, &pf.name)
+    ));
 
-    parts.join(" ")
+    Some(parts.join(" "))
+}
+
+/// nftables set definitions for every group, as they appear in each table.
+fn set_definitions(config: &FirewallConfig) -> String {
+    let mut out = String::new();
+    for group in &config.address_groups {
+        for family in [Family::V4, Family::V6] {
+            let nets = normalized_networks(&group.entries, family);
+            if nets.is_empty() {
+                continue;
+            }
+            let elements: Vec<String> = nets.iter().map(|net| net.to_string()).collect();
+            let set_type = match family {
+                Family::V4 => "ipv4_addr",
+                Family::V6 => "ipv6_addr",
+            };
+            out.push_str(&format!(
+                "    set {} {{\n        type {};\n        flags interval;\n        elements = {{ {} }}\n    }}\n",
+                address_set_name(&group.name, family),
+                set_type,
+                elements.join(", ")
+            ));
+        }
+    }
+    for group in &config.port_groups {
+        let ranges = normalized_ports(&group.entries);
+        if ranges.is_empty() {
+            continue;
+        }
+        let elements: Vec<String> = ranges
+            .iter()
+            .map(|&(start, end)| format_port_range(start, Some(end)))
+            .collect();
+        out.push_str(&format!(
+            "    set {} {{\n        type inet_service;\n        flags interval;\n        elements = {{ {} }}\n    }}\n",
+            port_set_name(&group.name),
+            elements.join(", ")
+        ));
+    }
+    out
 }
 
 /// Format an interface set for preview

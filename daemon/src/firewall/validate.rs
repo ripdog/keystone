@@ -5,6 +5,10 @@
 //! as a rule that silently matches more traffic than intended.
 
 use crate::firewall::generate::statements::parse_rate_limit;
+use crate::firewall::groups::{
+    Family, GroupIndex, family_variants, literal_family, side_families, validate_address_group,
+    validate_group_names, validate_port_group,
+};
 use ipnet::IpNet;
 use keystone_core::{
     FirewallConfig, FirewallZone, ForwardRule, InputRule, PortForward, RuleProtocol,
@@ -91,8 +95,60 @@ fn check_rate_limit(what: &str, rate_limit: Option<&String>, errors: &mut Vec<St
     }
 }
 
-/// Validate the fields of a single input rule (excluding zone existence).
-pub fn validate_input_rule(rule: &InputRule) -> Vec<String> {
+/// A group reference must name a group of the right kind.
+fn check_address_group_ref(
+    what: &str,
+    role: &str,
+    name: Option<&str>,
+    groups: &GroupIndex,
+    errors: &mut Vec<String>,
+) {
+    if let Some(name) = name
+        && !groups.has_address(name)
+    {
+        errors.push(format!("{what}: {role} '{name}' does not exist"));
+    }
+}
+
+fn check_port_group_ref(
+    what: &str,
+    name: Option<&str>,
+    groups: &GroupIndex,
+    errors: &mut Vec<String>,
+) {
+    if let Some(name) = name
+        && !groups.has_port(name)
+    {
+        errors.push(format!("{what}: port group '{name}' does not exist"));
+    }
+}
+
+/// A literal address and an address group are alternatives for one side.
+fn check_one_of(what: &str, first: (&str, bool), second: (&str, bool), errors: &mut Vec<String>) {
+    if first.1 && second.1 {
+        errors.push(format!(
+            "{what}: {} and {} cannot both be set",
+            first.0, second.0
+        ));
+    }
+}
+
+/// A port group needs a protocol that has ports.
+fn check_port_group_protocol(
+    what: &str,
+    protocol: Option<&RuleProtocol>,
+    group: Option<&String>,
+    errors: &mut Vec<String>,
+) {
+    if group.is_some() && !is_port_protocol(protocol) {
+        errors.push(format!(
+            "{what}: a port group can only be used with protocol TCP, UDP or TCP+UDP"
+        ));
+    }
+}
+
+/// Validate the fields of a single input rule, including its group references.
+pub fn validate_input_rule(rule: &InputRule, groups: &GroupIndex) -> Vec<String> {
     let what = format!("Input rule '{}'", rule.name);
     let mut errors = Vec::new();
     check_text(&what, "name", &rule.name, &mut errors);
@@ -104,6 +160,28 @@ pub fn validate_input_rule(rule: &InputRule) -> Vec<String> {
     );
     check_optional_text(&what, "log prefix", rule.log_prefix.as_deref(), &mut errors);
     check_address(&what, "source IP", rule.source_ip.as_deref(), &mut errors);
+    check_one_of(
+        &what,
+        ("source IP", rule.source_ip.is_some()),
+        ("source group", rule.source_group.is_some()),
+        &mut errors,
+    );
+    check_address_group_ref(
+        &what,
+        "source group",
+        rule.source_group.as_deref(),
+        groups,
+        &mut errors,
+    );
+    check_one_of(
+        &what,
+        (
+            "destination ports",
+            rule.port_start.is_some() || rule.port_end.is_some(),
+        ),
+        ("destination port group", rule.dest_port_group.is_some()),
+        &mut errors,
+    );
     check_ports(
         &what,
         rule.protocol.as_ref(),
@@ -111,12 +189,20 @@ pub fn validate_input_rule(rule: &InputRule) -> Vec<String> {
         rule.port_end,
         &mut errors,
     );
+    check_port_group_protocol(
+        &what,
+        rule.protocol.as_ref(),
+        rule.dest_port_group.as_ref(),
+        &mut errors,
+    );
+    check_port_group_ref(&what, rule.dest_port_group.as_deref(), groups, &mut errors);
     check_rate_limit(&what, rule.rate_limit.as_ref(), &mut errors);
     errors
 }
 
-/// Validate the fields of a single forward rule (excluding zone existence).
-pub fn validate_forward_rule(rule: &ForwardRule) -> Vec<String> {
+/// Validate the fields of a single forward rule, including its group references
+/// and whether its source and destination address families can meet.
+pub fn validate_forward_rule(rule: &ForwardRule, groups: &GroupIndex) -> Vec<String> {
     let what = format!("Forward rule '{}'", rule.name);
     let mut errors = Vec::new();
     check_text(&what, "name", &rule.name, &mut errors);
@@ -134,6 +220,42 @@ pub fn validate_forward_rule(rule: &ForwardRule) -> Vec<String> {
         rule.dest_ip.as_deref(),
         &mut errors,
     );
+    check_one_of(
+        &what,
+        ("source IP", rule.source_ip.is_some()),
+        ("source group", rule.source_group.is_some()),
+        &mut errors,
+    );
+    check_one_of(
+        &what,
+        ("destination IP", rule.dest_ip.is_some()),
+        ("destination group", rule.dest_group.is_some()),
+        &mut errors,
+    );
+    check_one_of(
+        &what,
+        (
+            "destination ports",
+            rule.dest_port_start.is_some() || rule.dest_port_end.is_some(),
+        ),
+        ("destination port group", rule.dest_port_group.is_some()),
+        &mut errors,
+    );
+    check_address_group_ref(
+        &what,
+        "source group",
+        rule.source_group.as_deref(),
+        groups,
+        &mut errors,
+    );
+    check_address_group_ref(
+        &what,
+        "destination group",
+        rule.dest_group.as_deref(),
+        groups,
+        &mut errors,
+    );
+    check_port_group_ref(&what, rule.dest_port_group.as_deref(), groups, &mut errors);
     check_ports(
         &what,
         rule.protocol.as_ref(),
@@ -141,17 +263,68 @@ pub fn validate_forward_rule(rule: &ForwardRule) -> Vec<String> {
         rule.dest_port_end,
         &mut errors,
     );
+    check_port_group_protocol(
+        &what,
+        rule.protocol.as_ref(),
+        rule.dest_port_group.as_ref(),
+        &mut errors,
+    );
     check_rate_limit(&what, rule.rate_limit.as_ref(), &mut errors);
+
+    // Only meaningful when both sides resolve; reference errors are reported above.
+    let source = side_families(
+        rule.source_ip.as_deref(),
+        rule.source_group.as_deref(),
+        groups,
+    );
+    let dest = side_families(rule.dest_ip.as_deref(), rule.dest_group.as_deref(), groups);
+    if let (Ok(source), Ok(dest)) = (source, dest)
+        && family_variants(&[source, dest]).is_empty()
+    {
+        errors.push(format!(
+            "{what}: the source and destination addresses are of different IP families"
+        ));
+    }
     errors
 }
 
-/// Validate the fields of a single port forward (excluding zone existence).
-pub fn validate_port_forward(pf: &PortForward) -> Vec<String> {
+/// Validate the fields of a single port forward, including its source group.
+pub fn validate_port_forward(pf: &PortForward, groups: &GroupIndex) -> Vec<String> {
     let what = format!("Port forward '{}'", pf.name);
     let mut errors = Vec::new();
     check_text(&what, "name", &pf.name, &mut errors);
     check_optional_text(&what, "description", pf.description.as_deref(), &mut errors);
     check_address(&what, "source IP", pf.source_ip.as_deref(), &mut errors);
+    check_one_of(
+        &what,
+        ("source IP", pf.source_ip.is_some()),
+        ("source group", pf.source_group.is_some()),
+        &mut errors,
+    );
+    // DNAT is IPv4 only, so a source restriction must be able to match IPv4.
+    if let Some(source) = pf.source_ip.as_deref()
+        && literal_family(source) == Some(Family::V6)
+    {
+        errors.push(format!(
+            "{what}: source IP {source:?} must be IPv4 (port forwards are IPv4 only)"
+        ));
+    }
+    check_address_group_ref(
+        &what,
+        "source group",
+        pf.source_group.as_deref(),
+        groups,
+        &mut errors,
+    );
+    if let Some(name) = pf.source_group.as_deref()
+        && groups
+            .families(name)
+            .is_some_and(|families| !families.contains(&Family::V4))
+    {
+        errors.push(format!(
+            "{what}: source group '{name}' has no IPv4 entries, and port forwards are IPv4 only"
+        ));
+    }
     if pf.dest_ip.parse::<Ipv4Addr>().is_err() {
         errors.push(format!(
             "{what}: destination IP \"{}\" is not a valid IPv4 address (IPv6 DNAT is not supported)",
@@ -260,11 +433,19 @@ fn check_firewall(cfg: &FirewallConfig, require_interfaces: bool) -> Vec<String>
         .iter()
         .map(|z| (z.name.as_str(), z.interfaces.len()))
         .collect();
+    let groups = GroupIndex::new(&cfg.address_groups, &cfg.port_groups);
     let mut errors = Vec::new();
 
     for zone in &cfg.zones {
         errors.extend(validate_zone(zone));
     }
+    for group in &cfg.address_groups {
+        errors.extend(validate_address_group(group));
+    }
+    for group in &cfg.port_groups {
+        errors.extend(validate_port_group(group));
+    }
+    errors.extend(validate_group_names(&cfg.address_groups, &cfg.port_groups));
     for policy in &cfg.zone_forwards {
         errors.extend(validate_zone_forward(policy));
     }
@@ -276,7 +457,7 @@ fn check_firewall(cfg: &FirewallConfig, require_interfaces: bool) -> Vec<String>
     }
 
     for rule in &cfg.input_rules {
-        errors.extend(validate_input_rule(rule));
+        errors.extend(validate_input_rule(rule, &groups));
         if rule.enabled {
             let what = format!("Input rule '{}'", rule.name);
             check_zone(
@@ -290,7 +471,7 @@ fn check_firewall(cfg: &FirewallConfig, require_interfaces: bool) -> Vec<String>
         }
     }
     for rule in &cfg.forward_rules {
-        errors.extend(validate_forward_rule(rule));
+        errors.extend(validate_forward_rule(rule, &groups));
         if rule.enabled {
             let what = format!("Forward rule '{}'", rule.name);
             check_zone(
@@ -312,7 +493,7 @@ fn check_firewall(cfg: &FirewallConfig, require_interfaces: bool) -> Vec<String>
         }
     }
     for pf in &cfg.port_forwards {
-        errors.extend(validate_port_forward(pf));
+        errors.extend(validate_port_forward(pf, &groups));
         if pf.enabled {
             let what = format!("Port forward '{}'", pf.name);
             check_zone(
@@ -359,21 +540,30 @@ mod tests {
             Some(RuleProtocol::Icmp),
             Some(RuleProtocol::Icmpv6),
         ] {
-            assert!(!validate_input_rule(&input(p, Some(22), None)).is_empty());
+            assert!(
+                !validate_input_rule(&input(p, Some(22), None), &GroupIndex::default()).is_empty()
+            );
         }
         for p in [RuleProtocol::Tcp, RuleProtocol::Udp, RuleProtocol::TcpUdp] {
-            assert!(validate_input_rule(&input(Some(p), Some(22), None)).is_empty());
+            assert!(
+                validate_input_rule(&input(Some(p), Some(22), None), &GroupIndex::default())
+                    .is_empty()
+            );
         }
-        assert!(validate_input_rule(&input(None, None, None)).is_empty());
+        assert!(validate_input_rule(&input(None, None, None), &GroupIndex::default()).is_empty());
     }
 
     #[test]
     fn port_range_and_zero_rejected() {
         let t = Some(RuleProtocol::Tcp);
-        assert!(!validate_input_rule(&input(t, Some(0), None)).is_empty());
-        assert!(!validate_input_rule(&input(t, Some(100), Some(50))).is_empty());
-        assert!(!validate_input_rule(&input(t, None, Some(50))).is_empty());
-        assert!(validate_input_rule(&input(t, Some(50), Some(100))).is_empty());
+        assert!(!validate_input_rule(&input(t, Some(0), None), &GroupIndex::default()).is_empty());
+        assert!(
+            !validate_input_rule(&input(t, Some(100), Some(50)), &GroupIndex::default()).is_empty()
+        );
+        assert!(!validate_input_rule(&input(t, None, Some(50)), &GroupIndex::default()).is_empty());
+        assert!(
+            validate_input_rule(&input(t, Some(50), Some(100)), &GroupIndex::default()).is_empty()
+        );
     }
 
     #[test]
@@ -384,7 +574,7 @@ mod tests {
             rate_limit: Some("fast".into()),
             ..Default::default()
         };
-        let errors = validate_forward_rule(&rule);
+        let errors = validate_forward_rule(&rule, &GroupIndex::default());
         assert_eq!(errors.len(), 2, "{errors:?}");
         assert!(errors.iter().any(|e| e.contains("10/minute")));
     }
@@ -397,26 +587,26 @@ mod tests {
             dest_ip: "192.168.1.2".into(),
             ..Default::default()
         };
-        assert!(validate_port_forward(&good).is_empty());
+        assert!(validate_port_forward(&good, &GroupIndex::default()).is_empty());
 
         let mut v6 = good.clone();
         v6.dest_ip = "fd00::1".into();
-        assert!(validate_port_forward(&v6)[0].contains("IPv6"));
+        assert!(validate_port_forward(&v6, &GroupIndex::default())[0].contains("IPv6"));
 
         let mut any = good.clone();
         any.protocol = RuleProtocol::Any;
-        assert!(!validate_port_forward(&any).is_empty());
+        assert!(!validate_port_forward(&any, &GroupIndex::default()).is_empty());
 
         let mut range = good.clone();
         range.external_port_end = Some(8090);
         range.dest_port = Some(80);
-        assert!(!validate_port_forward(&range).is_empty());
+        assert!(!validate_port_forward(&range, &GroupIndex::default()).is_empty());
         range.dest_port = None;
-        assert!(validate_port_forward(&range).is_empty());
+        assert!(validate_port_forward(&range, &GroupIndex::default()).is_empty());
 
         let mut backwards = good;
         backwards.external_port_end = Some(8000);
-        assert!(!validate_port_forward(&backwards).is_empty());
+        assert!(!validate_port_forward(&backwards, &GroupIndex::default()).is_empty());
     }
 
     #[test]
@@ -467,26 +657,26 @@ mod tests {
             ..Default::default()
         };
         assert!(
-            validate_input_rule(&rule)
+            validate_input_rule(&rule, &GroupIndex::default())
                 .iter()
                 .any(|e| e.contains("name contains control characters"))
         );
         rule.name = "ssh".into();
         rule.description = Some("LAN\u{2028}only".into());
         assert!(
-            validate_input_rule(&rule)
+            validate_input_rule(&rule, &GroupIndex::default())
                 .iter()
                 .any(|e| e.contains("description contains control"))
         );
         rule.description = None;
         rule.log_prefix = Some("ssh\r".into());
         assert!(
-            validate_input_rule(&rule)
+            validate_input_rule(&rule, &GroupIndex::default())
                 .iter()
                 .any(|e| e.contains("log prefix contains control"))
         );
         rule.log_prefix = None;
-        assert!(validate_input_rule(&rule).is_empty());
+        assert!(validate_input_rule(&rule, &GroupIndex::default()).is_empty());
     }
 
     #[test]
@@ -500,19 +690,22 @@ mod tests {
         for good in ["10.0.0.0/8", "10.0.0.1", "fd00::/64", "fd00::1"] {
             rule.source_ip = Some(good.into());
             rule.dest_ip = Some(good.into());
-            assert!(validate_forward_rule(&rule).is_empty(), "{good}");
+            assert!(
+                validate_forward_rule(&rule, &GroupIndex::default()).is_empty(),
+                "{good}"
+            );
         }
         for bad in ["10.0.0.0/33", "10.0.0.1 accept", "example.com"] {
             rule.source_ip = Some(bad.into());
             rule.dest_ip = None;
             assert!(
-                validate_forward_rule(&rule)[0].contains("source IP"),
+                validate_forward_rule(&rule, &GroupIndex::default())[0].contains("source IP"),
                 "{bad}"
             );
         }
         rule.source_ip = None;
         rule.dest_ip = Some("10.0.0.300".into());
-        assert!(validate_forward_rule(&rule)[0].contains("destination IP"));
+        assert!(validate_forward_rule(&rule, &GroupIndex::default())[0].contains("destination IP"));
     }
 
     #[test]
@@ -523,12 +716,12 @@ mod tests {
             dest_ip: "192.168.1.2".into(),
             ..Default::default()
         };
-        assert!(validate_port_forward(&pf).is_empty());
+        assert!(validate_port_forward(&pf, &GroupIndex::default()).is_empty());
         pf.description = Some("web\nserver".into());
-        assert!(!validate_port_forward(&pf).is_empty());
+        assert!(!validate_port_forward(&pf, &GroupIndex::default()).is_empty());
         pf.description = None;
         pf.source_ip = Some("not an ip".into());
-        assert!(!validate_port_forward(&pf).is_empty());
+        assert!(!validate_port_forward(&pf, &GroupIndex::default()).is_empty());
     }
 
     #[test]
@@ -570,5 +763,210 @@ mod tests {
             ..Default::default()
         };
         assert!(!validate_firewall_config(&cfg).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod group_validation_tests {
+    use super::*;
+    use keystone_core::{AddressGroup, PortGroup};
+
+    fn groups() -> (Vec<AddressGroup>, Vec<PortGroup>) {
+        (
+            vec![
+                AddressGroup {
+                    name: "v4_only".into(),
+                    entries: vec!["10.0.0.0/8".into()],
+                    ..Default::default()
+                },
+                AddressGroup {
+                    name: "v6_only".into(),
+                    entries: vec!["fd00::/64".into()],
+                    ..Default::default()
+                },
+            ],
+            vec![PortGroup {
+                name: "web".into(),
+                entries: vec!["443".into()],
+                ..Default::default()
+            }],
+        )
+    }
+
+    #[test]
+    fn source_ip_and_source_group_are_exclusive() {
+        let (a, p) = groups();
+        let index = GroupIndex::new(&a, &p);
+        let rule = InputRule {
+            name: "r".into(),
+            source_ip: Some("10.1.1.1".into()),
+            source_group: Some("v4_only".into()),
+            ..Default::default()
+        };
+        assert!(
+            validate_input_rule(&rule, &index)
+                .iter()
+                .any(|e| e.contains("cannot both be set"))
+        );
+    }
+
+    #[test]
+    fn group_references_must_exist_with_the_right_kind() {
+        let (a, p) = groups();
+        let index = GroupIndex::new(&a, &p);
+        let missing = InputRule {
+            name: "r".into(),
+            source_group: Some("nope".into()),
+            ..Default::default()
+        };
+        assert!(validate_input_rule(&missing, &index)[0].contains("'nope' does not exist"));
+
+        // A port group is not an address group, and vice versa.
+        let wrong_kind = ForwardRule {
+            name: "f".into(),
+            protocol: Some(RuleProtocol::Tcp),
+            dest_group: Some("web".into()),
+            dest_port_group: Some("v4_only".into()),
+            ..Default::default()
+        };
+        let errors = validate_forward_rule(&wrong_kind, &index);
+        assert!(
+            errors.iter().any(|e| e.contains("destination group 'web'")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("port group 'v4_only'")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn port_group_needs_tcp_or_udp_and_excludes_literal_ports() {
+        let (a, p) = groups();
+        let index = GroupIndex::new(&a, &p);
+        let no_protocol = InputRule {
+            name: "r".into(),
+            dest_port_group: Some("web".into()),
+            ..Default::default()
+        };
+        assert!(
+            validate_input_rule(&no_protocol, &index)
+                .iter()
+                .any(|e| e.contains("port group can only be used"))
+        );
+
+        let both = InputRule {
+            name: "r".into(),
+            protocol: Some(RuleProtocol::Tcp),
+            port_start: Some(22),
+            dest_port_group: Some("web".into()),
+            ..Default::default()
+        };
+        assert!(
+            validate_input_rule(&both, &index)
+                .iter()
+                .any(|e| e.contains("cannot both be set"))
+        );
+
+        let good = InputRule {
+            name: "r".into(),
+            protocol: Some(RuleProtocol::TcpUdp),
+            dest_port_group: Some("web".into()),
+            ..Default::default()
+        };
+        assert!(validate_input_rule(&good, &index).is_empty());
+    }
+
+    #[test]
+    fn forward_rule_families_must_meet() {
+        let (a, p) = groups();
+        let index = GroupIndex::new(&a, &p);
+        let mismatch = ForwardRule {
+            name: "f".into(),
+            source_group: Some("v4_only".into()),
+            dest_group: Some("v6_only".into()),
+            ..Default::default()
+        };
+        assert!(
+            validate_forward_rule(&mismatch, &index)
+                .iter()
+                .any(|e| e.contains("different IP families"))
+        );
+
+        let literal_mismatch = ForwardRule {
+            name: "f".into(),
+            source_ip: Some("10.0.0.1".into()),
+            dest_ip: Some("fd00::1".into()),
+            ..Default::default()
+        };
+        assert!(!validate_forward_rule(&literal_mismatch, &index).is_empty());
+
+        let same = ForwardRule {
+            name: "f".into(),
+            source_group: Some("v4_only".into()),
+            dest_ip: Some("192.0.2.1".into()),
+            ..Default::default()
+        };
+        assert!(validate_forward_rule(&same, &index).is_empty());
+    }
+
+    #[test]
+    fn port_forward_source_group_must_be_able_to_match_ipv4() {
+        let (a, p) = groups();
+        let index = GroupIndex::new(&a, &p);
+        let pf = PortForward {
+            name: "web".into(),
+            external_port_start: 8080,
+            dest_ip: "192.168.1.2".into(),
+            source_group: Some("v6_only".into()),
+            ..Default::default()
+        };
+        assert!(
+            validate_port_forward(&pf, &index)
+                .iter()
+                .any(|e| e.contains("no IPv4 entries"))
+        );
+
+        let v4 = PortForward {
+            source_group: Some("v4_only".into()),
+            ..pf.clone()
+        };
+        assert!(validate_port_forward(&v4, &index).is_empty());
+
+        let v6_literal = PortForward {
+            source_group: None,
+            source_ip: Some("fd00::/64".into()),
+            ..pf
+        };
+        assert!(
+            validate_port_forward(&v6_literal, &index)
+                .iter()
+                .any(|e| e.contains("must be IPv4"))
+        );
+    }
+
+    #[test]
+    fn stored_configuration_checks_group_objects_and_references() {
+        let (a, mut p) = groups();
+        p[0].name = "v4_only".into(); // duplicate of an address group name
+        let cfg = FirewallConfig {
+            address_groups: a,
+            port_groups: p,
+            input_rules: vec![InputRule {
+                name: "r".into(),
+                source_group: Some("gone".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let errors = validate_firewall_definitions(&cfg);
+        assert!(
+            errors.iter().any(|e| e.contains("more than one")),
+            "{errors:?}"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("'gone' does not exist")),
+            "{errors:?}"
+        );
     }
 }

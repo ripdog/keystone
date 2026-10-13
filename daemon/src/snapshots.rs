@@ -60,6 +60,10 @@ pub const CONFIG_TABLES: &[&str] = &[
     "firewall_zones",
     "firewall_zone_interfaces",
     "firewall_zone_forwards",
+    "firewall_address_groups",
+    "firewall_address_group_entries",
+    "firewall_port_groups",
+    "firewall_port_group_entries",
     "firewall_port_forwards",
     "firewall_input_rules",
     "firewall_forward_rules",
@@ -141,6 +145,10 @@ pub fn component_of(table: &str) -> Option<Component> {
         "firewall_zones"
         | "firewall_zone_interfaces"
         | "firewall_zone_forwards"
+        | "firewall_address_groups"
+        | "firewall_address_group_entries"
+        | "firewall_port_groups"
+        | "firewall_port_group_entries"
         | "firewall_port_forwards"
         | "firewall_input_rules"
         | "firewall_forward_rules"

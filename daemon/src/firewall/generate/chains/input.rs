@@ -4,10 +4,13 @@
 //! traffic destined for the router itself.
 
 use crate::firewall::generate::statements::{
-    add_protocol_match_concrete, create_iif_match, create_saddr_match, expand_protocol,
-    parse_rate_limit, rule_options_are_safe,
+    Side, address_match, create_iif_match, expand_protocol, parse_rate_limit, push_port_matches,
+    rule_options_are_safe,
 };
-use crate::firewall::generate::{FILTER_TABLE, find_wan_zones, resolve_zone_interfaces};
+use crate::firewall::generate::{
+    FILTER_TABLE, find_wan_zones, resolve_zone_interfaces, rule_comment,
+};
+use crate::firewall::groups::{Family, GroupIndex, family_variants, side_families};
 use keystone_core::{FirewallAction, FirewallConfig, FirewallPolicy, FirewallZone, InputRule};
 use nftables::{
     batch::Batch,
@@ -77,11 +80,12 @@ pub fn generate_input_chain(
     // Priority 4: User input rules (position-ordered). These run before the
     // built-in ping/essential-ICMP accepts so a user rule can drop or limit
     // ping; the dangerous-ICMP drops above can never be overridden.
+    let groups = GroupIndex::new(&config.address_groups, &config.port_groups);
     let mut sorted_rules: Vec<_> = config.input_rules.iter().filter(|r| r.enabled).collect();
     sorted_rules.sort_by_key(|r| r.position);
 
     for rule in sorted_rules {
-        for nf_rule in create_input_rules(rule, zone_interfaces) {
+        for nf_rule in create_input_rules(rule, zone_interfaces, &groups) {
             batch.add(NfListObject::Rule(nf_rule));
         }
     }
@@ -118,6 +122,7 @@ pub fn create_conntrack_established_rule(
                 ]),
                 op: Operator::IN,
             }),
+            Statement::Counter(Counter::Anonymous(None)),
             Statement::Accept(None),
         ]
         .into(),
@@ -192,6 +197,7 @@ pub fn create_conntrack_invalid_rule(table: &'static str, chain: &'static str) -
                 right: Expression::String(Cow::Borrowed("invalid")),
                 op: Operator::EQ,
             }),
+            Statement::Counter(Counter::Anonymous(None)),
             Statement::Drop(None),
         ]
         .into(),
@@ -214,6 +220,7 @@ pub fn create_loopback_rule(table: &'static str, chain: &'static str) -> Rule<'s
                 right: Expression::String(Cow::Borrowed("lo")),
                 op: Operator::EQ,
             }),
+            Statement::Counter(Counter::Anonymous(None)),
             Statement::Accept(None),
         ]
         .into(),
@@ -548,12 +555,34 @@ fn create_icmpv6_type_accept_rule(icmp_type: u8, comment: &str) -> Rule<'static>
 
 /// Create nftables rules from an InputRule.
 ///
-/// Returns multiple rules for TcpUdp protocol (one for TCP, one for UDP),
-/// since nftables doesn't support matching multiple protocols in a single rule.
+/// Returns one rule per (address family, protocol) pair: nftables cannot match
+/// several protocols in one rule, and a group that mixes IPv4 and IPv6 needs a
+/// separate rule for each family.
 fn create_input_rules(
     rule: &InputRule,
     zone_interfaces: &HashMap<String, Vec<String>>,
+    groups: &GroupIndex,
 ) -> Vec<Rule<'static>> {
+    let source = match side_families(
+        rule.source_ip.as_deref(),
+        rule.source_group.as_deref(),
+        groups,
+    ) {
+        Ok(source) => source,
+        Err(error) => {
+            tracing::warn!("Skipping rule '{}': {error}", rule.name);
+            return Vec::new();
+        }
+    };
+    let families = family_variants(&[source]);
+    if families.is_empty() {
+        tracing::warn!(
+            "Skipping rule '{}': no address in its source group",
+            rule.name
+        );
+        return Vec::new();
+    }
+
     // Determine which protocols to generate rules for
     let protocols = rule
         .protocol
@@ -561,31 +590,31 @@ fn create_input_rules(
         .map(expand_protocol)
         .unwrap_or_else(|| vec![None]);
 
-    protocols
-        .into_iter()
-        .filter_map(|proto| {
-            create_input_rule_for_protocol(
-                rule,
-                zone_interfaces,
-                proto,
-                rule.port_start,
-                rule.port_end,
-            )
+    families
+        .iter()
+        .flat_map(|family| protocols.iter().map(move |proto| (*family, *proto)))
+        .filter_map(|(family, proto)| {
+            create_input_rule_for_protocol(rule, zone_interfaces, proto, family)
         })
         .collect()
 }
 
-/// Create a single nftables rule for a specific protocol
+/// Create a single nftables rule for a specific protocol and address family
 fn create_input_rule_for_protocol(
     rule: &InputRule,
     zone_interfaces: &HashMap<String, Vec<String>>,
     protocol: Option<&'static str>,
-    port_start: Option<u16>,
-    port_end: Option<u16>,
+    family: Option<Family>,
 ) -> Option<Rule<'static>> {
     // Defence in depth: a port on a non-TCP/UDP protocol, or an unparsable
     // rate limit, would otherwise widen the rule. Emit nothing instead.
-    if !rule_options_are_safe(protocol, port_start, rule.rate_limit.as_deref(), &rule.name) {
+    let has_port_match = rule.port_start.is_some() || rule.dest_port_group.is_some();
+    if !rule_options_are_safe(
+        protocol,
+        has_port_match,
+        rule.rate_limit.as_deref(),
+        &rule.name,
+    ) {
         return None;
     }
     let mut exprs: Vec<Statement> = Vec::new();
@@ -597,13 +626,24 @@ fn create_input_rule_for_protocol(
         exprs.push(create_iif_match(interfaces));
     }
 
-    // Match source IP
-    if let Some(ref src_ip) = rule.source_ip {
-        exprs.push(create_saddr_match(src_ip));
+    // Match source address (literal or group, for this family)
+    if let Some(source) = address_match(
+        Side::Source,
+        rule.source_ip.as_deref(),
+        rule.source_group.as_deref(),
+        family,
+    ) {
+        exprs.push(source);
     }
 
     // Match protocol and ports
-    add_protocol_match_concrete(&mut exprs, protocol, port_start, port_end);
+    push_port_matches(
+        &mut exprs,
+        protocol,
+        rule.port_start,
+        rule.port_end,
+        rule.dest_port_group.as_deref(),
+    );
 
     // Rate limiting
     if let Some(ref rate_limit) = rule.rate_limit
@@ -644,7 +684,7 @@ fn create_input_rule_for_protocol(
         table: Cow::Borrowed(FILTER_TABLE),
         chain: Cow::Borrowed("input"),
         expr: exprs.into(),
-        comment: Some(Cow::Owned(rule.name.clone())),
+        comment: Some(Cow::Owned(rule_comment("input", rule.id, &rule.name))),
         ..Default::default()
     })
 }

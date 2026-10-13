@@ -59,6 +59,11 @@ fn derive_entries(config: &FirewallConfig) -> Vec<EffectiveForward> {
             || !rule.source_zone.as_deref().is_none_or(|z| wan.contains(z))
             || !rule.dest_zone.as_deref().is_none_or(|z| !wan.contains(z))
             || rule.dest_port_end.is_some()
+            // A group restriction cannot be shown by a simple forward, and
+            // rewriting the rule would silently drop it.
+            || rule.source_group.is_some()
+            || rule.dest_group.is_some()
+            || rule.dest_port_group.is_some()
         {
             continue;
         }
@@ -116,6 +121,7 @@ fn derive_entries(config: &FirewallConfig) -> Vec<EffectiveForward> {
                             _ => true,
                         }
                         || nat.external_port_end.is_some()
+                        || nat.source_group.is_some()
                     {
                         continue;
                     }

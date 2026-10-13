@@ -5,12 +5,13 @@
 //! - Postrouting chain for SNAT (masquerade)
 
 use crate::firewall::generate::statements::{
-    create_daddr_match, create_dport_match, create_iif_match, create_ipv4_match,
-    create_protocol_match, create_saddr_match,
+    Side, address_match, create_daddr_match, create_dport_match, create_iif_match,
+    create_ipv4_match, create_protocol_match,
 };
 use crate::firewall::generate::{
-    NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones, resolve_zone_interfaces,
+    NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones, resolve_zone_interfaces, rule_comment,
 };
+use crate::firewall::groups::{Family, GroupIndex, side_families};
 use keystone_core::{FirewallConfig, PortForward, RuleProtocol};
 use nftables::{
     batch::Batch,
@@ -28,6 +29,8 @@ pub fn generate_prerouting_chain(
     config: &FirewallConfig,
     zone_interfaces: &HashMap<String, Vec<String>>,
 ) {
+    let groups = GroupIndex::new(&config.address_groups, &config.port_groups);
+
     // Create prerouting chain
     batch.add(NfListObject::Chain(Chain {
         family: NfFamily::INet,
@@ -55,10 +58,14 @@ pub fn generate_prerouting_chain(
             // For tcp+udp, we need two separate rules
             match pf.protocol {
                 RuleProtocol::TcpUdp => {
-                    if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "tcp") {
+                    if let Some(rule) =
+                        create_port_forward_rule(pf, zone_interfaces, "tcp", &groups)
+                    {
                         batch.add(NfListObject::Rule(rule));
                     }
-                    if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "udp") {
+                    if let Some(rule) =
+                        create_port_forward_rule(pf, zone_interfaces, "udp", &groups)
+                    {
                         batch.add(NfListObject::Rule(rule));
                     }
                     // Hairpin NAT rules (if enabled)
@@ -72,7 +79,9 @@ pub fn generate_prerouting_chain(
                     }
                 }
                 RuleProtocol::Tcp => {
-                    if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "tcp") {
+                    if let Some(rule) =
+                        create_port_forward_rule(pf, zone_interfaces, "tcp", &groups)
+                    {
                         batch.add(NfListObject::Rule(rule));
                     }
                     if config.global_settings.hairpin_nat_enabled
@@ -83,7 +92,9 @@ pub fn generate_prerouting_chain(
                     }
                 }
                 RuleProtocol::Udp => {
-                    if let Some(rule) = create_port_forward_rule(pf, zone_interfaces, "udp") {
+                    if let Some(rule) =
+                        create_port_forward_rule(pf, zone_interfaces, "udp", &groups)
+                    {
                         batch.add(NfListObject::Rule(rule));
                     }
                     if config.global_settings.hairpin_nat_enabled
@@ -116,15 +127,45 @@ fn dnat_port(pf: &PortForward) -> Option<u16> {
     }
 }
 
+/// Source restriction of a port forward. DNAT only matches IPv4, so a source
+/// group must have IPv4 entries; otherwise no packet can match and the caller
+/// emits no rule.
+pub(crate) fn port_forward_source_match(
+    pf: &PortForward,
+    groups: &GroupIndex,
+) -> Result<Option<Statement<'static>>, String> {
+    match side_families(pf.source_ip.as_deref(), pf.source_group.as_deref(), groups)? {
+        None => Ok(None),
+        Some(families) if families.contains(&Family::V4) => Ok(address_match(
+            Side::Source,
+            pf.source_ip.as_deref(),
+            pf.source_group.as_deref(),
+            Some(Family::V4),
+        )),
+        Some(_) => Err(format!(
+            "port forward '{}' has no IPv4 source to match",
+            pf.name
+        )),
+    }
+}
+
 /// Create a port forward (DNAT) rule
 fn create_port_forward_rule(
     pf: &PortForward,
     zone_interfaces: &HashMap<String, Vec<String>>,
     protocol: &'static str,
+    groups: &GroupIndex,
 ) -> Option<Rule<'static>> {
     if pf.dest_ip.parse::<std::net::Ipv4Addr>().is_err() {
         return None;
     }
+    let source = match port_forward_source_match(pf, groups) {
+        Ok(source) => source,
+        Err(error) => {
+            tracing::warn!("Skipping port forward '{}': {error}", pf.name);
+            return None;
+        }
+    };
     let mut exprs: Vec<Statement> = vec![create_ipv4_match()];
 
     // Match source zone (input interface). An unresolvable zone fails closed.
@@ -138,10 +179,8 @@ fn create_port_forward_rule(
     // LAN clients' outbound traffic to the same port would be hijacked.
     exprs.push(create_fib_daddr_local_match());
 
-    // Match source IP if specified
-    if let Some(ref src_ip) = pf.source_ip {
-        exprs.push(create_saddr_match(src_ip));
-    }
+    // Match source address if specified
+    exprs.extend(source);
 
     // Match protocol
     exprs.push(create_protocol_match(protocol));
@@ -168,7 +207,11 @@ fn create_port_forward_rule(
         table: Cow::Borrowed(NAT_TABLE),
         chain: Cow::Borrowed("prerouting"),
         expr: exprs.into(),
-        comment: Some(Cow::Owned(format!("{} ({})", pf.name, protocol))),
+        comment: Some(Cow::Owned(rule_comment(
+            "portfwd",
+            pf.id,
+            &format!("{} ({})", pf.name, protocol),
+        ))),
         ..Default::default()
     })
 }
@@ -247,7 +290,11 @@ fn create_hairpin_dnat_rule(
         table: Cow::Borrowed(NAT_TABLE),
         chain: Cow::Borrowed("prerouting"),
         expr: exprs.into(),
-        comment: Some(Cow::Owned(format!("{} hairpin ({})", pf.name, protocol))),
+        comment: Some(Cow::Owned(rule_comment(
+            "portfwd-hairpin",
+            pf.id,
+            &format!("{} hairpin ({})", pf.name, protocol),
+        ))),
         ..Default::default()
     })
 }
@@ -371,9 +418,10 @@ fn create_hairpin_snat_rule(
         table: Cow::Borrowed(NAT_TABLE),
         chain: Cow::Borrowed("postrouting"),
         expr: exprs.into(),
-        comment: Some(Cow::Owned(format!(
-            "{} hairpin SNAT ({})",
-            pf.name, protocol
+        comment: Some(Cow::Owned(rule_comment(
+            "portfwd-hairpin-snat",
+            pf.id,
+            &format!("{} hairpin SNAT ({})", pf.name, protocol),
         ))),
         ..Default::default()
     })
@@ -425,6 +473,7 @@ mod tests {
             dest_port,
             source_zone: None,
             source_ip: None,
+            source_group: None,
             description: None,
         }
     }
@@ -452,7 +501,7 @@ mod tests {
     fn single_port_defaults_to_same_port() {
         let pf = forward(8080, None, None);
         let zones = HashMap::new();
-        let rule = create_port_forward_rule(&pf, &zones, "tcp").unwrap();
+        let rule = create_port_forward_rule(&pf, &zones, "tcp", &GroupIndex::default()).unwrap();
         assert!(matches!(
             dnat_port_of(&rule),
             Some(Expression::Number(8080))
@@ -463,7 +512,7 @@ mod tests {
     fn explicit_dest_port_is_used() {
         let pf = forward(8080, None, Some(80));
         let zones = HashMap::new();
-        let rule = create_port_forward_rule(&pf, &zones, "tcp").unwrap();
+        let rule = create_port_forward_rule(&pf, &zones, "tcp", &GroupIndex::default()).unwrap();
         assert!(matches!(dnat_port_of(&rule), Some(Expression::Number(80))));
         let hairpin = create_hairpin_dnat_rule(&pf, &["eth1".to_string()], "tcp").unwrap();
         assert!(matches!(
@@ -476,7 +525,7 @@ mod tests {
     fn range_without_dest_port_preserves_original_port() {
         let pf = forward(5000, Some(5010), None);
         let zones = HashMap::new();
-        let rule = create_port_forward_rule(&pf, &zones, "tcp").unwrap();
+        let rule = create_port_forward_rule(&pf, &zones, "tcp", &GroupIndex::default()).unwrap();
         assert!(dnat_port_of(&rule).is_none());
         let hairpin = create_hairpin_dnat_rule(&pf, &["eth1".to_string()], "tcp").unwrap();
         assert!(dnat_port_of(&hairpin).is_none());

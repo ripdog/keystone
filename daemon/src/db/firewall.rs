@@ -2,12 +2,36 @@
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    FirewallAction, FirewallConfig, FirewallGlobalSettings, FirewallPolicy, FirewallZone,
-    ForwardRule, InputRule, PortForward, RuleProtocol, ZoneForwardPolicy,
+    AddressGroup, FirewallAction, FirewallConfig, FirewallGlobalSettings, FirewallPolicy,
+    FirewallZone, ForwardRule, InputRule, PortForward, PortGroup, RuleProtocol, ZoneForwardPolicy,
 };
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
 use tracing::info;
+
+/// The two kinds of named group. Each has a groups table and an entries table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupKind {
+    Address,
+    Port,
+}
+
+impl GroupKind {
+    /// (groups table, entries table)
+    fn tables(self) -> (&'static str, &'static str) {
+        match self {
+            GroupKind::Address => ("firewall_address_groups", "firewall_address_group_entries"),
+            GroupKind::Port => ("firewall_port_groups", "firewall_port_group_entries"),
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            GroupKind::Address => "Address group",
+            GroupKind::Port => "Port group",
+        }
+    }
+}
 
 /// Firewall-related database operations
 pub struct FirewallDb<'a> {
@@ -417,78 +441,363 @@ impl<'a> FirewallDb<'a> {
     }
 
     // ========================================================================
+    // Address and port group lookups
+    // ========================================================================
+
+    /// Name of every zone, keyed by ID.
+    async fn zone_names(&self) -> Result<HashMap<i64, String>> {
+        Ok(self
+            .get_firewall_zones()
+            .await?
+            .into_iter()
+            .filter_map(|z| z.id.map(|id| (id, z.name)))
+            .collect())
+    }
+
+    /// Resolve an optional group name to its ID. An unknown name is an error:
+    /// a rule must never silently lose its group restriction.
+    async fn resolve_group(&self, kind: GroupKind, name: Option<&str>) -> Result<Option<i64>> {
+        let Some(name) = name else { return Ok(None) };
+        let (groups, _) = kind.tables();
+        let id: Option<(i64,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT id FROM {groups} WHERE name = ?"
+        )))
+        .bind(name)
+        .fetch_optional(self.pool)
+        .await
+        .context("Failed to look up group")?;
+        match id {
+            Some((id,)) => Ok(Some(id)),
+            None => anyhow::bail!("{} '{}' not found", kind.title(), name),
+        }
+    }
+
+    /// ID-to-name map of one group kind.
+    async fn group_names(&self, kind: GroupKind) -> Result<HashMap<i64, String>> {
+        let (groups, _) = kind.tables();
+        let rows: Vec<(i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT id, name FROM {groups}"
+        )))
+        .fetch_all(self.pool)
+        .await
+        .context("Failed to fetch group names")?;
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Rule names that reference a group. Deleting the group is refused while
+    /// this is non-empty, because the references would otherwise be lost and
+    /// the rules would silently widen.
+    async fn group_references(&self, kind: GroupKind, id: i64) -> Result<Vec<String>> {
+        // Each query takes the group ID once per placeholder.
+        let queries: &[(&str, &str, usize)] = match kind {
+            GroupKind::Address => &[
+                (
+                    "input rule",
+                    "SELECT name FROM firewall_input_rules WHERE source_group_id = ? ORDER BY id",
+                    1,
+                ),
+                (
+                    "forward rule",
+                    "SELECT name FROM firewall_forward_rules WHERE source_group_id = ? OR dest_group_id = ? ORDER BY id",
+                    2,
+                ),
+                (
+                    "port forward",
+                    "SELECT name FROM firewall_port_forwards WHERE source_group_id = ? ORDER BY id",
+                    1,
+                ),
+            ],
+            GroupKind::Port => &[
+                (
+                    "input rule",
+                    "SELECT name FROM firewall_input_rules WHERE dest_port_group_id = ? ORDER BY id",
+                    1,
+                ),
+                (
+                    "forward rule",
+                    "SELECT name FROM firewall_forward_rules WHERE dest_port_group_id = ? ORDER BY id",
+                    1,
+                ),
+            ],
+        };
+        let mut referencing = Vec::new();
+        for (label, sql, placeholders) in queries {
+            let mut query = sqlx::query_as::<_, (String,)>(sqlx::AssertSqlSafe(sql.to_string()));
+            for _ in 0..*placeholders {
+                query = query.bind(id);
+            }
+            for (name,) in query
+                .fetch_all(self.pool)
+                .await
+                .context("Failed to look up group references")?
+            {
+                referencing.push(format!("{label} '{name}'"));
+            }
+        }
+        Ok(referencing)
+    }
+
+    // ========================================================================
+    // Address and Port Group CRUD Operations
+    // ========================================================================
+
+    /// Get all address groups, entries in the order they were entered
+    pub async fn get_address_groups(&self) -> Result<Vec<AddressGroup>> {
+        Ok(self
+            .load_groups(GroupKind::Address)
+            .await?
+            .into_iter()
+            .map(|(id, name, description, entries)| AddressGroup {
+                id: Some(id),
+                name,
+                description,
+                entries,
+            })
+            .collect())
+    }
+
+    /// Get all port groups, entries in the order they were entered
+    pub async fn get_port_groups(&self) -> Result<Vec<PortGroup>> {
+        Ok(self
+            .load_groups(GroupKind::Port)
+            .await?
+            .into_iter()
+            .map(|(id, name, description, entries)| PortGroup {
+                id: Some(id),
+                name,
+                description,
+                entries,
+            })
+            .collect())
+    }
+
+    async fn load_groups(
+        &self,
+        kind: GroupKind,
+    ) -> Result<Vec<(i64, String, Option<String>, Vec<String>)>> {
+        let (groups, entries) = kind.tables();
+        let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(
+            format!("SELECT id, name, description FROM {groups} ORDER BY name"),
+        ))
+        .fetch_all(self.pool)
+        .await
+        .context("Failed to fetch groups")?;
+        let entry_rows: Vec<(i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT group_id, entry FROM {entries} ORDER BY group_id, position, id"
+        )))
+        .fetch_all(self.pool)
+        .await
+        .context("Failed to fetch group entries")?;
+
+        let mut by_group: HashMap<i64, Vec<String>> = HashMap::new();
+        for (group_id, entry) in entry_rows {
+            by_group.entry(group_id).or_default().push(entry);
+        }
+        Ok(rows
+            .into_iter()
+            .map(|(id, name, description)| {
+                let entries = by_group.remove(&id).unwrap_or_default();
+                (id, name, description, entries)
+            })
+            .collect())
+    }
+
+    /// Save (insert or update) an address group
+    pub async fn save_address_group(&self, group: &AddressGroup) -> Result<i64> {
+        self.save_group(
+            GroupKind::Address,
+            group.id,
+            &group.name,
+            group.description.as_deref(),
+            &group.entries,
+        )
+        .await
+    }
+
+    /// Save (insert or update) a port group
+    pub async fn save_port_group(&self, group: &PortGroup) -> Result<i64> {
+        self.save_group(
+            GroupKind::Port,
+            group.id,
+            &group.name,
+            group.description.as_deref(),
+            &group.entries,
+        )
+        .await
+    }
+
+    async fn save_group(
+        &self,
+        kind: GroupKind,
+        group_id: Option<i64>,
+        name: &str,
+        description: Option<&str>,
+        entries: &[String],
+    ) -> Result<i64> {
+        anyhow::ensure!(!name.is_empty(), "{} name is required", kind.title());
+
+        // Address and port groups share one namespace: a rule refers to a group
+        // by name alone. `1` marks an address group, `0` a port group.
+        let taken: Vec<(i64, i64)> = sqlx::query_as(
+            "SELECT id, 1 FROM firewall_address_groups WHERE name = ?1 \
+             UNION ALL SELECT id, 0 FROM firewall_port_groups WHERE name = ?1",
+        )
+        .bind(name)
+        .fetch_all(self.pool)
+        .await
+        .context("Failed to check group name")?;
+        for (id, is_address) in taken {
+            let same_group =
+                (is_address == 1) == matches!(kind, GroupKind::Address) && Some(id) == group_id;
+            anyhow::ensure!(
+                same_group,
+                "the name '{name}' is already used by another address or port group"
+            );
+        }
+
+        let (groups, group_entries) = kind.tables();
+        let mut tx = self.pool.begin().await?;
+        let id = if let Some(id) = group_id {
+            let result = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {groups} SET name = ?, description = ?, updated_at = strftime('%s', 'now') WHERE id = ?"
+            )))
+            .bind(name)
+            .bind(description)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to update group")?;
+            anyhow::ensure!(result.rows_affected() > 0, "{} not found", kind.title());
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DELETE FROM {group_entries} WHERE group_id = ?"
+            )))
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to clear group entries")?;
+            id
+        } else {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "INSERT INTO {groups} (name, description, created_at, updated_at) \
+                 VALUES (?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"
+            )))
+            .bind(name)
+            .bind(description)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to insert group")?
+            .last_insert_rowid()
+        };
+        for (position, entry) in entries.iter().enumerate() {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "INSERT INTO {group_entries} (group_id, position, entry) VALUES (?, ?, ?)"
+            )))
+            .bind(id)
+            .bind(position as i64)
+            .bind(entry)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to insert group entry")?;
+        }
+        tx.commit().await?;
+        info!("Saved {} '{}' with id {}", kind.title(), name, id);
+        Ok(id)
+    }
+
+    /// Delete an address group. Refused while any rule references it.
+    pub async fn delete_address_group(&self, id: i64) -> Result<bool> {
+        self.delete_group(GroupKind::Address, id).await
+    }
+
+    /// Delete a port group. Refused while any rule references it.
+    pub async fn delete_port_group(&self, id: i64) -> Result<bool> {
+        self.delete_group(GroupKind::Port, id).await
+    }
+
+    async fn delete_group(&self, kind: GroupKind, id: i64) -> Result<bool> {
+        let (groups, _) = kind.tables();
+        let name: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT name FROM {groups} WHERE id = ?"
+        )))
+        .bind(id)
+        .fetch_optional(self.pool)
+        .await
+        .context("Failed to fetch group")?;
+        let Some((name,)) = name else {
+            return Ok(false);
+        };
+
+        let referencing = self.group_references(kind, id).await?;
+        if !referencing.is_empty() {
+            anyhow::bail!(
+                "Cannot delete {} '{}': it is referenced by {}. Change or delete these first",
+                kind.title().to_lowercase(),
+                name,
+                referencing.join(", ")
+            );
+        }
+
+        let result = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM {groups} WHERE id = ?"
+        )))
+        .bind(id)
+        .execute(self.pool)
+        .await
+        .context("Failed to delete group")?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    // ========================================================================
     // Port Forward CRUD Operations
     // ========================================================================
 
     /// Get all port forwards
     pub async fn get_port_forwards(&self) -> Result<Vec<PortForward>> {
-        let rows = sqlx::query_as::<
-            _,
-            (
-                i64,
-                String,
-                Option<String>,
-                bool,
-                String,
-                Option<i64>,
-                i64,
-                Option<i64>,
-                Option<String>,
-                String,
-                Option<i64>,
-            ),
-        >(
-            r#"SELECT pf.id, pf.name, pf.description, pf.enabled, pf.protocol,
-                      pf.source_zone_id, pf.external_port_start, pf.external_port_end,
-                      pf.source_ip, pf.dest_ip, pf.dest_port
-               FROM firewall_port_forwards pf
-               ORDER BY pf.name"#,
+        self.load_port_forwards(None).await
+    }
+
+    async fn load_port_forwards(&self, only: Option<i64>) -> Result<Vec<PortForward>> {
+        let rows = sqlx::query(
+            r#"SELECT id, name, description, enabled, protocol, source_zone_id,
+                      external_port_start, external_port_end, source_ip, source_group_id,
+                      dest_ip, dest_port
+               FROM firewall_port_forwards
+               WHERE (?1 IS NULL OR id = ?1)
+               ORDER BY name"#,
         )
+        .bind(only)
         .fetch_all(self.pool)
         .await
         .context("Failed to fetch port forwards")?;
 
-        // Get zone name lookup
-        let zones = self.get_firewall_zones().await?;
-        let zone_names: HashMap<i64, String> = zones
-            .into_iter()
-            .filter_map(|z| z.id.map(|id| (id, z.name)))
-            .collect();
+        let zone_names = self.zone_names().await?;
+        let address_groups = self.group_names(GroupKind::Address).await?;
 
-        let forwards = rows
-            .into_iter()
-            .map(
-                |(
-                    id,
-                    name,
-                    description,
-                    enabled,
-                    protocol,
-                    source_zone_id,
-                    ext_port_start,
-                    ext_port_end,
-                    source_ip,
-                    dest_ip,
-                    dest_port,
-                )| {
-                    PortForward {
-                        id: Some(id),
-                        name,
-                        description,
-                        enabled,
-                        protocol: protocol.parse().unwrap_or(RuleProtocol::Tcp),
-                        source_zone: source_zone_id.and_then(|id| zone_names.get(&id).cloned()),
-                        external_port_start: ext_port_start as u16,
-                        external_port_end: ext_port_end.map(|p| p as u16),
-                        source_ip,
-                        dest_ip,
-                        dest_port: dest_port.map(|p| p as u16),
-                    }
-                },
-            )
-            .collect();
-
-        Ok(forwards)
+        rows.iter()
+            .map(|row| {
+                let protocol: String = row.try_get("protocol")?;
+                let source_zone_id: Option<i64> = row.try_get("source_zone_id")?;
+                let source_group_id: Option<i64> = row.try_get("source_group_id")?;
+                Ok(PortForward {
+                    id: Some(row.try_get("id")?),
+                    name: row.try_get("name")?,
+                    description: row.try_get("description")?,
+                    enabled: row.try_get("enabled")?,
+                    protocol: protocol.parse().unwrap_or(RuleProtocol::Tcp),
+                    source_zone: source_zone_id.and_then(|id| zone_names.get(&id).cloned()),
+                    external_port_start: row.try_get::<i64, _>("external_port_start")? as u16,
+                    external_port_end: row
+                        .try_get::<Option<i64>, _>("external_port_end")?
+                        .map(|p| p as u16),
+                    source_ip: row.try_get("source_ip")?,
+                    source_group: source_group_id.and_then(|id| address_groups.get(&id).cloned()),
+                    dest_ip: row.try_get("dest_ip")?,
+                    dest_port: row
+                        .try_get::<Option<i64>, _>("dest_port")?
+                        .map(|p| p as u16),
+                })
+            })
+            .collect()
     }
 
     /// Save (insert or update) a port forward
@@ -513,14 +822,17 @@ impl<'a> FirewallDb<'a> {
         } else {
             None
         };
+        let source_group_id = self
+            .resolve_group(GroupKind::Address, pf.source_group.as_deref())
+            .await?;
 
         let id = if let Some(id) = pf.id {
             // Update existing
             sqlx::query(
-                r#"UPDATE firewall_port_forwards SET 
+                r#"UPDATE firewall_port_forwards SET
                    name = ?, description = ?, enabled = ?, protocol = ?,
                    source_zone_id = ?, external_port_start = ?, external_port_end = ?,
-                   source_ip = ?, dest_ip = ?, dest_port = ?,
+                   source_ip = ?, source_group_id = ?, dest_ip = ?, dest_port = ?,
                    updated_at = strftime('%s', 'now')
                    WHERE id = ?"#,
             )
@@ -532,6 +844,7 @@ impl<'a> FirewallDb<'a> {
             .bind(pf.external_port_start as i64)
             .bind(pf.external_port_end.map(|p| p as i64))
             .bind(&pf.source_ip)
+            .bind(source_group_id)
             .bind(&pf.dest_ip)
             .bind(pf.dest_port.map(|p| p as i64))
             .bind(id)
@@ -542,11 +855,11 @@ impl<'a> FirewallDb<'a> {
         } else {
             // Insert new
             let result = sqlx::query(
-                r#"INSERT INTO firewall_port_forwards 
-                   (name, description, enabled, protocol, source_zone_id, 
-                    external_port_start, external_port_end, source_ip, dest_ip, dest_port,
-                    created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+                r#"INSERT INTO firewall_port_forwards
+                   (name, description, enabled, protocol, source_zone_id,
+                    external_port_start, external_port_end, source_ip, source_group_id,
+                    dest_ip, dest_port, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
             )
             .bind(&pf.name)
             .bind(&pf.description)
@@ -556,6 +869,7 @@ impl<'a> FirewallDb<'a> {
             .bind(pf.external_port_start as i64)
             .bind(pf.external_port_end.map(|p| p as i64))
             .bind(&pf.source_ip)
+            .bind(source_group_id)
             .bind(&pf.dest_ip)
             .bind(pf.dest_port.map(|p| p as i64))
             .execute(self.pool)
@@ -585,156 +899,61 @@ impl<'a> FirewallDb<'a> {
 
     /// Get all input rules
     pub async fn get_input_rules(&self) -> Result<Vec<InputRule>> {
-        let rows = sqlx::query_as::<
-            _,
-            (
-                i64,
-                String,
-                Option<String>,
-                bool,
-                i64,
-                Option<i64>,
-                Option<String>,
-                Option<i64>,
-                Option<i64>,
-                Option<String>,
-                String,
-                bool,
-                Option<String>,
-                Option<String>,
-            ),
-        >(
+        self.load_input_rules(None).await
+    }
+
+    async fn load_input_rules(&self, only: Option<i64>) -> Result<Vec<InputRule>> {
+        let rows = sqlx::query(
             r#"SELECT id, name, description, enabled, position, zone_id, protocol,
-                      port_start, port_end, source_ip, action, log_enabled, log_prefix, rate_limit
+                      port_start, port_end, source_ip, source_group_id, dest_port_group_id,
+                      action, log_enabled, log_prefix, rate_limit
                FROM firewall_input_rules
+               WHERE (?1 IS NULL OR id = ?1)
                ORDER BY position, id"#,
         )
+        .bind(only)
         .fetch_all(self.pool)
         .await
         .context("Failed to fetch input rules")?;
 
-        // Get zone name lookup
-        let zones = self.get_firewall_zones().await?;
-        let zone_names: HashMap<i64, String> = zones
-            .into_iter()
-            .filter_map(|z| z.id.map(|id| (id, z.name)))
-            .collect();
+        let zone_names = self.zone_names().await?;
+        let address_groups = self.group_names(GroupKind::Address).await?;
+        let port_groups = self.group_names(GroupKind::Port).await?;
 
-        let rules = rows
-            .into_iter()
-            .map(
-                |(
-                    id,
-                    name,
-                    description,
-                    enabled,
-                    position,
-                    zone_id,
-                    protocol,
-                    port_start,
-                    port_end,
-                    source_ip,
-                    action,
-                    log_enabled,
-                    log_prefix,
-                    rate_limit,
-                )| {
-                    InputRule {
-                        id: Some(id),
-                        name,
-                        description,
-                        enabled,
-                        position: position as i32,
-                        zone: zone_id.and_then(|id| zone_names.get(&id).cloned()),
-                        protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
-                        port_start: port_start.map(|p| p as u16),
-                        port_end: port_end.map(|p| p as u16),
-                        source_ip,
-                        action: action.parse().unwrap_or(FirewallAction::Accept),
-                        log_enabled,
-                        log_prefix,
-                        rate_limit,
-                    }
-                },
-            )
-            .collect();
-
-        Ok(rules)
+        rows.iter()
+            .map(|row| {
+                let zone_id: Option<i64> = row.try_get("zone_id")?;
+                let protocol: Option<String> = row.try_get("protocol")?;
+                let source_group_id: Option<i64> = row.try_get("source_group_id")?;
+                let port_group_id: Option<i64> = row.try_get("dest_port_group_id")?;
+                let action: String = row.try_get("action")?;
+                Ok(InputRule {
+                    id: Some(row.try_get("id")?),
+                    name: row.try_get("name")?,
+                    description: row.try_get("description")?,
+                    enabled: row.try_get("enabled")?,
+                    position: row.try_get::<i64, _>("position")? as i32,
+                    zone: zone_id.and_then(|id| zone_names.get(&id).cloned()),
+                    protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
+                    port_start: row
+                        .try_get::<Option<i64>, _>("port_start")?
+                        .map(|p| p as u16),
+                    port_end: row.try_get::<Option<i64>, _>("port_end")?.map(|p| p as u16),
+                    source_ip: row.try_get("source_ip")?,
+                    source_group: source_group_id.and_then(|id| address_groups.get(&id).cloned()),
+                    dest_port_group: port_group_id.and_then(|id| port_groups.get(&id).cloned()),
+                    action: action.parse().unwrap_or(FirewallAction::Accept),
+                    log_enabled: row.try_get("log_enabled")?,
+                    log_prefix: row.try_get("log_prefix")?,
+                    rate_limit: row.try_get("rate_limit")?,
+                })
+            })
+            .collect()
     }
 
     /// Get a single input rule by ID
     pub async fn get_input_rule(&self, id: i64) -> Result<Option<InputRule>> {
-        let row = sqlx::query_as::<
-            _,
-            (
-                i64,
-                String,
-                Option<String>,
-                bool,
-                i64,
-                Option<i64>,
-                Option<String>,
-                Option<i64>,
-                Option<i64>,
-                Option<String>,
-                String,
-                bool,
-                Option<String>,
-                Option<String>,
-            ),
-        >(
-            r#"SELECT id, name, description, enabled, position, zone_id, protocol,
-                      port_start, port_end, source_ip, action, log_enabled, log_prefix, rate_limit
-               FROM firewall_input_rules WHERE id = ?"#,
-        )
-        .bind(id)
-        .fetch_optional(self.pool)
-        .await
-        .context("Failed to fetch input rule")?;
-
-        match row {
-            Some((
-                id,
-                name,
-                description,
-                enabled,
-                position,
-                zone_id,
-                protocol,
-                port_start,
-                port_end,
-                source_ip,
-                action,
-                log_enabled,
-                log_prefix,
-                rate_limit,
-            )) => {
-                // Get zone name if zone_id is set
-                let zone = if let Some(zid) = zone_id {
-                    self.get_firewall_zone(zid).await?.map(|z| z.name)
-                } else {
-                    None
-                };
-
-                Ok(Some(InputRule {
-                    id: Some(id),
-                    name,
-                    description,
-                    enabled,
-                    position: position as i32,
-                    zone,
-                    protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
-                    port_start: port_start.map(|p| p as u16),
-                    port_end: port_end.map(|p| p as u16),
-                    source_ip,
-                    action: action.parse().unwrap_or(FirewallAction::Accept),
-                    log_enabled,
-                    log_prefix,
-                    rate_limit,
-                }))
-            }
-            None => Ok(None),
-        }
+        Ok(self.load_input_rules(Some(id)).await?.pop())
     }
 
     /// Save (insert or update) an input rule
@@ -753,13 +972,20 @@ impl<'a> FirewallDb<'a> {
         } else {
             None
         };
+        let source_group_id = self
+            .resolve_group(GroupKind::Address, rule.source_group.as_deref())
+            .await?;
+        let port_group_id = self
+            .resolve_group(GroupKind::Port, rule.dest_port_group.as_deref())
+            .await?;
 
         let id = if let Some(id) = rule.id {
             // Update existing
             sqlx::query(
-                r#"UPDATE firewall_input_rules SET 
+                r#"UPDATE firewall_input_rules SET
                    name = ?, description = ?, enabled = ?, position = ?, zone_id = ?,
                    protocol = ?, port_start = ?, port_end = ?, source_ip = ?,
+                   source_group_id = ?, dest_port_group_id = ?,
                    action = ?, log_enabled = ?, log_prefix = ?, rate_limit = ?,
                    updated_at = strftime('%s', 'now')
                    WHERE id = ?"#,
@@ -773,6 +999,8 @@ impl<'a> FirewallDb<'a> {
             .bind(rule.port_start.map(|p| p as i64))
             .bind(rule.port_end.map(|p| p as i64))
             .bind(&rule.source_ip)
+            .bind(source_group_id)
+            .bind(port_group_id)
             .bind(rule.action.to_string())
             .bind(rule.log_enabled)
             .bind(&rule.log_prefix)
@@ -785,11 +1013,11 @@ impl<'a> FirewallDb<'a> {
         } else {
             // Insert new
             let result = sqlx::query(
-                r#"INSERT INTO firewall_input_rules 
+                r#"INSERT INTO firewall_input_rules
                    (name, description, enabled, position, zone_id, protocol,
-                    port_start, port_end, source_ip, action, log_enabled, log_prefix, rate_limit,
-                    created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+                    port_start, port_end, source_ip, source_group_id, dest_port_group_id,
+                    action, log_enabled, log_prefix, rate_limit, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
             )
             .bind(&rule.name)
             .bind(&rule.description)
@@ -800,6 +1028,8 @@ impl<'a> FirewallDb<'a> {
             .bind(rule.port_start.map(|p| p as i64))
             .bind(rule.port_end.map(|p| p as i64))
             .bind(&rule.source_ip)
+            .bind(source_group_id)
+            .bind(port_group_id)
             .bind(rule.action.to_string())
             .bind(rule.log_enabled)
             .bind(&rule.log_prefix)
@@ -831,175 +1061,70 @@ impl<'a> FirewallDb<'a> {
 
     /// Get all forward rules
     pub async fn get_forward_rules(&self) -> Result<Vec<ForwardRule>> {
-        let rows = sqlx::query_as::<
-            _,
-            (
-                i64,
-                String,
-                Option<String>,
-                bool,
-                i64,
-                Option<i64>,
-                Option<i64>,
-                Option<String>,
-                Option<i64>,
-                Option<i64>,
-                Option<String>,
-                Option<String>,
-                String,
-                bool,
-                Option<String>,
-                Option<String>,
-            ),
-        >(
-            r#"SELECT id, name, description, enabled, position, source_zone_id, dest_zone_id,
-                      protocol, dest_port_start, dest_port_end, source_ip, dest_ip,
-                      action, log_enabled, log_prefix, rate_limit
-               FROM firewall_forward_rules
-               ORDER BY position, id"#,
-        )
-        .fetch_all(self.pool)
-        .await
-        .context("Failed to fetch forward rules")?;
-
-        // Get zone name lookup
-        let zones = self.get_firewall_zones().await?;
-        let zone_names: HashMap<i64, String> = zones
-            .into_iter()
-            .filter_map(|z| z.id.map(|id| (id, z.name)))
-            .collect();
-
-        let rules = rows
-            .into_iter()
-            .map(
-                |(
-                    id,
-                    name,
-                    description,
-                    enabled,
-                    position,
-                    source_zone_id,
-                    dest_zone_id,
-                    protocol,
-                    dest_port_start,
-                    dest_port_end,
-                    source_ip,
-                    dest_ip,
-                    action,
-                    log_enabled,
-                    log_prefix,
-                    rate_limit,
-                )| {
-                    ForwardRule {
-                        id: Some(id),
-                        name,
-                        description,
-                        enabled,
-                        position: position as i32,
-                        source_zone: source_zone_id.and_then(|id| zone_names.get(&id).cloned()),
-                        dest_zone: dest_zone_id.and_then(|id| zone_names.get(&id).cloned()),
-                        protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
-                        dest_port_start: dest_port_start.map(|p| p as u16),
-                        dest_port_end: dest_port_end.map(|p| p as u16),
-                        source_ip,
-                        dest_ip,
-                        action: action.parse().unwrap_or(FirewallAction::Accept),
-                        log_enabled,
-                        log_prefix,
-                        rate_limit,
-                    }
-                },
-            )
-            .collect();
-
-        Ok(rules)
+        self.load_forward_rules(None).await
     }
 
     /// Get a single forward rule by ID
     pub async fn get_forward_rule(&self, id: i64) -> Result<Option<ForwardRule>> {
-        let row = sqlx::query_as::<
-            _,
-            (
-                i64,
-                String,
-                Option<String>,
-                bool,
-                i64,
-                Option<i64>,
-                Option<i64>,
-                Option<String>,
-                Option<i64>,
-                Option<i64>,
-                Option<String>,
-                Option<String>,
-                String,
-                bool,
-                Option<String>,
-                Option<String>,
-            ),
-        >(
+        Ok(self.load_forward_rules(Some(id)).await?.pop())
+    }
+
+    async fn load_forward_rules(&self, only: Option<i64>) -> Result<Vec<ForwardRule>> {
+        let rows = sqlx::query(
             r#"SELECT id, name, description, enabled, position, source_zone_id, dest_zone_id,
                       protocol, dest_port_start, dest_port_end, source_ip, dest_ip,
+                      source_group_id, dest_group_id, dest_port_group_id,
                       action, log_enabled, log_prefix, rate_limit
-               FROM firewall_forward_rules WHERE id = ?"#,
+               FROM firewall_forward_rules
+               WHERE (?1 IS NULL OR id = ?1)
+               ORDER BY position, id"#,
         )
-        .bind(id)
-        .fetch_optional(self.pool)
+        .bind(only)
+        .fetch_all(self.pool)
         .await
-        .context("Failed to fetch forward rule")?;
+        .context("Failed to fetch forward rules")?;
 
-        match row {
-            Some((
-                id,
-                name,
-                description,
-                enabled,
-                position,
-                source_zone_id,
-                dest_zone_id,
-                protocol,
-                dest_port_start,
-                dest_port_end,
-                source_ip,
-                dest_ip,
-                action,
-                log_enabled,
-                log_prefix,
-                rate_limit,
-            )) => {
-                // Get zone names
-                let source_zone = if let Some(zid) = source_zone_id {
-                    self.get_firewall_zone(zid).await?.map(|z| z.name)
-                } else {
-                    None
-                };
-                let dest_zone = if let Some(zid) = dest_zone_id {
-                    self.get_firewall_zone(zid).await?.map(|z| z.name)
-                } else {
-                    None
-                };
+        let zone_names = self.zone_names().await?;
+        let address_groups = self.group_names(GroupKind::Address).await?;
+        let port_groups = self.group_names(GroupKind::Port).await?;
 
-                Ok(Some(ForwardRule {
-                    id: Some(id),
-                    name,
-                    description,
-                    enabled,
-                    position: position as i32,
-                    source_zone,
-                    dest_zone,
+        rows.iter()
+            .map(|row| {
+                let source_zone_id: Option<i64> = row.try_get("source_zone_id")?;
+                let dest_zone_id: Option<i64> = row.try_get("dest_zone_id")?;
+                let protocol: Option<String> = row.try_get("protocol")?;
+                let source_group_id: Option<i64> = row.try_get("source_group_id")?;
+                let dest_group_id: Option<i64> = row.try_get("dest_group_id")?;
+                let dest_port_group_id: Option<i64> = row.try_get("dest_port_group_id")?;
+                let action: String = row.try_get("action")?;
+                Ok(ForwardRule {
+                    id: Some(row.try_get("id")?),
+                    name: row.try_get("name")?,
+                    description: row.try_get("description")?,
+                    enabled: row.try_get("enabled")?,
+                    position: row.try_get::<i64, _>("position")? as i32,
+                    source_zone: source_zone_id.and_then(|id| zone_names.get(&id).cloned()),
+                    dest_zone: dest_zone_id.and_then(|id| zone_names.get(&id).cloned()),
                     protocol: protocol.and_then(|p| p.parse::<RuleProtocol>().ok()),
-                    dest_port_start: dest_port_start.map(|p| p as u16),
-                    dest_port_end: dest_port_end.map(|p| p as u16),
-                    source_ip,
-                    dest_ip,
+                    dest_port_start: row
+                        .try_get::<Option<i64>, _>("dest_port_start")?
+                        .map(|p| p as u16),
+                    dest_port_end: row
+                        .try_get::<Option<i64>, _>("dest_port_end")?
+                        .map(|p| p as u16),
+                    source_ip: row.try_get("source_ip")?,
+                    dest_ip: row.try_get("dest_ip")?,
+                    source_group: source_group_id.and_then(|id| address_groups.get(&id).cloned()),
+                    dest_group: dest_group_id.and_then(|id| address_groups.get(&id).cloned()),
+                    dest_port_group: dest_port_group_id
+                        .and_then(|id| port_groups.get(&id).cloned()),
                     action: action.parse().unwrap_or(FirewallAction::Accept),
-                    log_enabled,
-                    log_prefix,
-                    rate_limit,
-                }))
-            }
-            None => Ok(None),
-        }
+                    log_enabled: row.try_get("log_enabled")?,
+                    log_prefix: row.try_get("log_prefix")?,
+                    rate_limit: row.try_get("rate_limit")?,
+                })
+            })
+            .collect()
     }
 
     /// Save (insert or update) a forward rule
@@ -1028,14 +1153,24 @@ impl<'a> FirewallDb<'a> {
         } else {
             None
         };
+        let source_group_id = self
+            .resolve_group(GroupKind::Address, rule.source_group.as_deref())
+            .await?;
+        let dest_group_id = self
+            .resolve_group(GroupKind::Address, rule.dest_group.as_deref())
+            .await?;
+        let dest_port_group_id = self
+            .resolve_group(GroupKind::Port, rule.dest_port_group.as_deref())
+            .await?;
 
         let id = if let Some(id) = rule.id {
             // Update existing
             sqlx::query(
-                r#"UPDATE firewall_forward_rules SET 
+                r#"UPDATE firewall_forward_rules SET
                    name = ?, description = ?, enabled = ?, position = ?,
                    source_zone_id = ?, dest_zone_id = ?, protocol = ?,
                    dest_port_start = ?, dest_port_end = ?, source_ip = ?, dest_ip = ?,
+                   source_group_id = ?, dest_group_id = ?, dest_port_group_id = ?,
                    action = ?, log_enabled = ?, log_prefix = ?, rate_limit = ?,
                    updated_at = strftime('%s', 'now')
                    WHERE id = ?"#,
@@ -1051,6 +1186,9 @@ impl<'a> FirewallDb<'a> {
             .bind(rule.dest_port_end.map(|p| p as i64))
             .bind(&rule.source_ip)
             .bind(&rule.dest_ip)
+            .bind(source_group_id)
+            .bind(dest_group_id)
+            .bind(dest_port_group_id)
             .bind(rule.action.to_string())
             .bind(rule.log_enabled)
             .bind(&rule.log_prefix)
@@ -1063,11 +1201,12 @@ impl<'a> FirewallDb<'a> {
         } else {
             // Insert new
             let result = sqlx::query(
-                r#"INSERT INTO firewall_forward_rules 
+                r#"INSERT INTO firewall_forward_rules
                    (name, description, enabled, position, source_zone_id, dest_zone_id,
                     protocol, dest_port_start, dest_port_end, source_ip, dest_ip,
+                    source_group_id, dest_group_id, dest_port_group_id,
                     action, log_enabled, log_prefix, rate_limit, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
             )
             .bind(&rule.name)
             .bind(&rule.description)
@@ -1080,6 +1219,9 @@ impl<'a> FirewallDb<'a> {
             .bind(rule.dest_port_end.map(|p| p as i64))
             .bind(&rule.source_ip)
             .bind(&rule.dest_ip)
+            .bind(source_group_id)
+            .bind(dest_group_id)
+            .bind(dest_port_group_id)
             .bind(rule.action.to_string())
             .bind(rule.log_enabled)
             .bind(&rule.log_prefix)
@@ -1117,6 +1259,8 @@ impl<'a> FirewallDb<'a> {
             port_forwards: self.get_port_forwards().await?,
             input_rules: self.get_input_rules().await?,
             forward_rules: self.get_forward_rules().await?,
+            address_groups: self.get_address_groups().await?,
+            port_groups: self.get_port_groups().await?,
             global_settings: self.get_firewall_global_settings().await?,
         })
     }
@@ -1348,5 +1492,224 @@ mod zone_delete_tests {
         .unwrap();
         let err = db.delete_firewall_zone(id).await.unwrap_err().to_string();
         assert!(err.contains("port forward 'web'"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod group_tests {
+    use keystone_core::{
+        AddressGroup, FirewallZone, ForwardRule, InputRule, PortForward, PortGroup, RuleProtocol,
+    };
+
+    async fn db() -> crate::db::Database {
+        crate::db::Database::new_in_memory().await.unwrap()
+    }
+
+    fn lan_hosts() -> AddressGroup {
+        AddressGroup {
+            name: "lan_hosts".into(),
+            description: Some("LAN clients".into()),
+            entries: vec!["10.0.0.0/8".into(), "fd00::/64".into()],
+            ..Default::default()
+        }
+    }
+
+    fn web_ports() -> PortGroup {
+        PortGroup {
+            name: "web".into(),
+            entries: vec!["80".into(), "443".into(), "8000-8100".into()],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn groups_round_trip_in_entry_order() {
+        let db = db().await;
+        db.save_address_group(&lan_hosts()).await.unwrap();
+        db.save_port_group(&web_ports()).await.unwrap();
+
+        let addresses = db.get_address_groups().await.unwrap();
+        assert_eq!(addresses.len(), 1);
+        assert_eq!(addresses[0].entries, vec!["10.0.0.0/8", "fd00::/64"]);
+        assert_eq!(addresses[0].description.as_deref(), Some("LAN clients"));
+
+        let ports = db.get_port_groups().await.unwrap();
+        assert_eq!(ports[0].entries, vec!["80", "443", "8000-8100"]);
+    }
+
+    #[tokio::test]
+    async fn updating_a_group_replaces_its_entries() {
+        let db = db().await;
+        let id = db.save_address_group(&lan_hosts()).await.unwrap();
+        let mut group = lan_hosts();
+        group.id = Some(id);
+        group.entries = vec!["192.168.1.0/24".into()];
+        db.save_address_group(&group).await.unwrap();
+        let groups = db.get_address_groups().await.unwrap();
+        assert_eq!(groups[0].entries, vec!["192.168.1.0/24"]);
+    }
+
+    #[tokio::test]
+    async fn rules_resolve_group_names_to_ids_and_back() {
+        let db = db().await;
+        db.save_address_group(&lan_hosts()).await.unwrap();
+        db.save_port_group(&web_ports()).await.unwrap();
+        db.save_firewall_zone(&FirewallZone {
+            name: "office".into(),
+            interfaces: vec!["eth1".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        let input_id = db
+            .save_input_rule(&InputRule {
+                name: "web from lan".into(),
+                source_group: Some("lan_hosts".into()),
+                protocol: Some(RuleProtocol::Tcp),
+                dest_port_group: Some("web".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        db.save_forward_rule(&ForwardRule {
+            name: "fwd".into(),
+            source_group: Some("lan_hosts".into()),
+            dest_port_group: Some("web".into()),
+            protocol: Some(RuleProtocol::Udp),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        db.save_port_forward(&PortForward {
+            name: "nat".into(),
+            external_port_start: 8080,
+            source_group: Some("lan_hosts".into()),
+            dest_ip: "192.168.1.10".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        let rule = db.get_input_rule(input_id).await.unwrap().unwrap();
+        assert_eq!(rule.source_group.as_deref(), Some("lan_hosts"));
+        assert_eq!(rule.dest_port_group.as_deref(), Some("web"));
+        assert_eq!(rule.port_start, None);
+
+        let config = db.get_firewall_config().await.unwrap();
+        assert_eq!(
+            config.forward_rules[0].source_group.as_deref(),
+            Some("lan_hosts")
+        );
+        assert_eq!(
+            config.forward_rules[0].dest_port_group.as_deref(),
+            Some("web")
+        );
+        assert_eq!(
+            config.port_forwards[0].source_group.as_deref(),
+            Some("lan_hosts")
+        );
+        assert_eq!(config.address_groups.len(), 1);
+        assert_eq!(config.port_groups.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unknown_group_reference_is_refused_on_save() {
+        let db = db().await;
+        let err = db
+            .save_input_rule(&InputRule {
+                name: "ghost".into(),
+                source_group: Some("nobody".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Address group 'nobody' not found"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn deleting_a_referenced_group_lists_the_referencing_rules() {
+        let db = db().await;
+        let address_id = db.save_address_group(&lan_hosts()).await.unwrap();
+        let port_id = db.save_port_group(&web_ports()).await.unwrap();
+        db.save_input_rule(&InputRule {
+            name: "ssh".into(),
+            source_group: Some("lan_hosts".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        db.save_forward_rule(&ForwardRule {
+            name: "both ends".into(),
+            source_group: Some("lan_hosts".into()),
+            dest_group: Some("lan_hosts".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        db.save_port_forward(&PortForward {
+            name: "nat".into(),
+            external_port_start: 22,
+            source_group: Some("lan_hosts".into()),
+            dest_ip: "192.168.1.10".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        db.save_input_rule(&InputRule {
+            name: "web".into(),
+            protocol: Some(RuleProtocol::Tcp),
+            dest_port_group: Some("web".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        let err = db
+            .delete_address_group(address_id)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("input rule 'ssh'"), "{err}");
+        assert!(err.contains("forward rule 'both ends'"), "{err}");
+        assert!(err.contains("port forward 'nat'"), "{err}");
+        // The forward rule uses the group twice but is listed once.
+        assert_eq!(err.matches("forward rule 'both ends'").count(), 1, "{err}");
+
+        let err = db.delete_port_group(port_id).await.unwrap_err().to_string();
+        assert!(err.contains("input rule 'web'"), "{err}");
+        assert!(!err.contains("ssh"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn unreferenced_group_can_be_deleted_and_entries_go_with_it() {
+        let db = db().await;
+        let id = db.save_address_group(&lan_hosts()).await.unwrap();
+        assert!(db.delete_address_group(id).await.unwrap());
+        assert!(db.get_address_groups().await.unwrap().is_empty());
+        let entries: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM firewall_address_group_entries")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(entries, 0);
+        assert!(!db.delete_address_group(id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn names_are_unique_across_address_and_port_groups() {
+        let db = db().await;
+        db.save_address_group(&lan_hosts()).await.unwrap();
+        let err = db
+            .save_port_group(&PortGroup {
+                name: "lan_hosts".into(),
+                entries: vec!["22".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("already used"), "{err}");
     }
 }

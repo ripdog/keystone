@@ -93,6 +93,8 @@ endpoints! {
     ReorderInputRules: Post "/firewall/input-rules/reorder", ReorderRulesRequest => ReorderRulesResponse;
     SaveForwardRule: Post "/firewall/forward-rules", SaveForwardRuleRequest => SaveForwardRuleResponse;
     ReorderForwardRules: Post "/firewall/forward-rules/reorder", ReorderRulesRequest => ReorderRulesResponse;
+    SaveAddressGroup: Post "/firewall/address-groups", SaveAddressGroupRequest => SaveAddressGroupResponse;
+    SavePortGroup: Post "/firewall/port-groups", SavePortGroupRequest => SavePortGroupResponse;
     CreateSimpleForward: Post "/firewall/simple-forwards", CreateSimplePortForwardRequest => SimplePortForwardsResponse;
     /// Path parameter: `{id}` (the rule id); see [`render_path`].
     UpdateSimpleForward: Put "/firewall/simple-forwards/{id}", CreateSimplePortForwardRequest => SimplePortForwardsResponse;

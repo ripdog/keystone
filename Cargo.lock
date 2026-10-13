@@ -1893,6 +1893,7 @@ dependencies = [
 name = "keystone-core"
 version = "0.2.4"
 dependencies = [
+ "ipnet",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

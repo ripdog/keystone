@@ -19,9 +19,9 @@ pub mod vlans;
 
 use anyhow::{Context, Result};
 use keystone_core::{
-    BridgeConfig, FirewallConfig, FirewallGlobalSettings, FirewallZone, ForwardRule,
-    GlobalSettings, InputRule, InterfaceConfig, ManagedInterface, PortForward, User, UserInfo,
-    VlanConfig, WizardStep, ZoneForwardPolicy,
+    AddressGroup, BridgeConfig, FirewallConfig, FirewallGlobalSettings, FirewallZone, ForwardRule,
+    GlobalSettings, InputRule, InterfaceConfig, ManagedInterface, PortForward, PortGroup, User,
+    UserInfo, VlanConfig, WizardStep, ZoneForwardPolicy,
 };
 use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use tracing::info;
@@ -300,6 +300,36 @@ impl Database {
     /// Delete a zone forward policy by ID
     pub async fn delete_zone_forward(&self, id: i64) -> Result<bool> {
         self.firewall().delete_zone_forward(id).await
+    }
+
+    /// Get all address groups
+    pub async fn get_address_groups(&self) -> Result<Vec<AddressGroup>> {
+        self.firewall().get_address_groups().await
+    }
+
+    /// Save (insert or update) an address group
+    pub async fn save_address_group(&self, group: &AddressGroup) -> Result<i64> {
+        self.firewall().save_address_group(group).await
+    }
+
+    /// Delete an address group; refused while a rule references it
+    pub async fn delete_address_group(&self, id: i64) -> Result<bool> {
+        self.firewall().delete_address_group(id).await
+    }
+
+    /// Get all port groups
+    pub async fn get_port_groups(&self) -> Result<Vec<PortGroup>> {
+        self.firewall().get_port_groups().await
+    }
+
+    /// Save (insert or update) a port group
+    pub async fn save_port_group(&self, group: &PortGroup) -> Result<i64> {
+        self.firewall().save_port_group(group).await
+    }
+
+    /// Delete a port group; refused while a rule references it
+    pub async fn delete_port_group(&self, id: i64) -> Result<bool> {
+        self.firewall().delete_port_group(id).await
     }
 
     /// Get all port forwards

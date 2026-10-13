@@ -1,7 +1,9 @@
 //! Validation at privileged configuration-generation boundaries.
 //! Deserialization alone does not make strings safe to embed in config files.
+use ipnet::IpNet;
 use serde::Serialize;
 use serde_json::Value;
+use std::net::IpAddr;
 
 /// True when `value` can sit on one line of a generated configuration file:
 /// it has no control characters (newlines, NUL, escapes, and so on) and no
@@ -61,6 +63,62 @@ pub fn interface_name(name: &str) -> Result<(), String> {
         return Err(format!("Invalid network interface name: {name:?}"));
     }
     Ok(())
+}
+
+/// Group names are shared by address and port groups: a lowercase letter, then
+/// lowercase letters, digits or underscores, at most 31 characters in total.
+pub fn group_name(name: &str) -> Result<(), String> {
+    let mut chars = name.chars();
+    let starts_well = matches!(chars.next(), Some('a'..='z'));
+    if starts_well && name.len() <= 31 && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '_')) {
+        return Ok(());
+    }
+    Err(format!(
+        "group name {name:?} must start with a lowercase letter and contain only lowercase letters, digits and underscores (at most 31 characters)"
+    ))
+}
+
+/// One address-group entry: an IPv4 or IPv6 address, or a CIDR network whose
+/// host bits are zero (`10.0.0.0/8`, not `10.1.2.3/8`).
+pub fn address_group_entry(entry: &str) -> Result<IpNet, String> {
+    let value = entry.trim();
+    if let Ok(net) = value.parse::<IpNet>() {
+        if net.addr() != net.network() {
+            return Err(format!(
+                "{value} has host bits set; write the network address {}",
+                net.trunc()
+            ));
+        }
+        return Ok(net);
+    }
+    match value.parse::<IpAddr>() {
+        Ok(addr) => IpNet::new(addr, if addr.is_ipv4() { 32 } else { 128 })
+            .map_err(|error| format!("{value}: {error}")),
+        Err(_) => Err(format!("{value:?} is not an IP address or CIDR network")),
+    }
+}
+
+/// One port-group entry: a port (`443`) or an inclusive range (`8000-8100`).
+/// Returns the inclusive `(start, end)` pair; a single port has `start == end`.
+pub fn port_group_entry(entry: &str) -> Result<(u16, u16), String> {
+    let value = entry.trim();
+    let parse_port = |text: &str| match text.trim().parse::<u16>() {
+        Ok(port) if port > 0 => Ok(port),
+        _ => Err(format!("{value:?} is not a port between 1 and 65535")),
+    };
+    match value.split_once('-') {
+        Some((start, end)) => {
+            let (start, end) = (parse_port(start)?, parse_port(end)?);
+            if end < start {
+                return Err(format!("{value:?}: the range end is less than its start"));
+            }
+            Ok((start, end))
+        }
+        None => {
+            let port = parse_port(value)?;
+            Ok((port, port))
+        }
+    }
 }
 
 /// A bare host/IP without Caddyfile grammar, whitespace, ports or URI syntax.

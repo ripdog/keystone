@@ -3,12 +3,79 @@
 //! This module provides reusable functions for building nftables match statements
 //! and other expression components used across chain generation.
 
+use crate::firewall::groups::{Family, port_set_name};
 use keystone_core::RuleProtocol;
 use nftables::{
     expr::{Expression, Meta, MetaKey, Payload, PayloadField},
     stmt::{Limit, Match, Operator, Statement},
 };
 use std::{borrow::Cow, net::IpAddr};
+
+/// Which address of a packet an address constraint matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Source,
+    Destination,
+}
+
+/// Address match for one side of a rule, restricted to `family`.
+///
+/// A literal address matches itself. A group matches the named set for
+/// `family`, and yields `None` when no family is given (the caller then emits
+/// no rule for that family). `None` also means the side is unconstrained.
+pub fn address_match(
+    side: Side,
+    literal: Option<&str>,
+    group: Option<&str>,
+    family: Option<Family>,
+) -> Option<Statement<'static>> {
+    if let Some(literal) = literal {
+        return Some(match side {
+            Side::Source => create_saddr_match(literal),
+            Side::Destination => create_daddr_match(literal),
+        });
+    }
+    let (Some(group), Some(family)) = (group, family) else {
+        return None;
+    };
+    Some(create_address_set_match(
+        family,
+        side,
+        &crate::firewall::groups::address_set_name(group, family),
+    ))
+}
+
+/// Match an address against a named nftables set, e.g. `ip saddr @lan_v4`.
+pub fn create_address_set_match(family: Family, side: Side, set: &str) -> Statement<'static> {
+    let field = match side {
+        Side::Source => "saddr",
+        Side::Destination => "daddr",
+    };
+    Statement::Match(Match {
+        left: Expression::Named(nftables::expr::NamedExpression::Payload(
+            Payload::PayloadField(PayloadField {
+                protocol: Cow::Borrowed(family.payload()),
+                field: Cow::Borrowed(field),
+            }),
+        )),
+        right: Expression::String(Cow::Owned(format!("@{set}"))),
+        op: Operator::EQ,
+    })
+}
+
+/// Match the destination port against a named port set, e.g. `th dport @web_ports`.
+pub fn create_port_set_match(set: &str) -> Statement<'static> {
+    Statement::Match(Match {
+        left: Expression::Named(nftables::expr::NamedExpression::Payload(
+            Payload::PayloadField(PayloadField {
+                protocol: Cow::Borrowed("th"),
+                field: Cow::Borrowed("dport"),
+            }),
+        )),
+        right: Expression::String(Cow::Owned(format!("@{set}"))),
+        op: Operator::EQ,
+    })
+}
 
 /// Pick the packet address family (also accepts CIDR strings).
 fn address_payload_family(addr: &str) -> &'static str {
@@ -211,18 +278,39 @@ pub fn add_protocol_match_concrete(
     }
 }
 
-/// Check that a rule's port and rate-limit options can be expressed exactly.
-///
-/// Ports are only matchable for tcp/udp and an unparsable rate limit cannot be
-/// emitted; in either case silently dropping the option would widen the rule,
-/// so callers must emit no rule (this logs a warning).
-pub fn rule_options_are_safe(
+/// Protocol and destination-port matches for a rule: either a literal port
+/// range or a port group, which matches the group's named set.
+pub fn push_port_matches(
+    exprs: &mut Vec<Statement<'static>>,
     protocol: Option<&'static str>,
     port_start: Option<u16>,
+    port_end: Option<u16>,
+    port_group: Option<&str>,
+) {
+    match port_group {
+        Some(group) => {
+            if let Some(proto) = protocol {
+                exprs.push(create_protocol_match(proto));
+                exprs.push(create_port_set_match(&port_set_name(group)));
+            }
+        }
+        None => add_protocol_match_concrete(exprs, protocol, port_start, port_end),
+    }
+}
+
+/// Check that a rule's port and rate-limit options can be expressed exactly.
+///
+/// Ports (a literal range or a port group) are only matchable for tcp/udp and
+/// an unparsable rate limit cannot be emitted; in either case silently dropping
+/// the option would widen the rule, so callers must emit no rule (this logs a
+/// warning).
+pub fn rule_options_are_safe(
+    protocol: Option<&'static str>,
+    has_port_match: bool,
     rate_limit: Option<&str>,
     rule_name: &str,
 ) -> bool {
-    if port_start.is_some() && !matches!(protocol, Some("tcp" | "udp")) {
+    if has_port_match && !matches!(protocol, Some("tcp" | "udp")) {
         tracing::warn!("Skipping rule '{rule_name}': ports require protocol tcp or udp");
         return false;
     }

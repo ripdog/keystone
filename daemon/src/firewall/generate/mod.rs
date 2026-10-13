@@ -11,6 +11,7 @@
 
 mod chains;
 mod preview;
+pub mod sets;
 pub mod statements;
 
 use chains::{
@@ -65,6 +66,14 @@ pub fn generate_ruleset(config: &FirewallConfig) -> GeneratedRuleset<'static> {
         ..Default::default()
     }));
 
+    // Named sets for address and port groups. They must exist before the
+    // rules that reference them.
+    for table in [FILTER_TABLE, NAT_TABLE] {
+        for object in sets::group_set_objects(config, table) {
+            batch.add(object);
+        }
+    }
+
     // Generate filter chains
     generate_input_chain(&mut batch, config, &zone_interfaces);
     generate_forward_chain(&mut batch, config, &zone_interfaces);
@@ -79,6 +88,25 @@ pub fn generate_ruleset(config: &FirewallConfig) -> GeneratedRuleset<'static> {
 
     GeneratedRuleset { nftables, preview }
 }
+
+/// The nftables comment of a user-configured rule: `ks:<kind>:<id>` followed by
+/// the rule's name. The counters endpoint reads the prefix back to attribute
+/// hits to a rule, so the prefix must never change. nftables caps comments at
+/// 128 bytes; the label is shortened to fit, the prefix is never cut.
+pub(crate) fn rule_comment(kind: &str, id: Option<i64>, label: &str) -> String {
+    let mut comment = format!("ks:{kind}:{}", id.unwrap_or_default());
+    if !label.is_empty() {
+        comment.push(' ');
+        comment.push_str(label);
+    }
+    while comment.len() > MAX_COMMENT_BYTES {
+        comment.pop();
+    }
+    comment
+}
+
+/// Longest comment nftables accepts.
+const MAX_COMMENT_BYTES: usize = 127;
 
 /// Build a map of zone name -> interface list for quick lookups
 pub fn build_zone_interface_map(zones: &[FirewallZone]) -> HashMap<String, Vec<String>> {
@@ -125,8 +153,8 @@ pub fn find_ipv4_masquerade_zones(zones: &[FirewallZone]) -> Vec<&FirewallZone> 
 mod tests {
     use super::*;
     use keystone_core::{
-        FirewallAction, FirewallGlobalSettings, FirewallPolicy, InputRule, PortForward,
-        RuleProtocol, ZoneForwardPolicy,
+        AddressGroup, FirewallAction, FirewallGlobalSettings, FirewallPolicy, ForwardRule,
+        InputRule, PortForward, PortGroup, RuleProtocol, ZoneForwardPolicy,
     };
 
     fn create_test_config() -> FirewallConfig {
@@ -170,6 +198,7 @@ mod tests {
                 external_port_start: 8080,
                 external_port_end: None,
                 source_ip: None,
+                source_group: None,
                 dest_ip: "192.168.1.100".to_string(),
                 dest_port: Some(80),
             }],
@@ -184,12 +213,16 @@ mod tests {
                 port_start: Some(22),
                 port_end: None,
                 source_ip: None,
+                source_group: None,
+                dest_port_group: None,
                 action: FirewallAction::Accept,
                 log_enabled: false,
                 log_prefix: None,
                 rate_limit: None,
             }],
             forward_rules: vec![],
+            address_groups: vec![],
+            port_groups: vec![],
             global_settings: FirewallGlobalSettings::default(),
         }
     }
@@ -362,7 +395,7 @@ mod tests {
         let rules = json["nftables"].as_array().unwrap();
         let dnat = rules
             .iter()
-            .find(|r| r["add"]["rule"]["comment"] == "Web Server (tcp)")
+            .find(|r| r["add"]["rule"]["comment"] == "ks:portfwd:1 Web Server (tcp)")
             .expect("dnat rule");
         let text = dnat.to_string();
         assert!(text.contains("\"fib\""), "{text}");
@@ -376,7 +409,9 @@ mod tests {
         let rules = json["nftables"].as_array().unwrap();
         let accept = rules
             .iter()
-            .find(|r| r["add"]["rule"]["comment"] == "Web Server DNAT accept (tcp)")
+            .find(|r| {
+                r["add"]["rule"]["comment"] == "ks:portfwd-accept:1 Web Server DNAT accept (tcp)"
+            })
             .expect("forward accept rule");
         let text = accept.to_string();
         assert!(text.contains("\"status\""), "{text}");
@@ -440,5 +475,214 @@ mod tests {
             "essential ICMP follows user rules"
         );
         assert!(zone_default > first_ping.max(first_essential));
+    }
+
+    /// Rules whose comment starts with `prefix`, as nftables JSON objects.
+    fn rules_commented(config: &FirewallConfig, prefix: &str) -> Vec<serde_json::Value> {
+        let json = serde_json::to_value(&generate_ruleset(config).nftables).unwrap();
+        json["nftables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|object| {
+                object["add"]["rule"]["comment"]
+                    .as_str()
+                    .is_some_and(|comment| comment.starts_with(prefix))
+            })
+            .map(|object| object["add"]["rule"].clone())
+            .collect()
+    }
+
+    /// Named sets with the given name, as nftables JSON objects.
+    fn sets_named(config: &FirewallConfig, name: &str) -> Vec<serde_json::Value> {
+        let json = serde_json::to_value(&generate_ruleset(config).nftables).unwrap();
+        json["nftables"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|object| object["add"]["set"]["name"] == name)
+            .map(|object| object["add"]["set"].clone())
+            .collect()
+    }
+
+    fn group_config(addresses: &[&str]) -> FirewallConfig {
+        let mut config = create_test_config();
+        config.input_rules.clear();
+        config.port_forwards.clear();
+        config.address_groups = vec![AddressGroup {
+            id: Some(1),
+            name: "lan_hosts".into(),
+            description: None,
+            entries: addresses.iter().map(|a| a.to_string()).collect(),
+        }];
+        config
+    }
+
+    fn group_ssh_rule(id: i64, source_group: &str) -> InputRule {
+        InputRule {
+            id: Some(id),
+            name: "Group SSH".into(),
+            source_group: Some(source_group.into()),
+            protocol: Some(RuleProtocol::Tcp),
+            port_start: Some(22),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn v4_group_rule_matches_only_the_v4_set() {
+        let mut config = group_config(&["10.0.0.0/8", "10.1.2.3"]);
+        config.input_rules.push(group_ssh_rule(4, "lan_hosts"));
+        let rules = rules_commented(&config, "ks:input:4 ");
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        let text = rules[0].to_string();
+        assert!(text.contains("\"@lan_hosts_v4\""), "{text}");
+        assert!(!text.contains("lan_hosts_v6"), "{text}");
+        assert!(text.contains("\"protocol\":\"ip\""), "{text}");
+
+        let set = sets_named(&config, "lan_hosts_v4");
+        assert_eq!(set.len(), 2, "one set per filter and NAT table");
+        assert_eq!(set[0]["type"], "ipv4_addr");
+        assert_eq!(set[0]["flags"], serde_json::json!(["interval"]));
+        // 10.1.2.3 lies inside 10.0.0.0/8 and is dropped from the set.
+        assert_eq!(set[0]["elem"].as_array().unwrap().len(), 1, "{set:?}");
+        assert!(sets_named(&config, "lan_hosts_v6").is_empty());
+    }
+
+    #[test]
+    fn v6_group_rule_matches_only_the_v6_set() {
+        let mut config = group_config(&["fd00::/64"]);
+        config.input_rules.push(group_ssh_rule(4, "lan_hosts"));
+        let rules = rules_commented(&config, "ks:input:4 ");
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        let text = rules[0].to_string();
+        assert!(text.contains("\"@lan_hosts_v6\""), "{text}");
+        assert!(text.contains("\"protocol\":\"ip6\""), "{text}");
+        assert!(!text.contains("lan_hosts_v4"), "{text}");
+        let set = sets_named(&config, "lan_hosts_v6");
+        assert_eq!(set[0]["type"], "ipv6_addr");
+    }
+
+    #[test]
+    fn mixed_group_rule_is_emitted_once_per_family() {
+        let mut config = group_config(&["192.0.2.0/24", "2001:db8::/32"]);
+        config.input_rules.push(group_ssh_rule(4, "lan_hosts"));
+        let rules = rules_commented(&config, "ks:input:4 ");
+        assert_eq!(rules.len(), 2, "{rules:?}");
+        let texts: Vec<String> = rules.iter().map(|r| r.to_string()).collect();
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("\"@lan_hosts_v4\"") && !t.contains("@lan_hosts_v6"))
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("\"@lan_hosts_v6\"") && !t.contains("@lan_hosts_v4"))
+        );
+        // Both families share the comment, so their counters are summed.
+        assert!(rules.iter().all(|r| r["comment"] == "ks:input:4 Group SSH"));
+    }
+
+    #[test]
+    fn port_group_becomes_a_lookup_for_each_tcp_and_udp_rule() {
+        let mut config = group_config(&["10.0.0.0/8"]);
+        config.port_groups = vec![PortGroup {
+            id: Some(1),
+            name: "web".into(),
+            description: None,
+            entries: vec!["80".into(), "443".into(), "8000-8100".into()],
+        }];
+        config.forward_rules.push(ForwardRule {
+            id: Some(9),
+            name: "Web out".into(),
+            source_group: Some("lan_hosts".into()),
+            protocol: Some(RuleProtocol::TcpUdp),
+            dest_port_group: Some("web".into()),
+            ..Default::default()
+        });
+        let rules = rules_commented(&config, "ks:forward:9 ");
+        assert_eq!(rules.len(), 2, "tcp and udp: {rules:?}");
+        for rule in &rules {
+            let text = rule.to_string();
+            assert!(text.contains("\"@web_ports\""), "{text}");
+            assert!(text.contains("\"@lan_hosts_v4\""), "{text}");
+        }
+        let set = sets_named(&config, "web_ports");
+        assert_eq!(set[0]["type"], "inet_service");
+        assert_eq!(set[0]["elem"][0], 80);
+        assert_eq!(set[0]["elem"][2]["range"], serde_json::json!([8000, 8100]));
+    }
+
+    #[test]
+    fn rule_naming_an_unknown_group_is_not_emitted() {
+        let mut config = group_config(&["10.0.0.0/8"]);
+        config.input_rules.push(group_ssh_rule(5, "nobody"));
+        assert!(rules_commented(&config, "ks:input:5 ").is_empty());
+    }
+
+    #[test]
+    fn literal_and_group_families_must_agree() {
+        let mut config = group_config(&["fd00::/64"]);
+        config.forward_rules.push(ForwardRule {
+            id: Some(6),
+            name: "Mismatch".into(),
+            source_ip: Some("10.0.0.1".into()),
+            dest_group: Some("lan_hosts".into()),
+            ..Default::default()
+        });
+        assert!(rules_commented(&config, "ks:forward:6 ").is_empty());
+    }
+
+    #[test]
+    fn port_forward_source_group_must_have_ipv4_entries() {
+        let mut config = group_config(&["fd00::/64"]);
+        config.port_forwards.push(PortForward {
+            id: Some(3),
+            name: "Web".into(),
+            enabled: true,
+            protocol: RuleProtocol::Tcp,
+            external_port_start: 8080,
+            source_group: Some("lan_hosts".into()),
+            dest_ip: "192.168.1.100".into(),
+            ..Default::default()
+        });
+        assert!(rules_commented(&config, "ks:portfwd:3 ").is_empty());
+
+        config.address_groups[0].entries = vec!["10.9.0.0/16".into()];
+        let rules = rules_commented(&config, "ks:portfwd:3 ");
+        assert_eq!(rules.len(), 1);
+        assert!(rules[0].to_string().contains("\"@lan_hosts_v4\""));
+    }
+
+    #[test]
+    fn every_user_rule_carries_a_counter_and_a_ks_comment() {
+        let mut config = create_test_config();
+        config.forward_rules.push(ForwardRule {
+            id: Some(2),
+            name: "Fwd".into(),
+            ..Default::default()
+        });
+        for prefix in [
+            "ks:input:1 ",
+            "ks:forward:2 ",
+            "ks:portfwd:1 ",
+            "ks:portfwd-accept:1 ",
+        ] {
+            let rules = rules_commented(&config, prefix);
+            assert!(!rules.is_empty(), "no rule for {prefix}");
+            for rule in rules {
+                assert!(rule["expr"].to_string().contains("\"counter\""), "{rule}");
+            }
+        }
+    }
+
+    #[test]
+    fn rule_comments_are_capped_at_nftables_limit() {
+        let long = "x".repeat(300);
+        let comment = rule_comment("input", Some(12), &long);
+        assert_eq!(comment.len(), MAX_COMMENT_BYTES);
+        assert!(comment.starts_with("ks:input:12 "));
+        assert_eq!(rule_comment("forward", None, ""), "ks:forward:0");
     }
 }

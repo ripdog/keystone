@@ -7,11 +7,12 @@ use crate::firewall::generate::chains::input::{
     create_conntrack_established_rule, create_conntrack_invalid_rule,
 };
 use crate::firewall::generate::statements::{
-    add_protocol_match_concrete, create_daddr_match, create_dport_match, create_iif_match,
-    create_ipv4_match, create_oif_match, create_protocol_match, create_saddr_match,
-    expand_protocol, parse_rate_limit, rule_options_are_safe,
+    Side, address_match, create_daddr_match, create_dport_match, create_iif_match,
+    create_ipv4_match, create_oif_match, create_protocol_match, expand_protocol, parse_rate_limit,
+    push_port_matches, rule_options_are_safe,
 };
-use crate::firewall::generate::{FILTER_TABLE, resolve_zone_interfaces};
+use crate::firewall::generate::{FILTER_TABLE, resolve_zone_interfaces, rule_comment};
+use crate::firewall::groups::{Family, GroupIndex, family_variants, side_families};
 use keystone_core::{FirewallAction, FirewallConfig, ForwardRule, PortForward, ZoneForwardPolicy};
 use nftables::{
     batch::Batch,
@@ -63,11 +64,12 @@ pub fn generate_forward_chain(
     }
 
     // Priority 4: User forward rules (position-ordered)
+    let groups = GroupIndex::new(&config.address_groups, &config.port_groups);
     let mut sorted_rules: Vec<_> = config.forward_rules.iter().filter(|r| r.enabled).collect();
     sorted_rules.sort_by_key(|r| r.position);
 
     for rule in sorted_rules {
-        for nf_rule in create_forward_rules(rule, zone_interfaces) {
+        for nf_rule in create_forward_rules(rule, zone_interfaces, &groups) {
             batch.add(NfListObject::Rule(nf_rule));
         }
     }
@@ -119,7 +121,11 @@ fn create_port_forward_accept_rules(pf: &PortForward) -> Vec<Rule<'static>> {
                 Statement::Accept(None),
             ]
             .into(),
-            comment: Some(Cow::Owned(format!("{} DNAT accept ({})", pf.name, proto))),
+            comment: Some(Cow::Owned(rule_comment(
+                "portfwd-accept",
+                pf.id,
+                &format!("{} DNAT accept ({})", pf.name, proto),
+            ))),
             ..Default::default()
         })
         .collect()
@@ -127,12 +133,36 @@ fn create_port_forward_accept_rules(pf: &PortForward) -> Vec<Rule<'static>> {
 
 /// Create nftables rules from a ForwardRule.
 ///
-/// Returns multiple rules for TcpUdp protocol (one for TCP, one for UDP),
-/// since nftables doesn't support matching multiple protocols in a single rule.
+/// Returns one rule per (address family, protocol) pair: nftables cannot match
+/// several protocols in one rule, and a group that mixes IPv4 and IPv6 needs a
+/// separate rule for each family.
 fn create_forward_rules(
     rule: &ForwardRule,
     zone_interfaces: &HashMap<String, Vec<String>>,
+    groups: &GroupIndex,
 ) -> Vec<Rule<'static>> {
+    let source = side_families(
+        rule.source_ip.as_deref(),
+        rule.source_group.as_deref(),
+        groups,
+    );
+    let dest = side_families(rule.dest_ip.as_deref(), rule.dest_group.as_deref(), groups);
+    let (source, dest) = match (source, dest) {
+        (Ok(source), Ok(dest)) => (source, dest),
+        (Err(error), _) | (_, Err(error)) => {
+            tracing::warn!("Skipping rule '{}': {error}", rule.name);
+            return Vec::new();
+        }
+    };
+    let families = family_variants(&[source, dest]);
+    if families.is_empty() {
+        tracing::warn!(
+            "Skipping rule '{}': its source and destination addresses share no IP family",
+            rule.name
+        );
+        return Vec::new();
+    }
+
     // Determine which protocols to generate rules for
     let protocols = rule
         .protocol
@@ -140,29 +170,29 @@ fn create_forward_rules(
         .map(expand_protocol)
         .unwrap_or_else(|| vec![None]);
 
-    protocols
-        .into_iter()
-        .filter_map(|proto| {
-            create_forward_rule_for_protocol(
-                rule,
-                zone_interfaces,
-                proto,
-                rule.dest_port_start,
-                rule.dest_port_end,
-            )
+    families
+        .iter()
+        .flat_map(|family| protocols.iter().map(move |proto| (*family, *proto)))
+        .filter_map(|(family, proto)| {
+            create_forward_rule_for_protocol(rule, zone_interfaces, proto, family)
         })
         .collect()
 }
 
-/// Create a single nftables rule for a specific protocol
+/// Create a single nftables rule for a specific protocol and address family
 fn create_forward_rule_for_protocol(
     rule: &ForwardRule,
     zone_interfaces: &HashMap<String, Vec<String>>,
     protocol: Option<&'static str>,
-    port_start: Option<u16>,
-    port_end: Option<u16>,
+    family: Option<Family>,
 ) -> Option<Rule<'static>> {
-    if !rule_options_are_safe(protocol, port_start, rule.rate_limit.as_deref(), &rule.name) {
+    let has_port_match = rule.dest_port_start.is_some() || rule.dest_port_group.is_some();
+    if !rule_options_are_safe(
+        protocol,
+        has_port_match,
+        rule.rate_limit.as_deref(),
+        &rule.name,
+    ) {
         return None;
     }
     let mut exprs: Vec<Statement> = Vec::new();
@@ -181,18 +211,32 @@ fn create_forward_rule_for_protocol(
         exprs.push(create_oif_match(interfaces));
     }
 
-    // Match source IP
-    if let Some(ref src_ip) = rule.source_ip {
-        exprs.push(create_saddr_match(src_ip));
+    // Match source and destination addresses (literal or group, for this family)
+    if let Some(source) = address_match(
+        Side::Source,
+        rule.source_ip.as_deref(),
+        rule.source_group.as_deref(),
+        family,
+    ) {
+        exprs.push(source);
     }
-
-    // Match destination IP
-    if let Some(ref dst_ip) = rule.dest_ip {
-        exprs.push(create_daddr_match(dst_ip));
+    if let Some(dest) = address_match(
+        Side::Destination,
+        rule.dest_ip.as_deref(),
+        rule.dest_group.as_deref(),
+        family,
+    ) {
+        exprs.push(dest);
     }
 
     // Match protocol and ports
-    add_protocol_match_concrete(&mut exprs, protocol, port_start, port_end);
+    push_port_matches(
+        &mut exprs,
+        protocol,
+        rule.dest_port_start,
+        rule.dest_port_end,
+        rule.dest_port_group.as_deref(),
+    );
 
     // Rate limiting
     if let Some(ref rate_limit) = rule.rate_limit
@@ -233,7 +277,7 @@ fn create_forward_rule_for_protocol(
         table: Cow::Borrowed(FILTER_TABLE),
         chain: Cow::Borrowed("forward"),
         expr: exprs.into(),
-        comment: Some(Cow::Owned(rule.name.clone())),
+        comment: Some(Cow::Owned(rule_comment("forward", rule.id, &rule.name))),
         ..Default::default()
     })
 }

@@ -1777,6 +1777,9 @@ pub struct PortForward {
     pub external_port_end: Option<u16>,
     /// Restrict to source IP/CIDR (None = any)
     pub source_ip: Option<String>,
+    /// Restrict to an IPv4 address group (mutually exclusive with `source_ip`)
+    #[serde(default)]
+    pub source_group: Option<String>,
     /// Internal destination IP
     pub dest_ip: String,
     /// Internal destination port (None = same as external)
@@ -1795,6 +1798,7 @@ impl Default for PortForward {
             external_port_start: 0,
             external_port_end: None,
             source_ip: None,
+            source_group: None,
             dest_ip: String::new(),
             dest_port: None,
         }
@@ -1820,6 +1824,12 @@ pub struct InputRule {
     pub port_end: Option<u16>,
     /// Source IP/CIDR (None = any)
     pub source_ip: Option<String>,
+    /// Source address group (mutually exclusive with `source_ip`)
+    #[serde(default)]
+    pub source_group: Option<String>,
+    /// Destination port group (mutually exclusive with `port_start`/`port_end`)
+    #[serde(default)]
+    pub dest_port_group: Option<String>,
     /// Action to take
     pub action: FirewallAction,
     /// Enable logging for matched packets
@@ -1843,6 +1853,8 @@ impl Default for InputRule {
             port_start: None,
             port_end: None,
             source_ip: None,
+            source_group: None,
+            dest_port_group: None,
             action: FirewallAction::Accept,
             log_enabled: false,
             log_prefix: None,
@@ -1874,6 +1886,15 @@ pub struct ForwardRule {
     pub source_ip: Option<String>,
     /// Destination IP/CIDR
     pub dest_ip: Option<String>,
+    /// Source address group (mutually exclusive with `source_ip`)
+    #[serde(default)]
+    pub source_group: Option<String>,
+    /// Destination address group (mutually exclusive with `dest_ip`)
+    #[serde(default)]
+    pub dest_group: Option<String>,
+    /// Destination port group (mutually exclusive with the destination port range)
+    #[serde(default)]
+    pub dest_port_group: Option<String>,
     /// Action to take
     pub action: FirewallAction,
     /// Enable logging
@@ -1899,6 +1920,9 @@ impl Default for ForwardRule {
             dest_port_end: None,
             source_ip: None,
             dest_ip: None,
+            source_group: None,
+            dest_group: None,
+            dest_port_group: None,
             action: FirewallAction::Accept,
             log_enabled: false,
             log_prefix: None,
@@ -1915,7 +1939,34 @@ pub struct FirewallConfig {
     pub port_forwards: Vec<PortForward>,
     pub input_rules: Vec<InputRule>,
     pub forward_rules: Vec<ForwardRule>,
+    #[serde(default)]
+    pub address_groups: Vec<AddressGroup>,
+    #[serde(default)]
+    pub port_groups: Vec<PortGroup>,
     pub global_settings: FirewallGlobalSettings,
+}
+
+/// A named set of IPv4/IPv6 addresses and CIDR networks (may mix families).
+/// Rules reference it by name as a source or destination.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct AddressGroup {
+    pub id: Option<i64>,
+    /// Unique across address and port groups: `[a-z][a-z0-9_]{0,30}`
+    pub name: String,
+    pub description: Option<String>,
+    /// One address or CIDR per entry, e.g. `10.0.0.0/8` or `fd00::1`
+    pub entries: Vec<String>,
+}
+
+/// A named set of ports: single ports (`443`) or inclusive ranges (`8000-8100`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PortGroup {
+    pub id: Option<i64>,
+    /// Unique across address and port groups: `[a-z][a-z0-9_]{0,30}`
+    pub name: String,
+    pub description: Option<String>,
+    /// One port or `start-end` range per entry
+    pub entries: Vec<String>,
 }
 
 /// Global firewall settings (singleton)
@@ -1999,6 +2050,40 @@ pub struct DeleteZoneForwardResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZoneForwardsResponse {
     pub forwards: Vec<ZoneForwardPolicy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveAddressGroupRequest {
+    pub group: AddressGroup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveAddressGroupResponse {
+    pub success: bool,
+    pub message: String,
+    pub group_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressGroupsResponse {
+    pub groups: Vec<AddressGroup>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavePortGroupRequest {
+    pub group: PortGroup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavePortGroupResponse {
+    pub success: bool,
+    pub message: String,
+    pub group_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortGroupsResponse {
+    pub groups: Vec<PortGroup>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2276,13 +2361,17 @@ pub struct SaveFirewallGlobalSettingsResponse {
     pub message: String,
 }
 
-/// Firewall rule counters from nftables
+/// Hit counters for one user-configured rule, summed over every nftables
+/// rule generated from it (a rule over a mixed-family group yields one nftables
+/// rule per family).
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct FirewallRuleCounter {
-    /// Rule comment/name (used to identify the rule)
-    pub name: String,
-    /// Chain the rule belongs to (input, forward, etc.)
-    pub chain: String,
+    /// Which configuration list the rule belongs to: `input`, `forward`,
+    /// `portfwd` (external DNAT), `portfwd-hairpin` (LAN DNAT) or
+    /// `portfwd-accept` (forward-chain accept for a port forward).
+    pub kind: String,
+    /// Database ID of the rule (or port forward) the counter belongs to.
+    pub rule_id: i64,
     /// Number of packets matched
     pub packets: u64,
     /// Number of bytes matched
@@ -3243,6 +3332,7 @@ mod tests {
             external_port_start: 8080,
             external_port_end: None,
             source_ip: None,
+            source_group: None,
             dest_ip: "192.168.1.100".to_string(),
             dest_port: Some(80),
         };

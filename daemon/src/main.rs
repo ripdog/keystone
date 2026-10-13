@@ -907,7 +907,7 @@ async fn save_interface_config(
         let bridges = state.db.get_all_bridges().await?;
         if let Some(bridge) = bridges
             .iter()
-            .find(|b| b.members.iter().any(|m| *m == request.config.name))
+            .find(|b| b.members.contains(&request.config.name))
         {
             return Ok(Json(SaveInterfaceConfigResponse {
                 success: false,

@@ -1428,7 +1428,11 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let errors = validate_topology(&[config.clone()], &[], &[test_bridge("br0", &["eth1"])]);
+        let errors = validate_topology(
+            std::slice::from_ref(&config),
+            &[],
+            &[test_bridge("br0", &["eth1"])],
+        );
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("eth1 has its own interface configuration"));
         assert!(errors[0].contains("br0"));
@@ -1494,7 +1498,7 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        assert!(vlan_parent_network_files(&[config.clone()], &vlans, &[]).is_empty());
+        assert!(vlan_parent_network_files(std::slice::from_ref(&config), &vlans, &[]).is_empty());
         assert!(
             vlan_parent_network_files(&[], &vlans, &[test_bridge("br0", &["eth1"])]).is_empty()
         );

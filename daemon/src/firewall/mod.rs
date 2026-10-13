@@ -26,6 +26,7 @@ pub mod counters;
 mod fixtures;
 pub(crate) mod generate;
 pub mod groups;
+pub(crate) mod live_log;
 pub mod routes;
 pub(crate) mod rules;
 pub mod simple;

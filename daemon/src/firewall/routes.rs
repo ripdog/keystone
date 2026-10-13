@@ -35,12 +35,12 @@ use keystone_core::api::{
 use keystone_core::{
     AddressGroup, AddressGroupsResponse, DeleteResponse, FirewallApplyResponse,
     FirewallConfigResponse, FirewallCountersResponse, FirewallGlobalSettingsResponse,
-    FirewallPreviewResponse, FirewallRollbackResponse, FirewallStatusResponse, FirewallZone,
-    FirewallZonesResponse, ForwardRulesResponse, InputRulesResponse, PortForwardsResponse,
-    PortGroup, PortGroupsResponse, ReorderRulesResponse, SaveAddressGroupResponse,
-    SaveFirewallGlobalSettingsResponse, SaveFirewallZoneResponse, SaveForwardRuleResponse,
-    SaveInputRuleResponse, SavePortForwardResponse, SavePortGroupResponse, SaveZoneForwardResponse,
-    ZoneForwardsResponse,
+    FirewallLogResponse, FirewallPreviewResponse, FirewallRollbackResponse, FirewallStatusResponse,
+    FirewallZone, FirewallZonesResponse, ForwardRulesResponse, InputRulesResponse,
+    PortForwardsResponse, PortGroup, PortGroupsResponse, ReorderRulesResponse,
+    SaveAddressGroupResponse, SaveFirewallGlobalSettingsResponse, SaveFirewallZoneResponse,
+    SaveForwardRuleResponse, SaveInputRuleResponse, SavePortForwardResponse, SavePortGroupResponse,
+    SaveZoneForwardResponse, ZoneForwardsResponse,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -108,6 +108,8 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
         .route("/firewall/config", get(get_firewall_config))
         // Hit counters for user rules
         .route("/firewall/counters", get(get_rule_counters))
+        // Kernel lines logged by logging rules, after a journal cursor
+        .route("/firewall/log", get(get_firewall_log))
         // Trace one packet through the saved (or applied) configuration
         .route(TestFirewallPacket::PATH, post(test_firewall_packet))
         // Preview and Apply
@@ -747,6 +749,34 @@ fn error_response(
     message: impl Into<String>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     (status, Json(json!({ "error": message.into() })))
+}
+
+/// Query of `GET /firewall/log`.
+#[derive(Debug, Deserialize)]
+struct FirewallLogQuery {
+    /// Journal cursor from the previous response. Omit for the most recent lines.
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// GET /firewall/log - Kernel lines logged by firewall rules
+async fn get_firewall_log(
+    Query(query): Query<FirewallLogQuery>,
+) -> Result<Json<FirewallLogResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if let Some(cursor) = &query.cursor {
+        super::live_log::validate_cursor(cursor)
+            .map_err(|message| error_response(StatusCode::BAD_REQUEST, message))?;
+    }
+    let limit = query
+        .limit
+        .unwrap_or(super::live_log::DEFAULT_LIMIT)
+        .clamp(1, super::live_log::MAX_LIMIT);
+    let response = super::live_log::read(query.cursor.as_deref(), limit)
+        .await
+        .map_err(|error| error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}")))?;
+    Ok(Json(response))
 }
 
 /// POST /firewall/test-packet - Trace one packet through the firewall

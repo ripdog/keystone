@@ -2506,6 +2506,49 @@ pub struct TestPacketResponse {
 }
 
 // ============================================================================
+// Live Firewall Log Types
+// ============================================================================
+
+/// One kernel log line written by a logging firewall rule.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FirewallLogEntry {
+    /// Journal cursor of the line. Pass the last entry's cursor to continue.
+    pub cursor: String,
+    /// Kernel time of the line, in microseconds since the epoch.
+    pub realtime_us: u64,
+    /// Kind of the rule that logged the packet: `input` or `forward`.
+    pub rule_kind: Option<String>,
+    /// Database ID of the rule that logged the packet.
+    pub rule_id: Option<i64>,
+    /// Human-readable part of the rule's log prefix.
+    pub prefix: String,
+    /// False when the line did not have the expected layout. Then only
+    /// `message` is meaningful.
+    pub parsed: bool,
+    pub in_interface: Option<String>,
+    pub out_interface: Option<String>,
+    pub source: Option<String>,
+    pub destination: Option<String>,
+    pub protocol: Option<String>,
+    pub source_port: Option<u16>,
+    pub destination_port: Option<u16>,
+    /// The journal's message, as logged.
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FirewallLogResponse {
+    /// Oldest first.
+    pub entries: Vec<FirewallLogEntry>,
+    /// Pass as `cursor` to fetch the lines after these. Equal to the given
+    /// cursor when nothing new was logged.
+    pub next_cursor: Option<String>,
+    /// True when the given cursor could not be used (for example, the journal
+    /// was rotated). The entries are then the most recent lines instead.
+    pub cursor_reset: bool,
+}
+
+// ============================================================================
 // Global Settings Types
 // ============================================================================
 

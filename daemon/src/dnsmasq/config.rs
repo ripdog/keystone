@@ -114,7 +114,10 @@ fn generate_global_settings(lines: &mut Vec<String>, config: &DnsmasqConfig) {
     // DNSSEC
     if config.dnssec_enabled {
         lines.push("dnssec".to_string());
+        // Both root KSKs: KSK-2017 (20326) and KSK-2024 (38696). The root
+        // zone rolled to KSK-2024, so omitting it breaks validation.
         lines.push("trust-anchor=.,20326,8,2,E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D".to_string());
+        lines.push("trust-anchor=.,38696,8,2,683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16".to_string());
     }
 
     lines.push(String::new());
@@ -447,6 +450,26 @@ mod tests {
         assert!(config.contains("local=/lan/"));
         assert!(config.contains("domain=lan"));
         assert!(config.contains("expand-hosts"));
+    }
+
+    #[test]
+    fn test_dnssec_emits_both_root_trust_anchors() {
+        let state = DnsmasqStateResponse {
+            config: DnsmasqConfig {
+                dnssec_enabled: true,
+                ..Default::default()
+            },
+            dhcp_ranges: vec![],
+            static_leases: vec![],
+            dhcp_options: vec![],
+            host_records: vec![],
+            cname_records: vec![],
+            address_overrides: vec![],
+        };
+        let config = generate_dnsmasq_config(&state);
+        assert!(config.contains("\ndnssec\n"));
+        assert!(config.contains("trust-anchor=.,20326,8,2,E06D44B80B8F1D39A95C0B0D7C65D08458E880409BBC683457104237C7F8EC8D"));
+        assert!(config.contains("trust-anchor=.,38696,8,2,683D2D0ACB8C9B712A1948B27F741219298D0A450D612C483AF444A4C0FB2B16"));
     }
 
     #[test]

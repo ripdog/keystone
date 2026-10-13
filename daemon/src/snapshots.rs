@@ -492,6 +492,58 @@ pub async fn latest_applied_for(
     .transpose()
 }
 
+/// The snapshot the running system matches for `component`, which is the
+/// baseline for pending changes. That is the newest snapshot covering the
+/// component that is either active, or pending on a session that is still
+/// live. A pending apply is the configuration the system runs right now, so it
+/// counts before it is confirmed. Once it is rolled back it stops counting, and
+/// the previous active snapshot applies again.
+pub async fn baseline_for(
+    db: &Database,
+    component: Component,
+    live_sessions: &[&str],
+) -> Result<Option<SnapshotInfo>> {
+    let candidates = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {SNAPSHOT_COLUMNS} FROM config_snapshots
+         WHERE status IN ('active', 'pending_confirmation')
+           AND instr(',' || components || ',', ',' || ? || ',') > 0
+         ORDER BY id DESC"
+    )))
+    .bind(component.as_str())
+    .fetch_all(db.pool())
+    .await?;
+    for row in &candidates {
+        let info = info_from_row(row)?;
+        let counts = match info.status {
+            SnapshotStatus::Active => true,
+            SnapshotStatus::PendingConfirmation => info
+                .session_id
+                .as_deref()
+                .is_some_and(|session| live_sessions.contains(&session)),
+            SnapshotStatus::RolledBack => false,
+        };
+        if counts {
+            return Ok(Some(info));
+        }
+    }
+    Ok(None)
+}
+
+/// The newest pending snapshot whose session is one of `live_sessions`. It
+/// describes the apply that awaits confirmation.
+pub async fn pending_for_sessions(
+    db: &Database,
+    live_sessions: &[&str],
+) -> Result<Option<SnapshotInfo>> {
+    Ok(list_snapshots(db).await?.into_iter().find(|snapshot| {
+        snapshot.status == SnapshotStatus::PendingConfirmation
+            && snapshot
+                .session_id
+                .as_deref()
+                .is_some_and(|session| live_sessions.contains(&session))
+    }))
+}
+
 /// Absolute path of a snapshot's file.
 pub async fn snapshot_path(db: &Database, id: i64) -> Result<PathBuf> {
     let snapshot = get_snapshot(db, id)

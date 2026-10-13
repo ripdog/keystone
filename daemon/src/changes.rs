@@ -21,15 +21,16 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use keystone_core::api::{CreateSnapshot, DiscardChanges, Endpoint, Req, Res, RestoreSnapshot};
 use keystone_core::changes::{
-    Component, ComponentBaselines, ComponentDiff, DiscardChangesResponse, FileChangeStatus,
-    FileDiff, PendingChangesResponse, RestoreSnapshotResponse, SnapshotListResponse,
-    SnapshotResponse, SnapshotSummary,
+    AwaitingConfirmation, Component, ComponentBaselines, ComponentDiff, DiscardChangesResponse,
+    FileChangeStatus, FileDiff, PendingChangesResponse, RestoreSnapshotResponse,
+    SnapshotListResponse, SnapshotResponse, SnapshotSummary,
 };
 use similar::TextDiff;
 use tracing::info;
 
 use crate::db::Database;
 use crate::firewall::FirewallApplyManager;
+use crate::networkd::PendingInfo;
 use crate::snapshots::{self, NewSnapshot, SnapshotInfo, SnapshotKind, SnapshotStatus};
 use crate::{Actor, AppError, networkd_preview_files};
 
@@ -234,16 +235,58 @@ fn file_diff(
 // Pending changes and snapshot diffs
 // ============================================================================
 
-/// Compare the live configuration with the newest applied snapshot of each
-/// component. A component with no applied snapshot is compared with nothing,
-/// so every file it generates counts as added.
-pub(crate) async fn pending_changes(db: &Database) -> Result<PendingChangesResponse> {
+/// Session ids of the live applies that await confirmation.
+fn session_ids(live: &[PendingInfo]) -> Vec<&str> {
+    live.iter().map(|info| info.session_id.as_str()).collect()
+}
+
+/// The apply awaiting confirmation, if any. It is the newest pending snapshot
+/// whose session is live. The deadline comes from the live session, so it is
+/// reported even when no snapshot could be recorded for the apply.
+async fn awaiting_confirmation(
+    db: &Database,
+    live: &[PendingInfo],
+) -> Result<Option<AwaitingConfirmation>> {
+    let Some(first) = live.first() else {
+        return Ok(None);
+    };
+    let snapshot = snapshots::pending_for_sessions(db, &session_ids(live)).await?;
+    Ok(Some(match snapshot {
+        Some(snapshot) => {
+            let session = snapshot.session_id.as_deref().unwrap_or_default();
+            let info = live
+                .iter()
+                .find(|info| info.session_id == session)
+                .unwrap_or(first);
+            AwaitingConfirmation {
+                session_id: info.session_id.clone(),
+                deadline: info.deadline,
+                components: snapshot.components,
+            }
+        }
+        None => AwaitingConfirmation {
+            session_id: first.session_id.clone(),
+            deadline: first.deadline,
+            components: Vec::new(),
+        },
+    }))
+}
+
+/// Compare the live configuration with the baseline of each component: the
+/// snapshot the running system matches (see [`snapshots::baseline_for`]). A
+/// component with no baseline is compared with nothing, so every file it
+/// generates counts as added. `live` lists the applies awaiting confirmation.
+pub(crate) async fn pending_changes(
+    db: &Database,
+    live: &[PendingInfo],
+) -> Result<PendingChangesResponse> {
     let mut opened: HashMap<i64, Result<snapshots::OpenedSnapshot, String>> = HashMap::new();
     let mut baselines = ComponentBaselines::default();
     let mut components = Vec::with_capacity(Component::ALL.len());
+    let live_ids = session_ids(live);
 
     for component in Component::ALL {
-        let baseline = snapshots::latest_applied_for(db, component)
+        let baseline = snapshots::baseline_for(db, component, &live_ids)
             .await?
             .map(|snapshot| snapshot.id);
         baselines.set(component, baseline);
@@ -259,6 +302,7 @@ pub(crate) async fn pending_changes(db: &Database) -> Result<PendingChangesRespo
     Ok(PendingChangesResponse {
         components,
         baseline_ids: baselines,
+        awaiting_confirmation: awaiting_confirmation(db, live).await?,
     })
 }
 
@@ -304,6 +348,7 @@ pub(crate) async fn snapshot_diff(db: &Database, id: i64) -> Result<PendingChang
     Ok(PendingChangesResponse {
         components,
         baseline_ids: baselines,
+        awaiting_confirmation: None,
     })
 }
 
@@ -327,12 +372,13 @@ fn selected_components(requested: Option<Vec<Component>>) -> Result<Vec<Componen
 /// is read once, and the whole change is one transaction.
 pub(crate) async fn discard_changes(
     db: &Database,
+    live: &[PendingInfo],
     requested: Option<Vec<Component>>,
     actor: Option<&str>,
 ) -> Result<DiscardChangesResponse> {
     let components = match requested {
         Some(list) => selected_components(Some(list))?,
-        None => pending_changes(db)
+        None => pending_changes(db, live)
             .await?
             .components
             .iter()
@@ -349,9 +395,10 @@ pub(crate) async fn discard_changes(
         });
     }
 
+    let live_ids = session_ids(live);
     let mut by_snapshot: BTreeMap<i64, Vec<Component>> = BTreeMap::new();
     for component in &components {
-        let baseline = snapshots::latest_applied_for(db, *component)
+        let baseline = snapshots::baseline_for(db, *component, &live_ids)
             .await?
             .with_context(|| {
                 format!(
@@ -454,7 +501,8 @@ async fn get_pending_changes(
     State(state): State<ChangesState>,
 ) -> Result<Json<PendingChangesResponse>, AppError> {
     info!("Computing pending configuration changes");
-    Ok(Json(pending_changes(&state.db).await?))
+    let live = state.firewall.awaiting_confirmation().await;
+    Ok(Json(pending_changes(&state.db, &live).await?))
 }
 
 async fn discard_changes_route(
@@ -464,7 +512,9 @@ async fn discard_changes_route(
 ) -> Result<Json<Res<DiscardChanges>>, AppError> {
     info!("Discarding pending configuration changes");
     ensure_changes_allowed(&state).await?;
-    let response = discard_changes(&state.db, request.components, actor_name(&actor)).await?;
+    let live = state.firewall.awaiting_confirmation().await;
+    let response =
+        discard_changes(&state.db, &live, request.components, actor_name(&actor)).await?;
     Ok(Json(response))
 }
 
@@ -717,7 +767,7 @@ mod tests {
         let scratch = Scratch::new();
         let db = applied_baseline(&scratch).await;
 
-        let clean = pending_changes(&db).await.unwrap();
+        let clean = pending_changes(&db, &[]).await.unwrap();
         for component in Component::ALL {
             assert!(
                 !changed(&clean, component),
@@ -727,7 +777,7 @@ mod tests {
         assert!(clean.baseline_ids.get(Component::Dnsmasq).is_some());
 
         set_dnsmasq_cache_size(&db, 4321).await;
-        let pending = pending_changes(&db).await.unwrap();
+        let pending = pending_changes(&db, &[]).await.unwrap();
         assert!(changed(&pending, Component::Dnsmasq));
         assert!(!changed(&pending, Component::Firewall));
         assert!(!changed(&pending, Component::Networkd));
@@ -740,13 +790,13 @@ mod tests {
         assert_eq!(dnsmasq.files[0].status, FileChangeStatus::Modified);
         assert!(dnsmasq.files[0].unified_diff.contains("+cache-size=4321"));
 
-        let outcome = discard_changes(&db, Some(vec![Component::Dnsmasq]), Some("admin"))
+        let outcome = discard_changes(&db, &[], Some(vec![Component::Dnsmasq]), Some("admin"))
             .await
             .unwrap();
         assert_eq!(outcome.components, vec![Component::Dnsmasq]);
         assert!(outcome.pre_restore_snapshot_id.is_some());
 
-        let after = pending_changes(&db).await.unwrap();
+        let after = pending_changes(&db, &[]).await.unwrap();
         assert!(!changed(&after, Component::Dnsmasq));
     }
 
@@ -768,7 +818,7 @@ mod tests {
             .await
             .unwrap();
 
-        let pending = pending_changes(&db).await.unwrap();
+        let pending = pending_changes(&db, &[]).await.unwrap();
         assert!(changed(&pending, Component::Upnp));
         // The forward accept for DNATed mappings is part of the firewall ruleset.
         assert!(changed(&pending, Component::Firewall));
@@ -799,6 +849,7 @@ mod tests {
 
         let outcome = discard_changes(
             &db,
+            &[],
             Some(vec![Component::Upnp, Component::Firewall]),
             Some("admin"),
         )
@@ -809,7 +860,7 @@ mod tests {
             vec![Component::Firewall, Component::Upnp]
         );
 
-        let after = pending_changes(&db).await.unwrap();
+        let after = pending_changes(&db, &[]).await.unwrap();
         assert!(!changed(&after, Component::Upnp));
         assert!(!changed(&after, Component::Firewall));
     }
@@ -826,7 +877,7 @@ mod tests {
         .await
         .unwrap();
 
-        let pending = pending_changes(&db).await.unwrap();
+        let pending = pending_changes(&db, &[]).await.unwrap();
         assert!(changed(&pending, Component::Sqm));
         assert!(!changed(&pending, Component::Dnsmasq));
         assert!(!changed(&pending, Component::Firewall));
@@ -849,12 +900,12 @@ mod tests {
                 .contains("+tc qdisc replace dev ifb4eth0 root cake bandwidth 90000kbit")
         );
 
-        let outcome = discard_changes(&db, Some(vec![Component::Sqm]), None)
+        let outcome = discard_changes(&db, &[], Some(vec![Component::Sqm]), None)
             .await
             .unwrap();
         assert_eq!(outcome.components, vec![Component::Sqm]);
         assert!(!changed(
-            &pending_changes(&db).await.unwrap(),
+            &pending_changes(&db, &[]).await.unwrap(),
             Component::Sqm
         ));
     }
@@ -865,14 +916,14 @@ mod tests {
         let db = applied_baseline(&scratch).await;
         set_dnsmasq_cache_size(&db, 7).await;
 
-        let outcome = discard_changes(&db, None, None).await.unwrap();
+        let outcome = discard_changes(&db, &[], None, None).await.unwrap();
         assert_eq!(outcome.components, vec![Component::Dnsmasq]);
         assert!(!changed(
-            &pending_changes(&db).await.unwrap(),
+            &pending_changes(&db, &[]).await.unwrap(),
             Component::Dnsmasq
         ));
 
-        let nothing = discard_changes(&db, None, None).await.unwrap();
+        let nothing = discard_changes(&db, &[], None, None).await.unwrap();
         assert!(nothing.pre_restore_snapshot_id.is_none());
         assert!(nothing.components.is_empty());
     }
@@ -882,7 +933,7 @@ mod tests {
         let scratch = Scratch::new();
         let db = open(&scratch).await;
         set_dnsmasq_cache_size(&db, 7).await;
-        let error = discard_changes(&db, Some(vec![Component::Dnsmasq]), None)
+        let error = discard_changes(&db, &[], Some(vec![Component::Dnsmasq]), None)
             .await
             .unwrap_err();
         assert!(
@@ -913,6 +964,144 @@ mod tests {
             .unwrap();
         // Live is the old side here, so the snapshot's value is the addition.
         assert!(dnsmasq.files[0].unified_diff.contains("+cache-size=1000"));
+    }
+
+    /// Apply a dnsmasq edit the way apply-all does: the live configuration is
+    /// recorded as a snapshot pending on `session`. Returns that snapshot's id.
+    async fn dnsmasq_change_awaiting(db: &Database, session: &str) -> i64 {
+        set_dnsmasq_cache_size(db, 5).await;
+        snapshots::record_applied(
+            db,
+            Some("admin"),
+            Some(session),
+            &[Component::Dnsmasq],
+            "test apply",
+        )
+        .await;
+        snapshots::pending_for_sessions(db, &[session])
+            .await
+            .unwrap()
+            .expect("the pending apply is recorded")
+            .id
+    }
+
+    fn live(session: &str, deadline: u64) -> PendingInfo {
+        PendingInfo {
+            session_id: session.to_string(),
+            deadline,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_live_apply_awaiting_confirmation_is_the_baseline_and_not_a_pending_change() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let pending_id = dnsmasq_change_awaiting(&db, "s1").await;
+
+        let waiting = pending_changes(&db, &[live("s1", 1_000)]).await.unwrap();
+        assert!(!changed(&waiting, Component::Dnsmasq), "{waiting:?}");
+        assert_eq!(
+            waiting.baseline_ids.get(Component::Dnsmasq),
+            Some(pending_id)
+        );
+        assert_eq!(
+            waiting.awaiting_confirmation,
+            Some(AwaitingConfirmation {
+                session_id: "s1".to_string(),
+                deadline: 1_000,
+                components: vec![Component::Dnsmasq],
+            })
+        );
+
+        // An edit made after the apply is still pending, and confirmation waits.
+        set_dnsmasq_cache_size(&db, 6).await;
+        let edited = pending_changes(&db, &[live("s1", 1_000)]).await.unwrap();
+        assert!(changed(&edited, Component::Dnsmasq));
+        assert!(edited.awaiting_confirmation.is_some());
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_apply_stays_the_baseline_and_nothing_awaits() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let pending_id = dnsmasq_change_awaiting(&db, "s1").await;
+
+        snapshots::settle_session(&db, "s1", SnapshotStatus::Active).await;
+        let confirmed = pending_changes(&db, &[]).await.unwrap();
+        assert!(!changed(&confirmed, Component::Dnsmasq));
+        assert_eq!(
+            confirmed.baseline_ids.get(Component::Dnsmasq),
+            Some(pending_id)
+        );
+        assert_eq!(confirmed.awaiting_confirmation, None);
+    }
+
+    #[tokio::test]
+    async fn a_rolled_back_apply_stops_being_the_baseline_and_its_changes_are_pending_again() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let earlier = snapshots::latest_applied_for(&db, Component::Dnsmasq)
+            .await
+            .unwrap()
+            .unwrap()
+            .id;
+        dnsmasq_change_awaiting(&db, "s1").await;
+
+        // The rollback timer restores the previous configuration and settles the session.
+        snapshots::settle_session(&db, "s1", SnapshotStatus::RolledBack).await;
+        set_dnsmasq_cache_size(&db, 1000).await;
+        let rolled_back = pending_changes(&db, &[]).await.unwrap();
+        assert_eq!(
+            rolled_back.baseline_ids.get(Component::Dnsmasq),
+            Some(earlier)
+        );
+        assert_eq!(rolled_back.awaiting_confirmation, None);
+        assert!(!changed(&rolled_back, Component::Dnsmasq));
+
+        // The configuration that was rolled back is no longer the baseline, so
+        // the same edit shows as pending against the earlier applied state.
+        set_dnsmasq_cache_size(&db, 5).await;
+        let again = pending_changes(&db, &[]).await.unwrap();
+        assert!(changed(&again, Component::Dnsmasq));
+        assert_eq!(again.baseline_ids.get(Component::Dnsmasq), Some(earlier));
+    }
+
+    #[tokio::test]
+    async fn a_live_session_without_a_snapshot_still_reports_its_deadline() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let response = pending_changes(&db, &[live("orphan", 42)]).await.unwrap();
+        assert_eq!(
+            response.awaiting_confirmation,
+            Some(AwaitingConfirmation {
+                session_id: "orphan".to_string(),
+                deadline: 42,
+                components: Vec::new(),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_all_refuses_while_a_confirmation_is_pending() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+        let firewall = manager(&db);
+        firewall.seed_pending_for_test("s1", u64::MAX / 2).await;
+        let result = crate::apply::apply_all(&db, &firewall, None, Some("admin"))
+            .await
+            .unwrap();
+        assert!(!result.success);
+        assert!(
+            result
+                .message
+                .contains("Confirm or roll back the previous change first"),
+            "{}",
+            result.message
+        );
+        // Nothing was applied, so no component reports an outcome.
+        assert!(result.components.networkd.message.is_empty());
+        assert!(result.components.dnsmasq.message.is_empty());
+        assert_eq!(snapshots::list_snapshots(&db).await.unwrap().len(), 1);
     }
 
     fn app(db: &Database, firewall: Arc<FirewallApplyManager>) -> Router {
@@ -1072,7 +1261,7 @@ mod tests {
         assert_eq!(restored.components, vec![Component::Dnsmasq]);
         assert!(restored.message.contains("pending until it is applied"));
         assert!(!changed(
-            &pending_changes(&db).await.unwrap(),
+            &pending_changes(&db, &[]).await.unwrap(),
             Component::Dnsmasq
         ));
     }

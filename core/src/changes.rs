@@ -294,6 +294,24 @@ impl ComponentBaselines {
 pub struct PendingChangesResponse {
     pub components: Vec<ComponentDiff>,
     pub baseline_ids: ComponentBaselines,
+    /// An apply that is live but not yet confirmed. The system already runs
+    /// its configuration, so it is not a pending change; it must be confirmed
+    /// or it rolls back. `None` when nothing awaits confirmation.
+    #[serde(default)]
+    pub awaiting_confirmation: Option<AwaitingConfirmation>,
+}
+
+/// An applied configuration that awaits confirmation before its rollback timer
+/// fires.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwaitingConfirmation {
+    /// Session to pass to the confirm endpoint.
+    pub session_id: String,
+    /// Unix seconds at which the change rolls back unless confirmed.
+    pub deadline: u64,
+    /// Components the pending apply covers. Empty when the apply has no
+    /// snapshot to name them.
+    pub components: Vec<Component>,
 }
 
 /// Result of discarding pending changes.

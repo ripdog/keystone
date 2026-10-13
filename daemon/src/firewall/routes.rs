@@ -805,7 +805,17 @@ async fn test_firewall_packet(
             (config, "saved", None)
         }
         Some("applied") => {
-            let applied = snapshots::latest_applied_for(&state.db, Component::Firewall)
+            // While an apply awaits confirmation, the kernel runs its ruleset,
+            // so that snapshot is the applied configuration.
+            let live: Vec<String> = state
+                .apply_manager
+                .awaiting_confirmation()
+                .await
+                .into_iter()
+                .map(|info| info.session_id)
+                .collect();
+            let live: Vec<&str> = live.iter().map(String::as_str).collect();
+            let applied = snapshots::baseline_for(&state.db, Component::Firewall, &live)
                 .await
                 .map_err(internal)?
                 .ok_or_else(|| {

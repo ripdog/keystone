@@ -10,7 +10,7 @@
 use crate::db::Database;
 use crate::firewall::generate::generate_ruleset;
 use crate::firewall::validate::validate_firewall_config;
-use crate::networkd::{ConfirmOutcome, NetworkdApplyManager};
+use crate::networkd::{ConfirmOutcome, NetworkdApplyManager, PendingInfo};
 use crate::snapshots::{self, SnapshotStatus};
 use anyhow::{Context, Result};
 use keystone_core::{
@@ -368,6 +368,35 @@ impl FirewallApplyManager {
                 })
             }
         }
+    }
+
+    /// Every apply session that is live and awaits confirmation: the firewall's
+    /// and networkd's. Each one rolls back at its deadline unless confirmed.
+    pub async fn awaiting_confirmation(&self) -> Vec<PendingInfo> {
+        let mut sessions = Vec::new();
+        if let Some(pending) = self.pending.read().await.as_ref() {
+            sessions.push(PendingInfo {
+                session_id: pending.session_id.clone(),
+                deadline: pending.rollback_at,
+            });
+        }
+        if let Some(info) = self.networkd.pending_info().await
+            && !sessions.iter().any(|s| s.session_id == info.session_id)
+        {
+            sessions.push(info);
+        }
+        sessions
+    }
+
+    /// Test helper: make the firewall look like it awaits confirmation.
+    #[cfg(test)]
+    pub(crate) async fn seed_pending_for_test(&self, session_id: &str, rollback_at: u64) {
+        *self.pending.write().await = Some(PendingApply {
+            session_id: session_id.to_string(),
+            rollback_at,
+            previous_config: None,
+            applied_config: FirewallConfig::default(),
+        });
     }
 
     /// Get current status of pending apply

@@ -85,6 +85,22 @@ pub async fn apply_all(
         });
     }
 
+    // Refuse before touching anything. A confirmation already pending means the
+    // system runs an unconfirmed configuration; applying the rest now would
+    // leave some components on the new state and the firewall on the old one.
+    let live = firewall_manager.awaiting_confirmation().await;
+    if let Some(session) = live.first() {
+        return Ok(ApplyAllResult {
+            success: false,
+            message: "A configuration change is awaiting confirmation. Confirm or roll back the previous change first.".to_string(),
+            components: ApplyComponentResults::default(),
+            firewall_pending_confirmation: true,
+            firewall_confirm_deadline: Some(session.deadline),
+            firewall_session_id: Some(session.session_id.clone()),
+            networkd_pending_confirmation: firewall_manager.networkd().pending_info().await.is_some(),
+        });
+    }
+
     let mut components = ApplyComponentResults::default();
     let mut all_success = true;
 

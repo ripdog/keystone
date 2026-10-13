@@ -37,7 +37,7 @@ pub struct NetworkdApplySummary {
 }
 
 mod pending;
-pub use pending::{ConfirmOutcome, NetworkdApplyManager};
+pub use pending::{ConfirmOutcome, NetworkdApplyManager, PendingInfo};
 
 /// Captured Keystone networkd files and forwarding sysctls, used to restore
 /// the previous state when a change is rolled back.

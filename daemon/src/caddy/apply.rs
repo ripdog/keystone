@@ -274,14 +274,42 @@ pub fn ensure_caddy_dir() -> Result<()> {
     Ok(())
 }
 
+/// Comment out the stock Arch `http:// { root * /usr/share/caddy; file_server }`
+/// welcome site. It is a catch-all for port 80, so it shadows Keystone's
+/// host-specific sites and visitors get Caddy's default page instead of the UI.
+/// Only the unmodified packaged block is touched; returns `None` if absent.
+fn disable_stock_welcome_site(content: &str) -> Option<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let start = lines.iter().position(|l| l.trim_end() == "http:// {")?;
+    let end = start + lines[start..].iter().position(|l| l.trim_end() == "}")?;
+    let block = &lines[start..=end];
+    if !block.iter().any(|l| l.trim() == "root * /usr/share/caddy") {
+        return None;
+    }
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 1);
+    out.extend(lines[..start].iter().map(|l| l.to_string()));
+    out.push(
+        "# Disabled by Keystone: this catch-all site shadows the Keystone web UI.".to_string(),
+    );
+    out.extend(block.iter().map(|l| format!("# {l}")));
+    out.extend(lines[end + 1..].iter().map(|l| l.to_string()));
+    Some(out.join("\n") + "\n")
+}
+
 /// Ensure the main Caddyfile imports our config
 pub fn ensure_caddy_import() -> Result<()> {
     let main_config_path = Path::new(CADDY_MAIN_CONFIG);
     let import_line = format!("import {}/*", CADDY_CONF_DIR);
 
     if main_config_path.exists() {
-        let content =
+        let mut content =
             fs::read_to_string(main_config_path).context("Failed to read main Caddyfile")?;
+
+        if let Some(updated) = disable_stock_welcome_site(&content) {
+            content = updated;
+            fs::write(main_config_path, &content).context("Failed to update main Caddyfile")?;
+            info!("Disabled stock Caddy welcome site in main Caddyfile");
+        }
 
         if !content.contains(&import_line) {
             // Append import to the main Caddyfile
@@ -669,6 +697,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn stock_welcome_site_is_commented_out() {
+        let stock = "{\n\tadmin \"unix//run/caddy/admin.socket\"\n}\n\nhttp:// {\n\troot * /usr/share/caddy\n\tfile_server\n}\n\nimport /etc/caddy/Caddyfile.d/*\n";
+        let updated = disable_stock_welcome_site(stock).unwrap();
+        assert!(updated.contains("# http:// {"));
+        assert!(updated.contains("# \tfile_server"));
+        assert!(updated.contains("\n}\n\n# Disabled"));
+        assert!(updated.contains("\nimport /etc/caddy/Caddyfile.d/*\n"));
+        // Idempotent, and custom http:// sites are left alone.
+        assert!(disable_stock_welcome_site(&updated).is_none());
+        assert!(disable_stock_welcome_site("http:// {\n\trespond \"hi\"\n}\n").is_none());
     }
 
     #[test]

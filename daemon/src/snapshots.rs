@@ -2495,4 +2495,104 @@ pub(crate) mod tests {
         assert!(!zone_exists(&db, "guest").await);
         assert!(zone_exists(&db, "office").await);
     }
+
+    /// Write a snapshot file as a daemon from before the zone default forward
+    /// policy was dropped would have: the current configuration with the
+    /// retired `default_forward_policy` column put back, holding values, and
+    /// migration history that stops before the drop.
+    async fn write_pre_zone_forward_drop_snapshot(db: &Database, path: &Path) {
+        vacuum_into(db.pool(), path).await.unwrap();
+        let pool = open_sqlite(path, false).await.unwrap();
+        sqlx::query(
+            "ALTER TABLE firewall_zones
+             ADD COLUMN default_forward_policy TEXT NOT NULL DEFAULT 'drop'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "UPDATE firewall_zones SET default_forward_policy = 'accept' WHERE name = 'lan'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        // Only the drop's history row is removed; sqlx applies the missing
+        // drop when the copy is migrated.
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20261015000400")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        strip_to_configuration(path).await.unwrap();
+    }
+
+    async fn zone_forward_policy_column_exists(pool: &SqlitePool) -> bool {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('firewall_zones')
+             WHERE name = 'default_forward_policy'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        count > 0
+    }
+
+    #[tokio::test]
+    async fn snapshot_from_before_the_zone_forward_policy_drop_restores() {
+        use crate::snapshot_validation::tests::populate_valid_configuration;
+
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        populate_valid_configuration(&db).await;
+        ensure_private_dir(&scratch.snapshot_dir()).unwrap();
+
+        let file_name = format!("{}-{}.db", unix_millis(), Uuid::new_v4().simple());
+        let path = snapshot_file_path(&scratch.snapshot_dir(), &file_name).unwrap();
+        write_pre_zone_forward_drop_snapshot(&db, &path).await;
+        let id = sqlx::query(
+            "INSERT INTO config_snapshots
+                (created_at, kind, status, actor, note, file_name, schema_version, session_id,
+                 components)
+             VALUES (?, ?, ?, NULL, 'pre-forward-drop', ?, 20261015000200, NULL, '')",
+        )
+        .bind(unix_secs())
+        .bind(SnapshotKind::Manual.as_str())
+        .bind(SnapshotStatus::Active.as_str())
+        .bind(file_name.as_str())
+        .execute(db.pool())
+        .await
+        .unwrap()
+        .last_insert_rowid();
+
+        insert_zone(&db, "guest").await;
+        restore_snapshot(&db, id, None, None)
+            .await
+            .expect("a snapshot holding the retired column must restore");
+        assert!(!zone_exists(&db, "guest").await);
+        assert!(zone_exists(&db, "office").await);
+        assert!(!zone_forward_policy_column_exists(db.pool()).await);
+    }
+
+    #[tokio::test]
+    async fn snapshot_from_before_the_zone_forward_policy_drop_imports_and_restores() {
+        use crate::snapshot_validation::tests::populate_valid_configuration;
+
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        populate_valid_configuration(&db).await;
+        ensure_private_dir(&scratch.snapshot_dir()).unwrap();
+        let path = scratch.snapshot_dir().join("pre-forward-drop-upload.db");
+        write_pre_zone_forward_drop_snapshot(&db, &path).await;
+        let bytes = std::fs::read(&path).unwrap();
+
+        let imported = import_snapshot(&db, &bytes, None)
+            .await
+            .expect("an upload holding the retired column must be accepted");
+        insert_zone(&db, "guest").await;
+        restore_snapshot(&db, imported.id, None, None)
+            .await
+            .expect("the imported copy must restore");
+        assert!(!zone_exists(&db, "guest").await);
+        assert!(zone_exists(&db, "office").await);
+    }
 }

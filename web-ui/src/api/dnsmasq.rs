@@ -3,7 +3,7 @@
 use keystone_core::{
     DhcpLease, DhcpLeasesResponse, DnsmasqAddressOverride, DnsmasqApplyResponse,
     DnsmasqCnameRecord, DnsmasqConfig, DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord,
-    DnsmasqPreviewResponse, DnsmasqStateResponse, DnsmasqStaticLease,
+    DnsmasqPreviewResponse, DnsmasqStateResponse, DnsmasqStaticLease, SaveStaticLeaseRequest,
 };
 
 use super::client::{delete_no_response, get, post, post_empty, put_no_response};
@@ -67,7 +67,8 @@ struct SaveLeaseResponse {
 
 /// Save a static lease
 pub async fn save_static_lease(token: &str, lease: DnsmasqStaticLease) -> Result<i64, String> {
-    let response: SaveLeaseResponse = post("/api/dnsmasq/leases", token, &lease).await?;
+    let request = SaveStaticLeaseRequest { lease };
+    let response: SaveLeaseResponse = post("/api/dnsmasq/leases", token, &request).await?;
     if response.success {
         Ok(response.lease_id.unwrap_or(0))
     } else {

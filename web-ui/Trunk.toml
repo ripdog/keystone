@@ -9,6 +9,11 @@ filehash = false
 [watch]
 ignore = ["dist"]
 
+[tools]
+# Standalone Tailwind CSS v3 CLI, downloaded by trunk at build time.
+# Stay on v3: v4 changes default ring width, border colour and shadow names.
+tailwindcss = "3.4.17"
+
 [serve]
 addresses = ["127.0.0.1"]
 port = 8080

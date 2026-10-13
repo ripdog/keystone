@@ -101,9 +101,12 @@ pub fn apply_all(response: &ApplyAllResponse) {
     }
     if response.firewall_pending_confirmation {
         println!();
-        println!(
-            "Firewall changes are pending confirmation and will be rolled back if not confirmed."
-        );
+        let what = if response.networkd_pending_confirmation {
+            "Network and firewall changes are"
+        } else {
+            "Firewall changes are"
+        };
+        println!("{what} pending confirmation and will be rolled back if not confirmed.");
         if let Some(deadline) = response.firewall_confirm_deadline {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -456,6 +459,9 @@ pub fn firewall_rollback(response: &FirewallRollbackResponse) {
 pub fn firewall_status(response: &FirewallStatusResponse) {
     println!("=== Firewall Status ===\n");
     println!("Pending confirmation: {}", response.pending_confirmation);
+    if response.networkd_pending {
+        println!("Includes a pending network (networkd) change");
+    }
     if let Some(session_id) = &response.session_id {
         println!("Session ID: {}", session_id);
     }

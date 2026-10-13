@@ -878,6 +878,7 @@ mod tests {
             db: db.clone(),
             apply_manager: std::sync::Arc::new(super::super::FirewallApplyManager::new(
                 std::sync::Arc::new(db.clone()),
+                std::sync::Arc::new(crate::networkd::NetworkdApplyManager::system()),
             )),
         };
         let request = CreateSimplePortForwardRequest {

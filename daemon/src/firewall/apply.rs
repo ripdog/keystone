@@ -10,6 +10,7 @@
 use crate::db::Database;
 use crate::firewall::generate::generate_ruleset;
 use crate::firewall::validate::validate_firewall_config;
+use crate::networkd::{ConfirmOutcome, NetworkdApplyManager};
 use anyhow::{Context, Result};
 use keystone_core::{
     FirewallApplyResponse, FirewallConfig, FirewallConfirmResponse, FirewallRollbackResponse,
@@ -25,7 +26,7 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 /// Default timeout for confirmation (60 seconds)
-const DEFAULT_CONFIRM_TIMEOUT_SECS: u64 = 60;
+pub(crate) const DEFAULT_CONFIRM_TIMEOUT_SECS: u64 = 60;
 
 /// Pending apply session state
 #[derive(Debug, Clone)]
@@ -47,15 +48,24 @@ pub struct FirewallApplyManager {
     db: Arc<Database>,
     /// Current pending apply session (if any)
     pending: Arc<RwLock<Option<PendingApply>>>,
+    /// Networkd confirm-or-revert state; confirming or rolling back the
+    /// firewall session also resolves a pending networkd change.
+    networkd: Arc<NetworkdApplyManager>,
 }
 
 impl FirewallApplyManager {
     /// Create a new FirewallApplyManager
-    pub fn new(db: Arc<Database>) -> Self {
+    pub fn new(db: Arc<Database>, networkd: Arc<NetworkdApplyManager>) -> Self {
         Self {
             db,
             pending: Arc::new(RwLock::new(None)),
+            networkd,
         }
+    }
+
+    /// The networkd manager sharing this confirmation flow.
+    pub fn networkd(&self) -> &Arc<NetworkdApplyManager> {
+        &self.networkd
     }
 
     /// Initialize manager and recover any pending rollback from a prior run.
@@ -200,6 +210,44 @@ impl FirewallApplyManager {
 
     /// Confirm the pending apply (cancels rollback).
     pub async fn confirm(&self, session_id: &str) -> Result<FirewallConfirmResponse> {
+        let firewall_matches = matches!(
+            self.pending.read().await.as_ref(),
+            Some(pending) if pending.session_id == session_id
+        );
+        let networkd_matches = self
+            .networkd
+            .pending_info()
+            .await
+            .is_some_and(|info| info.session_id == session_id);
+        if !firewall_matches && !networkd_matches {
+            let anything_pending =
+                self.pending.read().await.is_some() || self.networkd.pending_info().await.is_some();
+            return Ok(FirewallConfirmResponse {
+                success: false,
+                message: if anything_pending {
+                    "Invalid session ID".to_string()
+                } else {
+                    "No pending configuration to confirm".to_string()
+                },
+            });
+        }
+
+        let mut parts = Vec::new();
+        if networkd_matches && self.networkd.confirm(session_id).await == ConfirmOutcome::Confirmed
+        {
+            parts.push("Network configuration confirmed.");
+        }
+        if firewall_matches {
+            self.confirm_firewall(session_id).await?;
+            parts.push("Firewall configuration confirmed and saved.");
+        }
+        Ok(FirewallConfirmResponse {
+            success: true,
+            message: parts.join(" "),
+        })
+    }
+
+    async fn confirm_firewall(&self, session_id: &str) -> Result<FirewallConfirmResponse> {
         let pending = {
             let mut guard = self.pending.write().await;
             match guard.as_ref() {
@@ -239,8 +287,32 @@ impl FirewallApplyManager {
         })
     }
 
-    /// Force a rollback (manually triggered).
+    /// Force a rollback (manually triggered) of the firewall and any pending
+    /// networkd change.
     pub async fn rollback(&self) -> Result<FirewallRollbackResponse> {
+        let networkd = self.networkd.rollback().await;
+        let firewall = self.rollback_firewall().await?;
+        Ok(match networkd {
+            Ok(true) => FirewallRollbackResponse {
+                success: true,
+                message: if firewall.success {
+                    format!("{} Network configuration rolled back.", firewall.message)
+                } else {
+                    "Network configuration rolled back to previous state.".to_string()
+                },
+            },
+            Ok(false) => firewall,
+            Err(error) => FirewallRollbackResponse {
+                success: false,
+                message: format!(
+                    "{} Failed to roll back network configuration: {error:#}",
+                    firewall.message
+                ),
+            },
+        })
+    }
+
+    async fn rollback_firewall(&self) -> Result<FirewallRollbackResponse> {
         let Some(pending) = self.pending.write().await.take() else {
             return Ok(FirewallRollbackResponse {
                 success: false,
@@ -279,9 +351,21 @@ impl FirewallApplyManager {
 
     /// Get current status of pending apply
     pub async fn status(&self) -> FirewallStatusResponse {
+        let networkd_info = self.networkd.pending_info().await;
         let pending = self.pending.read().await;
 
         match &*pending {
+            None if networkd_info.is_some() => {
+                let info = networkd_info.expect("checked above");
+                FirewallStatusResponse {
+                    pending_confirmation: true,
+                    seconds_remaining: Some(
+                        info.deadline.saturating_sub(current_unix_time()) as u32
+                    ),
+                    session_id: Some(info.session_id),
+                    networkd_pending: true,
+                }
+            }
             Some(p) => {
                 let now = current_unix_time();
                 let remaining = if p.rollback_at > now {
@@ -294,12 +378,14 @@ impl FirewallApplyManager {
                     pending_confirmation: true,
                     seconds_remaining: Some(remaining),
                     session_id: Some(p.session_id.clone()),
+                    networkd_pending: networkd_info.is_some(),
                 }
             }
             None => FirewallStatusResponse {
                 pending_confirmation: false,
                 seconds_remaining: None,
                 session_id: None,
+                networkd_pending: false,
             },
         }
     }

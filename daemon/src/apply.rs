@@ -12,8 +12,9 @@ use tracing::{error, info, warn};
 use crate::caddy;
 use crate::db::Database;
 use crate::dnsmasq;
+use crate::firewall::DEFAULT_CONFIRM_TIMEOUT_SECS;
 use crate::firewall::FirewallApplyManager;
-use crate::networkd;
+use crate::networkd::NetworkdApplyManager;
 
 /// Re-export the result type for use by main.rs
 pub use keystone_core::ApplyAllResponse as ApplyAllResult;
@@ -72,6 +73,7 @@ pub async fn apply_all(
             firewall_pending_confirmation: false,
             firewall_confirm_deadline: None,
             firewall_session_id: None,
+            networkd_pending_confirmation: false,
         });
     }
 
@@ -80,9 +82,12 @@ pub async fn apply_all(
 
     // 1. Apply networkd configuration
     info!("Applying networkd configuration...");
-    components.networkd = match apply_networkd_config(db).await {
-        Ok(msg) => {
+    let networkd_manager = firewall_manager.networkd();
+    let mut networkd_pending = false;
+    components.networkd = match apply_networkd_config(db, networkd_manager).await {
+        Ok((msg, pending)) => {
             info!("Networkd: {}", msg);
+            networkd_pending = pending;
             component_success(msg)
         }
         Err(e) => {
@@ -129,6 +134,26 @@ pub async fn apply_all(
         }
     };
 
+    // Share the firewall's confirmation session so one confirm covers both.
+    // If only networkd is pending, report its session in the same fields.
+    let mut firewall_pending = firewall_pending;
+    let mut firewall_deadline = firewall_deadline;
+    let mut firewall_session = firewall_session;
+    if networkd_pending {
+        match (&firewall_session, firewall_deadline) {
+            (Some(session), Some(deadline)) if firewall_pending => {
+                networkd_manager.adopt(session, deadline).await;
+            }
+            _ => {
+                if let Some(info) = networkd_manager.pending_info().await {
+                    firewall_pending = true;
+                    firewall_deadline = Some(info.deadline);
+                    firewall_session = Some(info.session_id);
+                }
+            }
+        }
+    }
+
     // 3. Apply dnsmasq configuration
     info!("Applying dnsmasq configuration...");
     components.dnsmasq = match dnsmasq::apply_dnsmasq_config(db.pool()).await {
@@ -160,7 +185,8 @@ pub async fn apply_all(
     // Build summary message
     let message = if all_success {
         if firewall_pending {
-            "Configuration applied. Firewall changes require confirmation.".to_string()
+            "Configuration applied. Changes require confirmation or they will be rolled back."
+                .to_string()
         } else {
             "All configuration applied successfully.".to_string()
         }
@@ -177,6 +203,7 @@ pub async fn apply_all(
         firewall_pending_confirmation: firewall_pending,
         firewall_confirm_deadline: firewall_deadline,
         firewall_session_id: firewall_session,
+        networkd_pending_confirmation: networkd_pending,
     })
 }
 
@@ -206,16 +233,26 @@ fn format_failed_components(components: &ApplyComponentResults) -> String {
     )
 }
 
-/// Apply networkd configuration (interfaces, VLANs, bridges).
-async fn apply_networkd_config(db: &Database) -> Result<String> {
+/// Apply networkd configuration (interfaces, VLANs, bridges). The flag reports
+/// whether the change now awaits confirmation.
+async fn apply_networkd_config(
+    db: &Database,
+    manager: &NetworkdApplyManager,
+) -> Result<(String, bool)> {
     let configs = db.get_interface_configs().await?;
     let vlans = db.get_all_vlans().await?;
     let bridges = db.get_all_bridges().await?;
-    let summary = networkd::apply_configuration(&configs, &vlans, &bridges)?;
+    let applied = manager
+        .apply(&configs, &vlans, &bridges, DEFAULT_CONFIRM_TIMEOUT_SECS)
+        .await?;
+    let summary = applied.summary;
 
-    Ok(format!(
-        "Applied {} interfaces, {} VLANs, {} bridges",
-        summary.interfaces, summary.vlans, summary.bridges
+    Ok((
+        format!(
+            "Applied {} interfaces, {} VLANs, {} bridges",
+            summary.interfaces, summary.vlans, summary.bridges
+        ),
+        applied.pending.is_some(),
     ))
 }
 

@@ -36,8 +36,13 @@ pub struct NetworkdApplySummary {
     pub bridges: usize,
 }
 
-#[derive(Debug)]
-struct NetworkdConfigSnapshot {
+mod pending;
+pub use pending::{ConfirmOutcome, NetworkdApplyManager};
+
+/// Captured Keystone networkd files and forwarding sysctls, used to restore
+/// the previous state when a change is rolled back.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NetworkdConfigSnapshot {
     files: Vec<(PathBuf, Vec<u8>)>,
     ipv4_forwarding: String,
     ipv6_forwarding: String,
@@ -84,6 +89,16 @@ impl NetworkdConfigSnapshot {
         })
     }
 
+    /// Whether two snapshots hold identical Keystone-managed files.
+    fn same_files(&self, other: &Self) -> bool {
+        let sorted = |snapshot: &Self| {
+            let mut files = snapshot.files.clone();
+            files.sort();
+            files
+        };
+        sorted(self) == sorted(other)
+    }
+
     fn restore(&self) -> Result<()> {
         remove_all_keystone_networkd_files()?;
         let global_path = networkd_global_config_path();
@@ -115,13 +130,22 @@ impl NetworkdConfigSnapshot {
     }
 }
 
+/// Result of a successful networkd apply.
+#[derive(Debug)]
+pub struct NetworkdApplyOutcome {
+    pub summary: NetworkdApplySummary,
+    /// The state before the apply, present only when managed files actually
+    /// changed (so there is something to roll back).
+    pub previous: Option<NetworkdConfigSnapshot>,
+}
+
 /// Atomically install all Keystone-owned networkd files and reload networkd.
 /// Existing files are restored if writing or reloading fails.
 pub fn apply_configuration(
     configs: &[InterfaceConfig],
     vlans: &[VlanConfig],
     bridges: &[BridgeConfig],
-) -> Result<NetworkdApplySummary> {
+) -> Result<NetworkdApplyOutcome> {
     // Validate both newly submitted and persisted configuration before doing
     // anything to root-owned networkd files.
     for config in configs {
@@ -163,7 +187,17 @@ pub fn apply_configuration(
     });
 
     match result {
-        Ok(summary) => Ok(summary),
+        Ok(summary) => {
+            // If the files are unchanged there is nothing to roll back. If the
+            // re-capture fails, assume a change to stay on the safe side.
+            let changed = NetworkdConfigSnapshot::capture()
+                .map(|after| !snapshot.same_files(&after))
+                .unwrap_or(true);
+            Ok(NetworkdApplyOutcome {
+                summary,
+                previous: changed.then_some(snapshot),
+            })
+        }
         Err(error) => {
             let restore_result = snapshot.restore();
             let reload_result = restore_result.as_ref().ok().map(|()| {

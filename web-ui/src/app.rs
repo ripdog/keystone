@@ -4,7 +4,9 @@
 //! and run in the browser as a Single Page Application.
 
 use crate::api;
-use crate::components::{AppLayout, LoginPage, clear_stored_token, get_stored_token};
+use crate::components::{
+    AppLayout, LoginPage, PendingConfirmBanner, clear_stored_token, get_stored_token,
+};
 use crate::pages::{
     BridgesPage, CaddyPage, DashboardPage, DnsmasqPage, FirewallPage, InterfaceEditPage,
     InterfacesPage, NetworkdPreviewPage, ServiceDetailPage, ServicesPage, SettingsPage, SshPage,
@@ -98,6 +100,7 @@ pub fn App() -> impl IntoView {
                     fallback=move || view! { <LoginPage on_login=set_auth_token/> }
                 >
                     <AppLayout on_logout=logout>
+                        <PendingConfirmBanner auth_token=auth_token />
                         <Routes fallback=|| "Page not found">
                             <Route
                                 path=path!("/")

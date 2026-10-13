@@ -146,8 +146,15 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create the firewall apply manager
-    let firewall_apply_manager =
-        Arc::new(firewall::FirewallApplyManager::new(Arc::new(db.clone())));
+    let networkd_apply_manager = Arc::new(networkd::NetworkdApplyManager::system());
+    let firewall_apply_manager = Arc::new(firewall::FirewallApplyManager::new(
+        Arc::new(db.clone()),
+        networkd_apply_manager.clone(),
+    ));
+
+    // Restore or re-arm any unconfirmed networkd change from a previous run.
+    networkd_apply_manager.init().await?;
+    info!("Networkd apply manager initialized");
 
     // Initialize firewall manager (check for pending rollbacks from previous run)
     firewall_apply_manager.init().await?;
@@ -178,6 +185,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/dashboard", get(get_dashboard))
         .route("/apply-networkd", post(apply_networkd))
         .route("/apply-all", post(apply_all))
+        .route("/networkd/confirm", post(confirm_networkd))
+        .route("/networkd/rollback", post(rollback_networkd))
+        .route("/networkd/status", get(networkd_status))
         .route("/networkd-preview", get(networkd_preview))
         .route("/managed-interfaces", get(get_managed_interfaces))
         .route("/managed-interfaces", post(save_managed_interfaces))
@@ -530,7 +540,12 @@ async fn login(
 fn is_blocked_before_setup(path: &str) -> bool {
     let firewall_recovery_endpoint = matches!(
         path,
-        "/firewall/confirm" | "/firewall/rollback" | "/firewall/status"
+        "/firewall/confirm"
+            | "/firewall/rollback"
+            | "/firewall/status"
+            | "/networkd/confirm"
+            | "/networkd/rollback"
+            | "/networkd/status"
     );
 
     path == "/dashboard"
@@ -1355,6 +1370,9 @@ async fn apply_networkd(
             message: "Configuration changes are disabled. Unlock in Settings to apply changes."
                 .to_string(),
             errors: Vec::new(),
+            pending_confirmation: false,
+            confirm_deadline: None,
+            session_id: None,
         }));
     }
 
@@ -1362,21 +1380,80 @@ async fn apply_networkd(
     let vlans = state.db.get_all_vlans().await?;
     let bridges = state.db.get_all_bridges().await?;
 
-    match networkd::apply_configuration(&configs, &vlans, &bridges) {
-        Ok(summary) => Ok(Json(ApplyConfigResponse {
-            success: true,
-            message: format!(
+    let result = state
+        .firewall_manager
+        .networkd()
+        .apply(
+            &configs,
+            &vlans,
+            &bridges,
+            firewall::DEFAULT_CONFIRM_TIMEOUT_SECS,
+        )
+        .await;
+    match result {
+        Ok(applied) => {
+            let summary = applied.summary;
+            let mut message = format!(
                 "Applied networkd config for {} interfaces, {} VLANs, and {} bridges",
                 summary.interfaces, summary.vlans, summary.bridges
-            ),
-            errors: Vec::new(),
-        })),
+            );
+            if let Some(pending) = &applied.pending {
+                message.push_str(&format!(
+                    ". Confirm within {} seconds or the change will be rolled back.",
+                    firewall::DEFAULT_CONFIRM_TIMEOUT_SECS
+                ));
+                return Ok(Json(ApplyConfigResponse {
+                    success: true,
+                    message,
+                    errors: Vec::new(),
+                    pending_confirmation: true,
+                    confirm_deadline: Some(pending.deadline),
+                    session_id: Some(pending.session_id.clone()),
+                }));
+            }
+            Ok(Json(ApplyConfigResponse {
+                success: true,
+                message,
+                errors: Vec::new(),
+                pending_confirmation: false,
+                confirm_deadline: None,
+                session_id: None,
+            }))
+        }
         Err(error) => Ok(Json(ApplyConfigResponse {
             success: false,
             message: error.to_string(),
             errors: vec![error.to_string()],
+            pending_confirmation: false,
+            confirm_deadline: None,
+            session_id: None,
         })),
     }
+}
+
+/// POST /networkd/confirm - Confirm a pending networkd change (or a shared
+/// firewall + networkd session).
+async fn confirm_networkd(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<keystone_core::NetworkdConfirmRequest>,
+) -> Result<Json<keystone_core::NetworkdConfirmResponse>, AppError> {
+    Ok(Json(
+        state.firewall_manager.confirm(&request.session_id).await?,
+    ))
+}
+
+/// POST /networkd/rollback - Roll back pending changes immediately.
+async fn rollback_networkd(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<keystone_core::NetworkdRollbackResponse>, AppError> {
+    Ok(Json(state.firewall_manager.rollback().await?))
+}
+
+/// GET /networkd/status - Pending-confirmation status.
+async fn networkd_status(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<keystone_core::NetworkdStatusResponse>, AppError> {
+    Ok(Json(state.firewall_manager.status().await))
 }
 
 /// POST /apply-all - Apply all configuration (networkd, firewall, dnsmasq, caddy)

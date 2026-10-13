@@ -2198,7 +2198,19 @@ pub struct FirewallStatusResponse {
     pub seconds_remaining: Option<u32>,
     /// Session ID if pending
     pub session_id: Option<String>,
+    /// A networkd change is also awaiting this confirmation.
+    #[serde(default)]
+    pub networkd_pending: bool,
 }
+
+/// Request body for `POST /networkd/confirm`.
+pub type NetworkdConfirmRequest = FirewallConfirmRequest;
+/// Response for `POST /networkd/confirm`.
+pub type NetworkdConfirmResponse = FirewallConfirmResponse;
+/// Response for `POST /networkd/rollback`.
+pub type NetworkdRollbackResponse = FirewallRollbackResponse;
+/// Response for `GET /networkd/status`.
+pub type NetworkdStatusResponse = FirewallStatusResponse;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FirewallConfigResponse {
@@ -2469,6 +2481,15 @@ pub struct ApplyConfigResponse {
     pub success: bool,
     pub message: String,
     pub errors: Vec<String>,
+    /// The change was applied but will be rolled back unless confirmed.
+    #[serde(default)]
+    pub pending_confirmation: bool,
+    /// Unix timestamp - confirm before this time or the change is rolled back.
+    #[serde(default)]
+    pub confirm_deadline: Option<u64>,
+    /// Session ID to pass to `POST /networkd/confirm` (or `/firewall/confirm`).
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 // ============================================================================
@@ -2484,12 +2505,18 @@ pub struct ApplyAllResponse {
     pub message: String,
     /// Individual component results
     pub components: ApplyComponentResults,
-    /// If firewall requires confirmation
+    /// If the apply requires confirmation. The `firewall_*` fields describe the
+    /// shared confirmation session: one `/firewall/confirm` confirms both the
+    /// firewall and any pending networkd change. If only networkd is pending,
+    /// they carry the networkd session.
     pub firewall_pending_confirmation: bool,
-    /// Firewall confirmation deadline (unix timestamp)
+    /// Confirmation deadline (unix timestamp)
     pub firewall_confirm_deadline: Option<u64>,
-    /// Firewall session ID for confirmation
+    /// Session ID for confirmation
     pub firewall_session_id: Option<String>,
+    /// A networkd change is part of the pending confirmation.
+    #[serde(default)]
+    pub networkd_pending_confirmation: bool,
 }
 
 /// Results for each component in a unified apply

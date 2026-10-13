@@ -8,6 +8,7 @@ mod login;
 mod navigation;
 mod pending_banner;
 mod pending_changes;
+pub mod rule_table;
 mod static_ip_settings;
 mod traffic_graph;
 

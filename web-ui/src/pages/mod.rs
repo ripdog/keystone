@@ -6,6 +6,8 @@ mod clients;
 mod dashboard;
 mod dnsmasq;
 mod firewall;
+mod firewall_groups;
+mod firewall_rules;
 mod history;
 mod interface_edit;
 mod interfaces;

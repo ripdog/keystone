@@ -223,6 +223,14 @@ pub const NAV_ITEMS: &[NavItem] = &[
         "zone interface network",
     ),
     page(
+        "Groups",
+        "/firewall/groups",
+        SECURITY,
+        FIREWALL,
+        "shield",
+        "alias address port group set ipset nft",
+    ),
+    page(
         "Zone Forwards",
         "/firewall/zone-forwards",
         SECURITY,

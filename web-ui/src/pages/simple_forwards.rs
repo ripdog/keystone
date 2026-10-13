@@ -1,9 +1,74 @@
 //! A device-oriented WAN forwarding editor. It writes ordinary firewall rules.
 use crate::api;
+use crate::components::rule_table::{FilterBox, RuleHits, matches_filter, use_rule_counters};
 use crate::components::use_config_changed;
-use keystone_core::{CreateSimplePortForwardRequest, LanDevice, RuleProtocol};
+use keystone_core::{
+    CreateSimplePortForwardRequest, LanDevice, PortForward, RuleProtocol, SimplePortForward,
+};
 use leptos::prelude::*;
 use leptos_router::hooks::use_query_map;
+
+/// Counter kinds of a simple forward: its allow rules, one per family.
+const SIMPLE_HIT_KINDS: &[&str] = &["forward"];
+/// Counter kinds of a raw port forward: external and LAN (hairpin) DNAT.
+const RAW_HIT_KINDS: &[&str] = &["portfwd", "portfwd-hairpin"];
+
+/// Text a search matches against for a simple forward.
+fn simple_fields(forward: &SimplePortForward) -> Vec<String> {
+    vec![
+        forward.name.clone(),
+        forward.description.clone().unwrap_or_default(),
+        forward.protocol.to_string(),
+        forward.external_port.to_string(),
+        forward.destination_port.to_string(),
+        forward.ipv4.clone().unwrap_or_default(),
+        forward.ipv6.clone().unwrap_or_default(),
+        forward.source_zone.clone().unwrap_or_default(),
+        forward.source_ip.clone().unwrap_or_default(),
+    ]
+}
+
+/// Text a search matches against for a raw port forward.
+fn raw_fields(pf: &PortForward) -> Vec<String> {
+    vec![
+        pf.name.clone(),
+        pf.description.clone().unwrap_or_default(),
+        pf.protocol.to_string(),
+        pf.external_port_start.to_string(),
+        pf.dest_ip.clone(),
+        pf.source_zone.clone().unwrap_or_default(),
+        pf.source_ip.clone().unwrap_or_default(),
+        pf.source_group.clone().unwrap_or_default(),
+    ]
+}
+
+/// The simple forwards that match a search.
+fn filter_simple(items: &[SimplePortForward], query: &str) -> Vec<SimplePortForward> {
+    items
+        .iter()
+        .filter(|forward| matches_filter(query, &simple_fields(forward)))
+        .cloned()
+        .collect()
+}
+
+/// The raw port forwards that match a search.
+fn filter_raw(items: &[PortForward], query: &str) -> Vec<PortForward> {
+    items
+        .iter()
+        .filter(|pf| matches_filter(query, &raw_fields(pf)))
+        .cloned()
+        .collect()
+}
+
+/// Where a raw port forward accepts traffic from, for display.
+fn raw_source(pf: &PortForward) -> String {
+    let zone = pf.source_zone.clone().unwrap_or_else(|| "Any".into());
+    match (pf.source_group.as_deref(), pf.source_ip.as_deref()) {
+        (Some(group), _) => format!("{zone}, group {group}"),
+        (None, Some(ip)) => format!("{zone}, {ip}"),
+        (None, None) => zone,
+    }
+}
 
 #[component]
 pub(super) fn SimpleForwardsTab(
@@ -27,6 +92,8 @@ pub(super) fn SimpleForwardsTab(
         let _ = reload_trigger.get();
         async move { api::fetch_lan_devices(&token).await }
     });
+    let counters = use_rule_counters(token, on_unauthorized);
+    let filter = RwSignal::new(String::new());
     let editing = RwSignal::new(false);
     let edit_id = RwSignal::new(None::<i64>);
     let manual = RwSignal::new(false);
@@ -168,6 +235,8 @@ pub(super) fn SimpleForwardsTab(
                     <h2 class="text-lg font-medium text-gray-200">"Port Forwards"</h2>
                     <p class="text-gray-400 text-sm">"WAN access to LAN devices — IPv4 DNAT + firewall allow, or native IPv6 routing."</p>
                 </div>
+                <div class="flex flex-wrap items-center gap-2">
+                <FilterBox query=filter placeholder="Search name, ports, addresses, zone" />
                 <button class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"
                     on:click=move |_| {
                         error.set(String::new());
@@ -182,6 +251,7 @@ pub(super) fn SimpleForwardsTab(
                     }>
                     {move || if editing.get() { "Cancel" } else { "+ Add Port Forward" }}
                 </button>
+                </div>
             </div>
             {move || (!notice.get().is_empty()).then(|| view! { <p class="text-blue-300 text-sm">{notice.get()}</p> })}
             {move || (!error.get().is_empty()).then(|| view! {
@@ -293,13 +363,15 @@ pub(super) fn SimpleForwardsTab(
                                             <th class="text-left px-2 py-2">"Source"</th>
                                             <th class="text-left px-2 py-2">"Destination(s)"</th>
                                             <th class="text-left px-2 py-2">"Enabled"</th>
+                                            <th class="text-left px-2 py-2">"Hits"</th>
                                             <th class="text-right px-2 py-2">"Action"</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <For each=move || items.clone() key=|f| f.rule_id children=move |f| {
+                                        <For each=move || filter_simple(&items, &filter.get()) key=|f| f.rule_id children=move |f| {
                                             let id = f.rule_id;
                                             let to_edit = f.clone();
+                                            let forward_ids: Vec<i64> = [f.ipv4_rule_id, f.ipv6_rule_id].into_iter().flatten().collect();
                                             view! {
                                                 <tr class="border-b border-gray-700 text-gray-200">
                                                     <td class="px-2 py-2">
@@ -320,6 +392,7 @@ pub(super) fn SimpleForwardsTab(
                                                         {f.ipv6.clone().map(|ip| view! { <div>{format!("IPv6: [{ip}]:{}", f.destination_port)}</div> })}
                                                     </td>
                                                     <td class="px-2 py-2">{if f.enabled { "Yes" } else { "No" }}</td>
+                                                    <td class="px-2 py-2 whitespace-nowrap"><RuleHits counters=counters kinds=SIMPLE_HIT_KINDS rule_ids=forward_ids /></td>
                                                     <td class="px-2 py-2 text-right whitespace-nowrap">
                                                         <button class="text-blue-300 hover:text-blue-200 mr-3" on:click=move |_| {
                                                             edit_id.set(Some(id));
@@ -386,12 +459,15 @@ pub(super) fn SimpleForwardsTab(
                                         <th class="text-left px-2 py-2">"Destination"</th>
                                         <th class="text-left px-2 py-2">"Source zone"</th>
                                         <th class="text-left px-2 py-2">"Enabled"</th>
+                                        <th class="text-left px-2 py-2">"Hits"</th>
                                         <th class="text-right px-2 py-2">"Action"</th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <For each=move || items.clone() key=|pf| pf.id children=move |pf| {
+                                    <For each=move || filter_raw(&items, &filter.get()) key=|pf| pf.id children=move |pf| {
                                         let id = pf.id;
+                                        let hit_ids: Vec<i64> = id.into_iter().collect();
+                                        let source = raw_source(&pf);
                                         let ports = match pf.external_port_end {
                                             Some(end) if end > pf.external_port_start => format!("{}-{}", pf.external_port_start, end),
                                             _ => pf.external_port_start.to_string(),
@@ -406,8 +482,9 @@ pub(super) fn SimpleForwardsTab(
                                                 <td class="px-2 py-2">{pf.protocol.to_string()}</td>
                                                 <td class="px-2 py-2">{ports}</td>
                                                 <td class="px-2 py-2">{destination}</td>
-                                                <td class="px-2 py-2">{pf.source_zone.clone().unwrap_or_else(|| "Any".into())}</td>
+                                                <td class="px-2 py-2">{source}</td>
                                                 <td class="px-2 py-2">{if pf.enabled { "Yes" } else { "No" }}</td>
+                                                <td class="px-2 py-2 whitespace-nowrap"><RuleHits counters=counters kinds=RAW_HIT_KINDS rule_ids=hit_ids /></td>
                                                 <td class="px-2 py-2 text-right">
                                                     <button class="text-red-400 hover:text-red-300" on:click=move |_| {
                                                         let Some(id) = id else { return };

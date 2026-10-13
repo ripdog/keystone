@@ -1,17 +1,20 @@
 //! Firewall configuration API functions
 
 use keystone_core::api::{
-    ConfirmFirewall, CreateSimpleForward, SaveFirewallGlobalSettings, SaveFirewallZone,
-    SaveForwardRule, SaveInputRule, SaveZoneForward, UpdateSimpleForward,
+    ConfirmFirewall, CreateSimpleForward, ReorderForwardRules, ReorderInputRules, SaveAddressGroup,
+    SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule, SaveInputRule, SavePortGroup,
+    SaveZoneForward, UpdateSimpleForward,
 };
 use keystone_core::{
-    CreateSimplePortForwardRequest, DeleteResponse, FirewallConfirmRequest,
-    FirewallConfirmResponse, FirewallGlobalSettings, FirewallGlobalSettingsResponse,
-    FirewallPreviewResponse, FirewallRollbackResponse, FirewallZone, FirewallZonesResponse,
-    ForwardRule, InputRule, LanDevice, LanDevicesResponse, PortForward,
+    AddressGroup, AddressGroupsResponse, CreateSimplePortForwardRequest, DeleteResponse,
+    FirewallConfirmRequest, FirewallConfirmResponse, FirewallCountersResponse,
+    FirewallGlobalSettings, FirewallGlobalSettingsResponse, FirewallPreviewResponse,
+    FirewallRollbackResponse, FirewallRuleCounter, FirewallZone, FirewallZonesResponse,
+    ForwardRule, InputRule, LanDevice, LanDevicesResponse, PortForward, PortGroup,
+    PortGroupsResponse, ReorderRulesRequest, SaveAddressGroupRequest,
     SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, SaveFirewallZoneRequest,
-    SaveForwardRuleRequest, SaveInputRuleRequest, SaveZoneForwardRequest, SimplePortForward,
-    SimplePortForwardsResponse, ZoneForwardPolicy,
+    SaveForwardRuleRequest, SaveInputRuleRequest, SavePortGroupRequest, SaveZoneForwardRequest,
+    SimplePortForward, SimplePortForwardsResponse, ZoneForwardPolicy,
 };
 
 use super::client::{call, call_with, delete, get, post_empty};
@@ -44,6 +47,74 @@ pub async fn save_firewall_zone(token: &str, zone: FirewallZone) -> Result<i64, 
 /// Delete a firewall zone
 pub async fn delete_firewall_zone(token: &str, id: i64) -> Result<DeleteResponse, String> {
     delete(&format!("/api/firewall/zones/{}", id), token).await
+}
+
+// ============================================================================
+// Address and Port Groups
+// ============================================================================
+
+/// Fetch all address groups
+pub async fn fetch_address_groups(token: &str) -> Result<Vec<AddressGroup>, String> {
+    let response: AddressGroupsResponse = get("/api/firewall/address-groups", token).await?;
+    Ok(response.groups)
+}
+
+/// Save an address group
+pub async fn save_address_group(token: &str, group: AddressGroup) -> Result<i64, String> {
+    let response = call::<SaveAddressGroup>(token, &SaveAddressGroupRequest { group }).await?;
+    saved_id(response.success, response.message, response.group_id)
+}
+
+/// Delete an address group. The daemon refuses while a rule references it.
+pub async fn delete_address_group(token: &str, id: i64) -> Result<DeleteResponse, String> {
+    delete(&format!("/api/firewall/address-groups/{id}"), token).await
+}
+
+/// Fetch all port groups
+pub async fn fetch_port_groups(token: &str) -> Result<Vec<PortGroup>, String> {
+    let response: PortGroupsResponse = get("/api/firewall/port-groups", token).await?;
+    Ok(response.groups)
+}
+
+/// Save a port group
+pub async fn save_port_group(token: &str, group: PortGroup) -> Result<i64, String> {
+    let response = call::<SavePortGroup>(token, &SavePortGroupRequest { group }).await?;
+    saved_id(response.success, response.message, response.group_id)
+}
+
+/// Delete a port group. The daemon refuses while a rule references it.
+pub async fn delete_port_group(token: &str, id: i64) -> Result<DeleteResponse, String> {
+    delete(&format!("/api/firewall/port-groups/{id}"), token).await
+}
+
+// ============================================================================
+// Rule Hit Counters and Ordering
+// ============================================================================
+
+/// Hit counters of the applied user rules (one entry per rule that has hits)
+pub async fn fetch_rule_counters(token: &str) -> Result<Vec<FirewallRuleCounter>, String> {
+    let response: FirewallCountersResponse = get("/api/firewall/counters", token).await?;
+    Ok(response.counters)
+}
+
+/// Save the order of input rules: positions follow the order of `rule_ids`
+pub async fn reorder_input_rules(token: &str, rule_ids: Vec<i64>) -> Result<(), String> {
+    let response = call::<ReorderInputRules>(token, &ReorderRulesRequest { rule_ids }).await?;
+    if response.success {
+        Ok(())
+    } else {
+        Err(response.message)
+    }
+}
+
+/// Save the order of forward rules: positions follow the order of `rule_ids`
+pub async fn reorder_forward_rules(token: &str, rule_ids: Vec<i64>) -> Result<(), String> {
+    let response = call::<ReorderForwardRules>(token, &ReorderRulesRequest { rule_ids }).await?;
+    if response.success {
+        Ok(())
+    } else {
+        Err(response.message)
+    }
 }
 
 // ============================================================================

@@ -54,14 +54,6 @@ pub const CONFIG_TABLES: &[&str] = &[
     "interface_domains",
     "dhcpv4_client_config",
     "dhcpv6_client_config",
-    "dhcp_server_config",
-    "dhcp_server_dns",
-    "dhcp_server_ntp",
-    "dhcp_static_leases",
-    "ipv6_ra_config",
-    "ipv6_ra_dns",
-    "ipv6_ra_search_domains",
-    "ipv6_ra_prefixes",
     "ipv6_accept_ra_config",
     "vlan_config",
     "bridge_config",
@@ -114,13 +106,24 @@ pub const NON_CONFIG_TABLES: &[&str] = &[
     "sqm_applied",
 ];
 
+/// Tables that an earlier migration created and a later migration drops. A
+/// snapshot written before the drop still holds them. Migrating a copy removes
+/// them, so they are accepted only while an uploaded file is checked, which
+/// happens before that migration runs.
+pub const RETIRED_TABLES: &[&str] = &[
+    "dhcp_server_config",
+    "dhcp_server_dns",
+    "dhcp_server_ntp",
+    "dhcp_static_leases",
+    "ipv6_ra_config",
+    "ipv6_ra_dns",
+    "ipv6_ra_search_domains",
+    "ipv6_ra_prefixes",
+];
+
 /// The component whose generated files depend on a configuration table.
 /// Every table in [`CONFIG_TABLES`] maps to exactly one component, so a
 /// component's rows can be restored without touching the others.
-///
-/// `dhcp_server_*`, `ipv6_ra_*` and `dhcp_static_leases` are not read by any
-/// generator today. They describe systemd-networkd features (DHCPServer and
-/// IPv6SendRA), so they belong to networkd.
 pub fn component_of(table: &str) -> Option<Component> {
     use Component::{Caddy, Dnsmasq, Firewall, Networkd, Sqm};
     Some(match table {
@@ -132,14 +135,6 @@ pub fn component_of(table: &str) -> Option<Component> {
         | "interface_domains"
         | "dhcpv4_client_config"
         | "dhcpv6_client_config"
-        | "dhcp_server_config"
-        | "dhcp_server_dns"
-        | "dhcp_server_ntp"
-        | "dhcp_static_leases"
-        | "ipv6_ra_config"
-        | "ipv6_ra_dns"
-        | "ipv6_ra_search_domains"
-        | "ipv6_ra_prefixes"
         | "ipv6_accept_ra_config"
         | "vlan_config"
         | "bridge_config" => Networkd,
@@ -1089,8 +1084,15 @@ async fn precheck_read_only(path: &Path) -> Result<()> {
             "uploaded snapshot uses schema version {applied}, newer than this daemon's {newest_known}"
         );
 
+        // Retired tables are dropped when the file is migrated, which happens
+        // after this check, so an older snapshot may still hold them here.
         let names = table_names(&pool).await?;
-        check_classified(names.iter().map(String::as_str))?;
+        check_classified(
+            names
+                .iter()
+                .map(String::as_str)
+                .filter(|name| !RETIRED_TABLES.contains(name)),
+        )?;
         // Snapshots hold tables and their indexes only. Triggers and views
         // have no place in an upload, so they are refused outright.
         let other_objects: i64 = sqlx::query_scalar(
@@ -1398,6 +1400,18 @@ pub(crate) mod tests {
             assert!(
                 !NON_CONFIG_TABLES.contains(table),
                 "{table} is listed as both configuration and excluded"
+            );
+        }
+        // Retired tables are dropped by a migration, so a migrated database
+        // must not contain them, and they must not be listed anywhere else.
+        for table in RETIRED_TABLES {
+            assert!(
+                !names.iter().any(|name| name.as_str() == *table),
+                "{table} is retired but a migration still creates it"
+            );
+            assert!(
+                !CONFIG_TABLES.contains(table) && !NON_CONFIG_TABLES.contains(table),
+                "{table} is retired but still listed as configuration or excluded"
             );
         }
     }
@@ -2336,5 +2350,131 @@ pub(crate) mod tests {
             .expect("an imported valid snapshot must restore");
         assert!(!zone_exists(&db, "guest").await);
         assert_eq!(db.get_interface_configs().await.unwrap().len(), 2);
+    }
+
+    /// Write a snapshot file as a daemon from before the drop migration would
+    /// have: the current configuration plus the retired DHCP server and IPv6 RA
+    /// tables, with rows in each, and migration history that stops before the
+    /// drop.
+    async fn write_pre_drop_snapshot(db: &Database, path: &Path) {
+        vacuum_into(db.pool(), path).await.unwrap();
+        let pool = open_sqlite(path, false).await.unwrap();
+
+        for sql in [
+            include_str!("../migrations/20241228000007_dhcp_server_config.sql"),
+            include_str!("../migrations/20241228000008_ipv6_ra_config.sql"),
+        ] {
+            sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+        }
+        // The ipv6 tables reference `interface_configs`, a table that never
+        // existed, so enforcement stays off while the legacy rows are written.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let interface: i64 = sqlx::query_scalar("SELECT MIN(id) FROM interface_config")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        for sql in [
+            "INSERT INTO dhcp_server_config (interface_config_id, enabled, pool_offset, pool_size)
+             VALUES (?1, 1, 10, 100)",
+            "INSERT INTO dhcp_server_dns (dhcp_server_id, server) VALUES (?1, '192.168.50.2')",
+            "INSERT INTO dhcp_server_ntp (dhcp_server_id, server) VALUES (?1, 'pool.ntp.org')",
+            "INSERT INTO dhcp_static_leases (dhcp_server_id, mac_address, ip_address, hostname)
+             VALUES (?1, '00:11:22:33:44:55', '192.168.50.20', 'nas')",
+            "INSERT INTO ipv6_ra_config (interface_config_id, enabled) VALUES (?1, 1)",
+            "INSERT INTO ipv6_ra_dns (ipv6_ra_config_id, server) VALUES (?1, '2001:db8::53')",
+            "INSERT INTO ipv6_ra_search_domains (ipv6_ra_config_id, domain)
+             VALUES (?1, 'lan.example')",
+            "INSERT INTO ipv6_ra_prefixes (ipv6_ra_config_id, prefix) VALUES (?1, '2001:db8:1::/64')",
+        ] {
+            sqlx::query(sql)
+                .bind(interface)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        // The copy as an older daemon left it: the drop was not yet applied.
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version >= 20261015000001")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        strip_to_configuration(path).await.unwrap();
+
+        let pool = open_sqlite(path, true).await.unwrap();
+        let names = table_names(&pool).await.unwrap();
+        pool.close().await;
+        for table in RETIRED_TABLES {
+            assert!(
+                names.iter().any(|name| name.as_str() == *table),
+                "the pre-drop snapshot must still hold {table}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_from_before_the_drop_migration_restores() {
+        use crate::snapshot_validation::tests::populate_valid_configuration;
+
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        populate_valid_configuration(&db).await;
+        ensure_private_dir(&scratch.snapshot_dir()).unwrap();
+
+        // Stored as a snapshot on disk, the way an older daemon left it.
+        let file_name = format!("{}-{}.db", unix_millis(), Uuid::new_v4().simple());
+        let path = snapshot_file_path(&scratch.snapshot_dir(), &file_name).unwrap();
+        write_pre_drop_snapshot(&db, &path).await;
+        let id = sqlx::query(
+            "INSERT INTO config_snapshots
+                (created_at, kind, status, actor, note, file_name, schema_version, session_id,
+                 components)
+             VALUES (?, ?, ?, NULL, 'pre-drop', ?, 20261014000003, NULL, '')",
+        )
+        .bind(unix_secs())
+        .bind(SnapshotKind::Manual.as_str())
+        .bind(SnapshotStatus::Active.as_str())
+        .bind(file_name.as_str())
+        .execute(db.pool())
+        .await
+        .unwrap()
+        .last_insert_rowid();
+
+        insert_zone(&db, "guest").await;
+        restore_snapshot(&db, id, None, None)
+            .await
+            .expect("a snapshot taken before the drop migration must restore");
+        assert!(!zone_exists(&db, "guest").await);
+        assert!(zone_exists(&db, "office").await);
+        assert_eq!(db.get_interface_configs().await.unwrap().len(), 2);
+        let names = table_names(db.pool()).await.unwrap();
+        for table in RETIRED_TABLES {
+            assert!(!names.iter().any(|name| name.as_str() == *table));
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_from_before_the_drop_migration_imports_and_restores() {
+        use crate::snapshot_validation::tests::populate_valid_configuration;
+
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        populate_valid_configuration(&db).await;
+        ensure_private_dir(&scratch.snapshot_dir()).unwrap();
+        let path = scratch.snapshot_dir().join("pre-drop-upload.db");
+        write_pre_drop_snapshot(&db, &path).await;
+        let bytes = std::fs::read(&path).unwrap();
+
+        let imported = import_snapshot(&db, &bytes, None)
+            .await
+            .expect("an upload from before the drop migration must be accepted");
+        insert_zone(&db, "guest").await;
+        restore_snapshot(&db, imported.id, None, None)
+            .await
+            .expect("the imported copy must restore");
+        assert!(!zone_exists(&db, "guest").await);
+        assert!(zone_exists(&db, "office").await);
     }
 }

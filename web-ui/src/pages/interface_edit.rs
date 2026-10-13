@@ -1028,7 +1028,7 @@ pub fn InterfaceEditPage(
                     </div>
 
                     <div class="bg-blue-900/20 border border-blue-700/50 rounded-lg p-3 text-sm text-blue-200">
-                        "Source NAT is configured explicitly on firewall zones."
+                        "NAT is configured per firewall zone (enable IPv4 NAT on the zone under Firewall, Zones)."
                     </div>
 
                     // Interface State Settings (collapsible advanced section)

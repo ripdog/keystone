@@ -2063,6 +2063,10 @@ pub struct SimplePortForward {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimplePortForwardsResponse {
     pub forwards: Vec<SimplePortForward>,
+    /// Port forwards (DNAT rows) not part of any simple forward, e.g. created
+    /// through the CLI/API. Read-only in the simple editor.
+    #[serde(default)]
+    pub other_port_forwards: Vec<PortForward>,
 }
 
 /// Create or replace a logical dual-stack exposure.

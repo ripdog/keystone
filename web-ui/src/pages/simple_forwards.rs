@@ -14,6 +14,11 @@ pub(super) fn SimpleForwardsTab(
         let _ = reload_trigger.get();
         async move { api::fetch_simple_forwards(&token).await }
     });
+    let other_forwards = LocalResource::new(move || {
+        let token = token.get();
+        let _ = reload_trigger.get();
+        async move { api::fetch_other_port_forwards(&token).await }
+    });
     let devices = LocalResource::new(move || {
         let token = token.get();
         let _ = reload_trigger.get();
@@ -326,6 +331,72 @@ pub(super) fn SimpleForwardsTab(
                         if e.contains("Unauthorized") { on_unauthorized.run(()); }
                         view! { <p class="text-red-400">{format!("Failed to load forwards: {e}")}</p> }.into_any()
                     }
+                })}
+            </Suspense>
+            <Suspense fallback=|| view! { <p class="text-gray-400">"Loading other port forwards..."</p> }>
+                {move || other_forwards.get().and_then(|res| res.ok()).filter(|items| !items.is_empty()).map(|items| view! {
+                    <div class="space-y-2 pt-4">
+                        <h3 class="text-md font-medium text-gray-200">"Other port forwards (created via CLI/API)"</h3>
+                        <p class="text-gray-400 text-sm">"These DNAT rules are not part of a simple forward above. They are live once applied."</p>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead class="text-gray-400 border-b border-gray-600">
+                                    <tr>
+                                        <th class="text-left px-2 py-2">"Name"</th>
+                                        <th class="text-left px-2 py-2">"Protocol"</th>
+                                        <th class="text-left px-2 py-2">"External port(s)"</th>
+                                        <th class="text-left px-2 py-2">"Destination"</th>
+                                        <th class="text-left px-2 py-2">"Source zone"</th>
+                                        <th class="text-left px-2 py-2">"Enabled"</th>
+                                        <th class="text-right px-2 py-2">"Action"</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <For each=move || items.clone() key=|pf| pf.id children=move |pf| {
+                                        let id = pf.id;
+                                        let ports = match pf.external_port_end {
+                                            Some(end) if end > pf.external_port_start => format!("{}-{}", pf.external_port_start, end),
+                                            _ => pf.external_port_start.to_string(),
+                                        };
+                                        let destination = match pf.dest_port {
+                                            Some(port) => format!("{}:{}", pf.dest_ip, port),
+                                            None => pf.dest_ip.clone(),
+                                        };
+                                        view! {
+                                            <tr class="border-b border-gray-700 text-gray-200">
+                                                <td class="px-2 py-2">{pf.name.clone()}</td>
+                                                <td class="px-2 py-2">{pf.protocol.to_string()}</td>
+                                                <td class="px-2 py-2">{ports}</td>
+                                                <td class="px-2 py-2">{destination}</td>
+                                                <td class="px-2 py-2">{pf.source_zone.clone().unwrap_or_else(|| "Any".into())}</td>
+                                                <td class="px-2 py-2">{if pf.enabled { "Yes" } else { "No" }}</td>
+                                                <td class="px-2 py-2 text-right">
+                                                    <button class="text-red-400 hover:text-red-300" on:click=move |_| {
+                                                        let Some(id) = id else { return };
+                                                        error.set(String::new());
+                                                        let token = token.get_untracked();
+                                                        leptos::task::spawn_local(async move {
+                                                            match api::delete_port_forward(&token, id).await {
+                                                                Ok(resp) if resp.success => {
+                                                                    notice.set("Port forward removed. Click Apply Changes to activate.".into());
+                                                                    reload_trigger.update(|v| *v += 1);
+                                                                }
+                                                                Ok(resp) => error.set(resp.message),
+                                                                Err(e) => {
+                                                                    if e.contains("Unauthorized") { on_unauthorized.run(()); }
+                                                                    error.set(e);
+                                                                }
+                                                            }
+                                                        });
+                                                    }>"Delete"</button>
+                                                </td>
+                                            </tr>
+                                        }
+                                    } />
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 })}
             </Suspense>
         </div>

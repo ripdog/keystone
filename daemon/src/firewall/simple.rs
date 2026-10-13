@@ -8,7 +8,8 @@ use axum::{
 };
 use keystone_core::{
     CreateSimplePortForwardRequest, DeleteResponse, FirewallAction, FirewallConfig, InterfaceRole,
-    LanDevice, LanDevicesResponse, RuleProtocol, SimplePortForward, SimplePortForwardsResponse,
+    LanDevice, LanDevicesResponse, PortForward, RuleProtocol, SimplePortForward,
+    SimplePortForwardsResponse,
 };
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -243,6 +244,21 @@ fn group_forwards(
     result
 }
 
+/// Port forward rows that no simple forward is built from. They are still live
+/// DNAT, so the UI lists them separately.
+fn other_port_forwards(config: &FirewallConfig) -> Vec<PortForward> {
+    let linked: HashSet<i64> = derive_entries(config)
+        .iter()
+        .filter_map(|e| e.nat_id)
+        .collect();
+    config
+        .port_forwards
+        .iter()
+        .filter(|pf| pf.id.is_none_or(|id| !linked.contains(&id)))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 fn derive_forwards(config: &FirewallConfig) -> Vec<SimplePortForward> {
     group_forwards(&derive_entries(config), &HashMap::new())
@@ -311,8 +327,12 @@ fn validate(request: &CreateSimplePortForwardRequest) -> Result<Vec<IpAddr>, Str
 pub async fn list(
     State(state): State<FirewallState>,
 ) -> Result<Json<SimplePortForwardsResponse>, AppError> {
-    let (_, forwards) = load_forwards(&state).await?;
-    Ok(Json(SimplePortForwardsResponse { forwards }))
+    let (config, forwards) = load_forwards(&state).await?;
+    let other_port_forwards = other_port_forwards(&config);
+    Ok(Json(SimplePortForwardsResponse {
+        forwards,
+        other_port_forwards,
+    }))
 }
 
 fn protocol_for(req: &CreateSimplePortForwardRequest) -> RuleProtocol {
@@ -680,7 +700,7 @@ pub async fn devices(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use keystone_core::{FirewallZone, ForwardRule, PortForward};
+    use keystone_core::{FirewallZone, ForwardRule};
     fn config() -> FirewallConfig {
         FirewallConfig {
             zones: vec![FirewallZone {
@@ -744,6 +764,49 @@ mod tests {
         assert_eq!(forwards[0].ipv6.as_deref(), Some("2001:db8::1"));
         c.forward_rules[0].source_zone = Some("lan".into());
         assert!(derive_forwards(&c).is_empty());
+    }
+
+    #[test]
+    fn port_forwards_without_a_simple_group_are_listed_as_other() {
+        let mut c = config();
+        c.forward_rules.push(ForwardRule {
+            id: Some(3),
+            name: "web".into(),
+            source_zone: Some("internet".into()),
+            dest_ip: Some("192.168.1.3".into()),
+            dest_port_start: Some(80),
+            protocol: Some(RuleProtocol::Tcp),
+            ..Default::default()
+        });
+        // Linked to the forward rule above.
+        c.port_forwards.push(PortForward {
+            id: Some(8),
+            source_zone: Some("internet".into()),
+            dest_ip: "192.168.1.3".into(),
+            external_port_start: 80,
+            dest_port: Some(80),
+            ..Default::default()
+        });
+        // CLI-created: no matching forward accept rule.
+        c.port_forwards.push(PortForward {
+            id: Some(9),
+            name: "cli".into(),
+            dest_ip: "192.168.1.9".into(),
+            external_port_start: 2222,
+            dest_port: Some(22),
+            ..Default::default()
+        });
+        // Range forwards are never part of a simple forward.
+        c.port_forwards.push(PortForward {
+            id: Some(10),
+            name: "range".into(),
+            dest_ip: "192.168.1.3".into(),
+            external_port_start: 5000,
+            external_port_end: Some(5010),
+            ..Default::default()
+        });
+        let other: Vec<_> = other_port_forwards(&c).into_iter().map(|p| p.id).collect();
+        assert_eq!(other, vec![Some(9), Some(10)]);
     }
 
     #[test]

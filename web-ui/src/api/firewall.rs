@@ -4,9 +4,9 @@ use keystone_core::{
     CreateSimplePortForwardRequest, DeleteResponse, FirewallApplyResponse, FirewallConfirmRequest,
     FirewallConfirmResponse, FirewallGlobalSettings, FirewallGlobalSettingsResponse,
     FirewallPreviewResponse, FirewallRollbackResponse, FirewallZone, FirewallZonesResponse,
-    ForwardRule, InputRule, LanDevice, LanDevicesResponse, SaveFirewallGlobalSettingsRequest,
-    SaveFirewallGlobalSettingsResponse, SimplePortForward, SimplePortForwardsResponse,
-    ZoneForwardPolicy,
+    ForwardRule, InputRule, LanDevice, LanDevicesResponse, PortForward,
+    SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, SimplePortForward,
+    SimplePortForwardsResponse, ZoneForwardPolicy,
 };
 
 use super::client::{SaveIdResponse, delete, extract_id, get, post, post_empty, put_no_response};
@@ -100,6 +100,17 @@ pub async fn delete_forward_rule(token: &str, id: i64) -> Result<DeleteResponse,
 pub async fn fetch_simple_forwards(token: &str) -> Result<Vec<SimplePortForward>, String> {
     let response: SimplePortForwardsResponse = get("/api/firewall/simple-forwards", token).await?;
     Ok(response.forwards)
+}
+
+/// Port forwards that are not part of any simple forward (e.g. created via CLI/API).
+pub async fn fetch_other_port_forwards(token: &str) -> Result<Vec<PortForward>, String> {
+    let response: SimplePortForwardsResponse = get("/api/firewall/simple-forwards", token).await?;
+    Ok(response.other_port_forwards)
+}
+
+/// Delete a raw port forward (DNAT) row
+pub async fn delete_port_forward(token: &str, id: i64) -> Result<DeleteResponse, String> {
+    delete(&format!("/api/firewall/port-forwards/{id}"), token).await
 }
 
 pub async fn fetch_lan_devices(token: &str) -> Result<Vec<LanDevice>, String> {

@@ -327,6 +327,35 @@ pub(crate) fn parse_rate_limit(rate: &str) -> Option<(u32, &'static str)> {
     Some((count, unit))
 }
 
+/// Longest log prefix the kernel keeps: `NF_LOG_PREFIXLEN` (128) less the
+/// terminating NUL.
+pub(crate) const MAX_LOG_PREFIX_BYTES: usize = 127;
+
+/// Log prefix of a logging rule: a stable `ks:<kind>:<id> ` tag, then the
+/// human prefix. The tag lets the live log attribute each line to its rule.
+/// The human part keeps quotes, backslashes, control characters and `=`
+/// replaced, since `=` would confuse the key=value fields the kernel prints
+/// after the prefix. The whole prefix is cut to the kernel limit at a
+/// character boundary, and the tag is never cut.
+pub(crate) fn log_prefix(kind: &str, id: Option<i64>, human: &str) -> String {
+    let tag = format!("ks:{kind}:{} ", id.unwrap_or_default());
+    let human: String = human
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '"' | '\\' | '=') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let mut prefix = format!("{tag}{human}");
+    while prefix.len() > MAX_LOG_PREFIX_BYTES {
+        prefix.pop();
+    }
+    prefix
+}
+
 /// Check that a rule's port and rate-limit options can be expressed exactly.
 ///
 /// Ports are only matchable for tcp and udp, and an unparsable rate limit
@@ -583,9 +612,11 @@ fn input_rule_for_protocol(
         section: SECTION_USER_INPUT,
         conds,
         log: rule.log_enabled.then(|| {
-            rule.log_prefix
+            let human = rule
+                .log_prefix
                 .clone()
-                .unwrap_or_else(|| format!("keystone-input-{}: ", rule.name))
+                .unwrap_or_else(|| format!("keystone-input-{}: ", rule.name));
+            log_prefix("input", rule.id, &human)
         }),
         verdict: rule.action.into(),
     })
@@ -929,9 +960,11 @@ fn forward_rule_for_protocol(
         section: SECTION_USER_FORWARD,
         conds,
         log: rule.log_enabled.then(|| {
-            rule.log_prefix
+            let human = rule
+                .log_prefix
                 .clone()
-                .unwrap_or_else(|| format!("keystone-fwd-{}: ", rule.name))
+                .unwrap_or_else(|| format!("keystone-fwd-{}: ", rule.name));
+            log_prefix("forward", rule.id, &human)
         }),
         verdict: rule.action.into(),
     })
@@ -1245,6 +1278,51 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(dnat_port(&pf), Some(80));
+    }
+
+    #[test]
+    fn log_prefix_carries_the_rule_tag_and_respects_the_kernel_limit() {
+        assert_eq!(
+            log_prefix("input", Some(12), "drop: "),
+            "ks:input:12 drop: "
+        );
+        let long = log_prefix("forward", Some(3), &"x".repeat(300));
+        assert_eq!(long.len(), MAX_LOG_PREFIX_BYTES);
+        assert!(long.starts_with("ks:forward:3 "), "{long}");
+        // Cutting never splits a character, so the result stays valid UTF-8.
+        let wide = log_prefix("input", Some(1), &"é".repeat(200));
+        assert!(wide.len() <= MAX_LOG_PREFIX_BYTES);
+        assert!(wide.starts_with("ks:input:1 "));
+    }
+
+    #[test]
+    fn log_prefix_neutralises_characters_that_break_the_log_line() {
+        assert_eq!(
+            log_prefix("input", None, "a=\"b\\c\n"),
+            "ks:input:0 a__b_c_"
+        );
+    }
+
+    #[test]
+    fn logging_input_rule_prefix_is_tagged_with_its_id() {
+        let config = FirewallConfig {
+            input_rules: vec![InputRule {
+                id: Some(12),
+                name: "Drop scans".into(),
+                log_enabled: true,
+                log_prefix: Some("scan: ".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let ruleset = build(&config);
+        let rule = ruleset
+            .input
+            .rules
+            .iter()
+            .find(|rule| rule.comment.starts_with("ks:input:12 "))
+            .expect("the logging rule is modelled");
+        assert_eq!(rule.log.as_deref(), Some("ks:input:12 scan: "));
     }
 
     fn pf_with(start: u16, end: Option<u16>, dest_port: Option<u16>) -> PortForward {

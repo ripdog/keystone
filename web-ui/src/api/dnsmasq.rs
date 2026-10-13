@@ -3,7 +3,9 @@
 use keystone_core::{
     DhcpLease, DhcpLeasesResponse, DnsmasqAddressOverride, DnsmasqApplyResponse,
     DnsmasqCnameRecord, DnsmasqConfig, DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord,
-    DnsmasqPreviewResponse, DnsmasqStateResponse, DnsmasqStaticLease, SaveStaticLeaseRequest,
+    DnsmasqPreviewResponse, DnsmasqStateResponse, DnsmasqStaticLease, SaveAddressOverrideRequest,
+    SaveCnameRecordRequest, SaveDhcpOptionRequest, SaveDhcpRangeRequest, SaveDnsmasqConfigRequest,
+    SaveHostRecordRequest, SaveStaticLeaseRequest,
 };
 
 use super::client::{delete_no_response, get, post, post_empty, put_no_response};
@@ -23,7 +25,8 @@ pub async fn fetch_dnsmasq_state(token: &str) -> Result<DnsmasqStateResponse, St
 
 /// Save global dnsmasq configuration
 pub async fn save_dnsmasq_config(token: &str, config: DnsmasqConfig) -> Result<(), String> {
-    put_no_response("/api/dnsmasq/config", token, &config).await
+    let request = SaveDnsmasqConfigRequest { config };
+    put_no_response("/api/dnsmasq/config", token, &request).await
 }
 
 // ============================================================================
@@ -40,7 +43,8 @@ struct SaveRangeResponse {
 
 /// Save a DHCP range
 pub async fn save_dhcp_range(token: &str, range: DnsmasqDhcpRange) -> Result<i64, String> {
-    let response: SaveRangeResponse = post("/api/dnsmasq/ranges", token, &range).await?;
+    let request = SaveDhcpRangeRequest { range };
+    let response: SaveRangeResponse = post("/api/dnsmasq/ranges", token, &request).await?;
     if response.success {
         Ok(response.range_id.unwrap_or(0))
     } else {
@@ -101,7 +105,8 @@ struct SaveOptionResponse {
 
 /// Save a DHCP option
 pub async fn save_dhcp_option(token: &str, option: DnsmasqDhcpOption) -> Result<i64, String> {
-    let response: SaveOptionResponse = post("/api/dnsmasq/options", token, &option).await?;
+    let request = SaveDhcpOptionRequest { option };
+    let response: SaveOptionResponse = post("/api/dnsmasq/options", token, &request).await?;
     if response.success {
         Ok(response.option_id.unwrap_or(0))
     } else {
@@ -128,7 +133,8 @@ struct SaveHostRecordResponse {
 
 /// Save a host record
 pub async fn save_host_record(token: &str, record: DnsmasqHostRecord) -> Result<i64, String> {
-    let response: SaveHostRecordResponse = post("/api/dnsmasq/hosts", token, &record).await?;
+    let request = SaveHostRecordRequest { record };
+    let response: SaveHostRecordResponse = post("/api/dnsmasq/hosts", token, &request).await?;
     if response.success {
         Ok(response.record_id.unwrap_or(0))
     } else {
@@ -155,7 +161,8 @@ struct SaveCnameResponse {
 
 /// Save a CNAME record
 pub async fn save_cname_record(token: &str, record: DnsmasqCnameRecord) -> Result<i64, String> {
-    let response: SaveCnameResponse = post("/api/dnsmasq/cnames", token, &record).await?;
+    let request = SaveCnameRecordRequest { record };
+    let response: SaveCnameResponse = post("/api/dnsmasq/cnames", token, &request).await?;
     if response.success {
         Ok(response.record_id.unwrap_or(0))
     } else {
@@ -185,8 +192,8 @@ pub async fn save_address_override(
     token: &str,
     override_entry: DnsmasqAddressOverride,
 ) -> Result<i64, String> {
-    let response: SaveOverrideResponse =
-        post("/api/dnsmasq/overrides", token, &override_entry).await?;
+    let request = SaveAddressOverrideRequest { override_entry };
+    let response: SaveOverrideResponse = post("/api/dnsmasq/overrides", token, &request).await?;
     if response.success {
         Ok(response.override_id.unwrap_or(0))
     } else {

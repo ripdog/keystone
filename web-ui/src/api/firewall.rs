@@ -5,7 +5,8 @@ use keystone_core::{
     FirewallConfirmResponse, FirewallGlobalSettings, FirewallGlobalSettingsResponse,
     FirewallPreviewResponse, FirewallRollbackResponse, FirewallZone, FirewallZonesResponse,
     ForwardRule, InputRule, LanDevice, LanDevicesResponse, PortForward,
-    SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, SimplePortForward,
+    SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, SaveFirewallZoneRequest,
+    SaveForwardRuleRequest, SaveInputRuleRequest, SaveZoneForwardRequest, SimplePortForward,
     SimplePortForwardsResponse, ZoneForwardPolicy,
 };
 
@@ -23,7 +24,12 @@ pub async fn fetch_firewall_zones(token: &str) -> Result<Vec<FirewallZone>, Stri
 
 /// Save a firewall zone
 pub async fn save_firewall_zone(token: &str, zone: FirewallZone) -> Result<i64, String> {
-    let response: SaveIdResponse = post("/api/firewall/zones", token, &zone).await?;
+    let response: SaveIdResponse = post(
+        "/api/firewall/zones",
+        token,
+        &SaveFirewallZoneRequest { zone },
+    )
+    .await?;
     extract_id(response)
 }
 
@@ -43,7 +49,12 @@ pub async fn fetch_zone_forwards(token: &str) -> Result<Vec<ZoneForwardPolicy>, 
 
 /// Save a zone forward policy
 pub async fn save_zone_forward(token: &str, forward: ZoneForwardPolicy) -> Result<i64, String> {
-    let response: SaveIdResponse = post("/api/firewall/zone-forwards", token, &forward).await?;
+    let response: SaveIdResponse = post(
+        "/api/firewall/zone-forwards",
+        token,
+        &SaveZoneForwardRequest { forward },
+    )
+    .await?;
     extract_id(response)
 }
 
@@ -63,7 +74,12 @@ pub async fn fetch_input_rules(token: &str) -> Result<Vec<InputRule>, String> {
 
 /// Save an input rule
 pub async fn save_input_rule(token: &str, rule: InputRule) -> Result<i64, String> {
-    let response: SaveIdResponse = post("/api/firewall/input-rules", token, &rule).await?;
+    let response: SaveIdResponse = post(
+        "/api/firewall/input-rules",
+        token,
+        &SaveInputRuleRequest { rule },
+    )
+    .await?;
     extract_id(response)
 }
 
@@ -83,7 +99,12 @@ pub async fn fetch_forward_rules(token: &str) -> Result<Vec<ForwardRule>, String
 
 /// Save a forward rule
 pub async fn save_forward_rule(token: &str, rule: ForwardRule) -> Result<i64, String> {
-    let response: SaveIdResponse = post("/api/firewall/forward-rules", token, &rule).await?;
+    let response: SaveIdResponse = post(
+        "/api/firewall/forward-rules",
+        token,
+        &SaveForwardRuleRequest { rule },
+    )
+    .await?;
     extract_id(response)
 }
 

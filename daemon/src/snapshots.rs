@@ -2404,7 +2404,10 @@ pub(crate) mod tests {
                 .unwrap();
         }
         // The copy as an older daemon left it: the drop was not yet applied.
-        sqlx::query("DELETE FROM _sqlx_migrations WHERE version >= 20261015000001")
+        // Only the drop's history row is removed; later migrations (which add
+        // columns and cannot run twice) stay recorded, and sqlx applies the
+        // missing drop when the copy is migrated.
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 20261015000001")
             .execute(&pool)
             .await
             .unwrap();

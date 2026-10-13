@@ -28,6 +28,15 @@ pub const IFNAMSIZ_MAX: usize = 15;
 /// Prefix of the IFB device that shapes the download direction of a WAN.
 const IFB_PREFIX: &str = "ifb4";
 
+/// Priority of the matchall filter that redirects WAN ingress to the IFB. The
+/// kernel allows one matchall filter per chain, and `tc filter replace` cannot
+/// update it: a second replace fails with "File exists". The filter is
+/// therefore deleted when present and added again on every apply.
+const REDIRECT_PRIO: u32 = 1;
+
+/// Handle given to the redirect filter, so it can be named explicitly.
+const REDIRECT_HANDLE: u32 = 1;
+
 /// How often the reconciler checks that the shaper is still in place.
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -163,6 +172,8 @@ pub enum Removal {
     EgressCake,
     /// The ingress qdisc of the WAN interface, with its redirect filter.
     IngressQdisc,
+    /// The matchall filter that redirects WAN ingress to the IFB device.
+    RedirectFilter,
     /// The IFB device carrying the download shaper.
     IfbDevice,
 }
@@ -270,6 +281,25 @@ fn upload_command(config: &SqmConfig) -> Command {
     tc(args)
 }
 
+/// Delete the redirect filter if it is present. Its replacement is added by the
+/// following step.
+fn remove_redirect(wan: &str) -> Step {
+    Step::Remove {
+        what: Removal::RedirectFilter,
+        device: wan.to_string(),
+        command: tc(argv![
+            "filter",
+            "del",
+            "dev",
+            wan,
+            "parent",
+            "ffff:",
+            "prio",
+            REDIRECT_PRIO
+        ]),
+    }
+}
+
 fn download_steps(config: &SqmConfig, ifb: &str) -> Vec<Step> {
     let wan = config.interface.as_str();
     let mut cake = argv!["qdisc", "replace", "dev", ifb, "root", "cake"];
@@ -283,9 +313,28 @@ fn download_steps(config: &SqmConfig, ifb: &str) -> Vec<Step> {
         Step::Run(tc(argv![
             "qdisc", "replace", "dev", wan, "handle", "ffff:", "ingress"
         ])),
+        // Leaves WAN ingress unredirected for a moment while it is rebuilt.
+        remove_redirect(wan),
         Step::Run(tc(argv![
-            "filter", "replace", "dev", wan, "parent", "ffff:", "protocol", "all", "prio", "1",
-            "matchall", "action", "mirred", "egress", "redirect", "dev", ifb
+            "filter",
+            "add",
+            "dev",
+            wan,
+            "parent",
+            "ffff:",
+            "protocol",
+            "all",
+            "prio",
+            REDIRECT_PRIO,
+            "handle",
+            REDIRECT_HANDLE,
+            "matchall",
+            "action",
+            "mirred",
+            "egress",
+            "redirect",
+            "dev",
+            ifb
         ])),
         Step::Run(tc(cake)),
     ]
@@ -450,6 +499,29 @@ async fn ifb_present(ifb: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `filters` (from `tc -j filter show`) include the redirect filter:
+/// a matchall filter at the redirect's priority. The listing also has an
+/// entry for the chain itself, which has the same kind and priority.
+fn has_redirect_filter(filters: &[Value]) -> bool {
+    filters.iter().any(|filter| {
+        filter.get("kind").and_then(Value::as_str) == Some("matchall")
+            && filter.get("pref").and_then(Value::as_u64) == Some(u64::from(REDIRECT_PRIO))
+    })
+}
+
+/// Whether the WAN ingress carries the redirect filter.
+async fn redirect_present(wan: &str) -> bool {
+    let Some(text) = query(
+        "tc",
+        &["-j", "filter", "show", "dev", wan, "parent", "ffff:"],
+    )
+    .await
+    else {
+        return false;
+    };
+    serde_json::from_str::<Vec<Value>>(&text).is_ok_and(|filters| has_redirect_filter(&filters))
+}
+
 /// Whether `qdiscs` include an ingress qdisc.
 fn has_ingress_qdisc(qdiscs: &[Value]) -> bool {
     qdiscs
@@ -470,6 +542,7 @@ async fn removal_present(what: Removal, device: &str) -> bool {
                 .is_some_and(|qdiscs| has_ingress_qdisc(&qdiscs))
                 && ifb_present(&ifb_name(device)).await
         }
+        Removal::RedirectFilter => redirect_present(device).await,
         Removal::IfbDevice => ifb_present(device).await,
     }
 }
@@ -479,7 +552,14 @@ async fn execute(steps: &[Step]) -> Result<()> {
         match step {
             Step::Run(command) => run_checked(command).await?,
             Step::CreateIfb { name, command } => {
-                if !link_exists(name).await {
+                // An existing IFB is reused, so re-applying is harmless. Any
+                // other device with this name would make the shaper fail later.
+                if !ifb_present(name).await {
+                    if link_exists(name).await {
+                        bail!(
+                            "{name} already exists and is not an IFB device; rename or remove it, or choose another WAN interface"
+                        );
+                    }
                     run_checked(command).await?;
                 }
             }
@@ -614,6 +694,13 @@ pub fn start_reconciler(db: Database) {
 mod tests {
     use super::*;
 
+    /// Environment switch for the namespace test. It needs `unshare(1)`,
+    /// unprivileged user namespaces, and the cake, ifb, mirred and matchall
+    /// kernel modules (the kernel loads them on first use).
+    const NETNS_TESTS_ENV: &str = "KEYSTONE_NETNS_TESTS";
+    /// Set in the child process that runs inside the namespace.
+    const NETNS_INNER_ENV: &str = "KEYSTONE_NETNS_INNER";
+
     fn enabled(download: u32, upload: u32) -> SqmConfig {
         SqmConfig {
             enabled: true,
@@ -686,7 +773,8 @@ mod tests {
                 "ip link add name ifb4enp1s0 type ifb",
                 "ip link set dev ifb4enp1s0 up",
                 "tc qdisc replace dev enp1s0 handle ffff: ingress",
-                "tc filter replace dev enp1s0 parent ffff: protocol all prio 1 matchall action mirred egress redirect dev ifb4enp1s0",
+                "tc filter del dev enp1s0 parent ffff: prio 1",
+                "tc filter add dev enp1s0 parent ffff: protocol all prio 1 handle 1 matchall action mirred egress redirect dev ifb4enp1s0",
                 "tc qdisc replace dev ifb4enp1s0 root cake bandwidth 90000kbit ethernet diffserv4 dual-dsthost nat ingress",
             ]
         );
@@ -713,10 +801,9 @@ mod tests {
             steps[0],
             "tc qdisc replace dev eth0 root cake bandwidth 5000kbit pppoe-vcmux overhead 8 mpu 64 besteffort triple-isolate wash egress ack-filter"
         );
-        assert_eq!(
-            steps[5],
-            "tc qdisc replace dev ifb4eth0 root cake bandwidth 50000kbit pppoe-vcmux overhead 8 mpu 64 besteffort triple-isolate wash ingress"
-        );
+        assert!(steps.contains(
+            &"tc qdisc replace dev ifb4eth0 root cake bandwidth 50000kbit pppoe-vcmux overhead 8 mpu 64 besteffort triple-isolate wash ingress".to_string()
+        ));
     }
 
     #[test]
@@ -765,12 +852,75 @@ mod tests {
     #[test]
     fn enabled_both_directions_plans_upload_then_download() {
         let steps = rendered(&enabled(90_000, 18_000));
-        assert_eq!(steps.len(), 6);
         assert!(steps[0].starts_with("tc qdisc replace dev enp1s0 root cake bandwidth 18000kbit"));
         assert_eq!(steps[1], "ip link add name ifb4enp1s0 type ifb");
         assert!(
-            steps[5].starts_with("tc qdisc replace dev ifb4enp1s0 root cake bandwidth 90000kbit")
+            steps
+                .last()
+                .unwrap()
+                .starts_with("tc qdisc replace dev ifb4enp1s0 root cake bandwidth 90000kbit")
         );
+    }
+
+    #[test]
+    fn redirect_filter_is_never_replaced_in_place() {
+        // The kernel rejects a second matchall filter with "File exists", so
+        // `filter replace` must not be planned for it. Re-applying deletes the
+        // filter first.
+        for config in [enabled(90_000, 18_000), enabled(90_000, 0)] {
+            let steps = desired_steps(&config);
+            assert!(
+                steps
+                    .iter()
+                    .all(|step| !step.render().contains("filter replace")),
+                "{:?}",
+                steps
+            );
+            let add = steps
+                .iter()
+                .position(|step| step.render().contains("filter add"))
+                .expect("the redirect is added");
+            let removed_first = steps[..add].iter().any(|step| {
+                matches!(
+                    step,
+                    Step::Remove { what: Removal::RedirectFilter, device, .. } if device == "enp1s0"
+                )
+            });
+            assert!(removed_first, "the redirect is removed before it is added");
+        }
+    }
+
+    #[test]
+    fn redirect_presence_is_read_from_the_filter_listing() {
+        // Sample of `tc -j filter show dev <wan> parent ffff:`: a chain entry and
+        // the filter itself, both matchall at priority 1.
+        let listing: Vec<Value> = serde_json::from_str(
+            r#"[{"protocol":"all","pref":1,"kind":"matchall","chain":0},{"protocol":"all","pref":1,"kind":"matchall","chain":0,"options":{"handle":1,"actions":[{"kind":"mirred","to_dev":"ifb4wan0"}]}}]"#,
+        )
+        .unwrap();
+        assert!(has_redirect_filter(&listing));
+        assert!(!has_redirect_filter(&[]));
+        let other_priority: Vec<Value> =
+            serde_json::from_str(r#"[{"protocol":"all","pref":5,"kind":"matchall"}]"#).unwrap();
+        assert!(!has_redirect_filter(&other_priority));
+    }
+
+    #[test]
+    fn every_redirect_removal_names_the_filter_it_deletes() {
+        // A removal must delete the same device and priority that the add uses.
+        let steps = desired_steps(&enabled(90_000, 0));
+        let removal = steps
+            .iter()
+            .find_map(|step| match step {
+                Step::Remove {
+                    what: Removal::RedirectFilter,
+                    command,
+                    ..
+                } => Some(command.render()),
+                _ => None,
+            })
+            .expect("a redirect removal");
+        assert_eq!(removal, "tc filter del dev enp1s0 parent ffff: prio 1");
     }
 
     #[test]
@@ -836,5 +986,129 @@ mod tests {
             explain_failure(&ifb, "RTNETLINK answers: Unknown device type."),
             Some(IFB_MISSING_HINT)
         );
+    }
+
+    fn netns_tests_enabled() -> bool {
+        std::env::var_os(NETNS_TESTS_ENV).is_some_and(|value| value == "1")
+    }
+
+    /// Run the real apply, twice, against a dummy WAN device in a fresh user
+    /// and network namespace. Enabled by `KEYSTONE_NETNS_TESTS=1`; otherwise it
+    /// returns immediately. The namespace is entered by re-running this test
+    /// binary under `unshare -rn`.
+    #[tokio::test]
+    async fn plan_applies_twice_in_a_network_namespace() {
+        if !netns_tests_enabled() || std::env::var_os(NETNS_INNER_ENV).is_some() {
+            return;
+        }
+        let exe = std::env::current_exe().expect("test binary path");
+        let output = std::process::Command::new("unshare")
+            .arg("-rn")
+            .arg(exe)
+            .args([
+                "--exact",
+                "sqm::apply::tests::netns_inner_applies_twice",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(NETNS_INNER_ENV, "1")
+            .env(NETNS_TESTS_ENV, "1")
+            .output()
+            .expect("unshare must be installed");
+        let log = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success(), "namespace run failed:\n{log}");
+        assert!(log.contains("netns: all steps succeeded"), "{log}");
+    }
+
+    async fn run_host_command(program: &str, args: &[&str]) -> String {
+        let output = tokio::process::Command::new(program)
+            .args(args)
+            .output()
+            .await
+            .unwrap_or_else(|error| panic!("{program}: {error}"));
+        assert!(
+            output.status.success(),
+            "{program} {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    fn wan_config(interface: &str, download: u32, upload: u32) -> SqmConfig {
+        SqmConfig {
+            enabled: true,
+            interface: interface.to_string(),
+            download_kbit: download,
+            upload_kbit: upload,
+            ..SqmConfig::default()
+        }
+    }
+
+    /// Runs inside the namespace started by the test above.
+    #[tokio::test]
+    async fn netns_inner_applies_twice() {
+        if std::env::var_os(NETNS_INNER_ENV).is_none() {
+            return;
+        }
+        let wan = "wan0";
+        run_host_command("ip", &["link", "add", wan, "type", "dummy"]).await;
+        run_host_command("ip", &["link", "set", wan, "up"]).await;
+
+        let shaped = wan_config(wan, 90_000, 18_000);
+        apply_config(&shaped, None).await.expect("first apply");
+        apply_config(&shaped, Some(&shaped))
+            .await
+            .expect("re-applying the same configuration");
+
+        // Changed rates: the CAKE qdiscs are replaced and the redirect is rebuilt.
+        let slower = wan_config(wan, 50_000, 18_000);
+        apply_config(&slower, Some(&shaped))
+            .await
+            .expect("applying a changed configuration");
+
+        let filters: Vec<Value> = serde_json::from_str(
+            &run_host_command(
+                "tc",
+                &["-j", "filter", "show", "dev", wan, "parent", "ffff:"],
+            )
+            .await,
+        )
+        .expect("tc filter listing is JSON");
+        let redirects = filters
+            .iter()
+            .filter(|filter| filter.pointer("/options/handle").is_some())
+            .count();
+        assert_eq!(redirects, 1, "exactly one redirect filter: {filters:?}");
+
+        let disabled = SqmConfig {
+            enabled: false,
+            ..slower.clone()
+        };
+        apply_config(&disabled, Some(&slower))
+            .await
+            .expect("disabling shaping");
+        apply_config(&disabled, Some(&disabled))
+            .await
+            .expect("disabling shaping again");
+        let remaining = run_host_command("tc", &["-j", "qdisc", "show", "dev", wan]).await;
+        assert!(!remaining.contains("\"cake\""), "{remaining}");
+
+        // A failing command reports the tc error text, not only its exit status.
+        let missing = wan_config("nosuch0", 90_000, 18_000);
+        let error = apply_config(&missing, None)
+            .await
+            .expect_err("a missing WAN device fails");
+        let message = format!("{error:#}");
+        assert!(message.contains("Cannot find device"), "{message}");
+        assert!(
+            message.contains("tc qdisc replace dev nosuch0"),
+            "{message}"
+        );
+
+        println!("netns: all steps succeeded");
     }
 }

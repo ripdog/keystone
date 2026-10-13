@@ -56,15 +56,11 @@ pub enum Commands {
         token: Option<String>,
     },
 
-    /// Apply a new system configuration (reads JSON from stdin)
+    /// Apply all saved configuration (networkd, firewall, dnsmasq, caddy)
     Apply {
         /// JWT token for authentication (reads from file if not provided)
         #[arg(short, long, env = "KEYSTONE_TOKEN")]
         token: Option<String>,
-
-        /// Path to JSON config file (reads from stdin if not provided)
-        #[arg(short, long)]
-        file: Option<String>,
     },
 
     /// Manage users

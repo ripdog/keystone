@@ -76,13 +76,51 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-pub fn apply(response: &ApplyConfigResponse) {
+pub fn apply_all(response: &ApplyAllResponse) {
     if response.success {
-        println!("✓ Configuration applied: {}", response.message);
+        println!("✓ {}", response.message);
     } else {
-        println!("✗ Failed to apply configuration: {}", response.message);
-        for err in &response.errors {
-            println!("  - {}", err);
+        println!("✗ {}", response.message);
+    }
+    let components = [
+        ("networkd", &response.components.networkd),
+        ("firewall", &response.components.firewall),
+        ("dnsmasq", &response.components.dnsmasq),
+        ("caddy", &response.components.caddy),
+    ];
+    for (name, result) in components {
+        let mark = if result.skipped {
+            "-"
+        } else if result.success {
+            "✓"
+        } else {
+            "✗"
+        };
+        let suffix = if result.skipped { " (skipped)" } else { "" };
+        println!("  {mark} {name}{suffix}: {}", result.message);
+    }
+    if response.firewall_pending_confirmation {
+        println!();
+        println!(
+            "Firewall changes are pending confirmation and will be rolled back if not confirmed."
+        );
+        if let Some(deadline) = response.firewall_confirm_deadline {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            println!(
+                "  Deadline: {} (in {}s)",
+                deadline,
+                deadline.saturating_sub(now)
+            );
+        }
+        if let Some(session_id) = &response.firewall_session_id {
+            println!("  Session ID: {}", session_id);
+            println!(
+                "  Run 'keystonectl firewall confirm --session-id {}'",
+                session_id
+            );
         }
     }
 }

@@ -31,10 +31,10 @@ use axum::{
 use config::Config;
 use db::Database;
 use keystone_core::{
-    ApplyConfigRequest, ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse,
-    DashboardResponse, DeleteUserRequest, DeleteUserResponse, DeleteVlanResponse,
-    GlobalSettingsResponse, InterfaceConfigResponse, InterfaceConfigsResponse, InterfaceCounters,
-    KeystoneError, LoginRequest, LoginResponse, ManagedInterfacesResponse, RenewInterfaceResponse,
+    ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse, DashboardResponse,
+    DeleteUserRequest, DeleteUserResponse, DeleteVlanResponse, GlobalSettingsResponse,
+    InterfaceConfigResponse, InterfaceConfigsResponse, InterfaceCounters, KeystoneError,
+    LoginRequest, LoginResponse, ManagedInterfacesResponse, RenewInterfaceResponse,
     SaveGlobalSettingsRequest, SaveGlobalSettingsResponse, SaveInterfaceConfigRequest,
     SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
     SaveUserRequest, SaveUserResponse, SaveVlanConfigRequest, SaveVlanConfigResponse, SystemCheck,
@@ -174,7 +174,6 @@ async fn main() -> anyhow::Result<()> {
     let protected = Router::new()
         .route("/state", get(get_state))
         .route("/dashboard", get(get_dashboard))
-        .route("/apply", post(apply_config))
         .route("/apply-networkd", post(apply_networkd))
         .route("/apply-all", post(apply_all))
         .route("/networkd-preview", get(networkd_preview))
@@ -518,7 +517,6 @@ fn is_blocked_before_setup(path: &str) -> bool {
     );
 
     path == "/dashboard"
-        || path == "/apply"
         || path == "/apply-networkd"
         || path == "/apply-all"
         || path == "/networkd-preview"
@@ -816,31 +814,6 @@ fn read_system_state(configs: &[keystone_core::InterfaceConfig]) -> anyhow::Resu
     interfaces.sort_by(|a, b| a.name.cmp(&b.name));
 
     Ok(SystemState { interfaces })
-}
-
-/// POST /apply - Apply a new configuration
-async fn apply_config(
-    State(_state): State<Arc<AppState>>,
-    Json(_request): Json<ApplyConfigRequest>,
-) -> Result<Json<ApplyConfigResponse>, AppError> {
-    info!("Applying configuration");
-
-    // TODO: Implement actual configuration application
-    // This should:
-    // 1. Validate the configuration
-    // 2. Generate systemd-networkd .network files
-    // 3. Generate nftables configuration
-    // 4. Reload services (systemctl restart systemd-networkd, nft -f /etc/nftables.conf)
-
-    // Mock response for now
-    let response = ApplyConfigResponse {
-        success: true,
-        message: "Configuration applied successfully (mock)".to_string(),
-        errors: Vec::new(),
-    };
-
-    info!("Configuration applied successfully");
-    Ok(Json(response))
 }
 
 /// GET /managed-interfaces - Get all managed interfaces

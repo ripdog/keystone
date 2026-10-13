@@ -2459,12 +2459,6 @@ pub struct DashboardResponse {
     pub timestamp_ms: u64,
 }
 
-/// Request to apply a new system configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApplyConfigRequest {
-    pub state: SystemState,
-}
-
 /// Response from applying configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyConfigResponse {

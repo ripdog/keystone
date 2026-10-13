@@ -8,8 +8,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use keystone_core::{
-    ApplyConfigRequest, ApplyConfigResponse, CompleteSetupResponse, DashboardResponse,
-    DeleteUserRequest, DeleteUserResponse, LoginRequest, LoginResponse, ManagedInterfacesResponse,
+    ApplyAllResponse, CompleteSetupResponse, DashboardResponse, DeleteUserRequest,
+    DeleteUserResponse, LoginRequest, LoginResponse, ManagedInterfacesResponse,
     SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SaveUserRequest, SaveUserResponse,
     SystemState, UsersResponse,
 };
@@ -82,17 +82,6 @@ fn format_bytes(bytes: u64) -> String {
         format!("{:.2}K", bytes as f64 / 1_000.0)
     } else {
         format!("{}", bytes)
-    }
-}
-
-pub fn apply(response: &ApplyConfigResponse) {
-    if response.success {
-        println!("✓ Configuration applied: {}", response.message);
-    } else {
-        println!("✗ Failed to apply configuration: {}", response.message);
-        for err in &response.errors {
-            println!("  - {}", err);
-        }
     }
 }
 
@@ -226,14 +215,11 @@ async fn main() -> Result<()> {
             output(cli.json, &response, pretty::dashboard);
         }
 
-        Some(Commands::Apply { token, file }) => {
+        Some(Commands::Apply { token }) => {
             let authed = client.authed(get_token(token)?);
-            let json_input = read_json_input(file.as_deref())?;
-            let state: SystemState =
-                serde_json::from_str(&json_input).context("Invalid JSON input")?;
-            let request = ApplyConfigRequest { state };
-            let response: ApplyConfigResponse = authed.post("/apply", &request).await?;
-            output(cli.json, &response, pretty::apply);
+            let response: ApplyAllResponse =
+                authed.post("/apply-all", &serde_json::json!({})).await?;
+            output(cli.json, &response, pretty::apply_all);
             if !response.success {
                 std::process::exit(1);
             }

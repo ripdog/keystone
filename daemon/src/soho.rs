@@ -211,6 +211,7 @@ fn create_lan_config(
         dhcp_prefix_delegation: Some(DhcpPrefixDelegationConfig {
             uplink_interface: Some(wan_interface.to_string()),
             subnet_id: Some(subnet_id),
+            ipv6_token: Some("::1".to_string()),
             announce: true,
         }),
         ip_forward: IpForwardMode::Yes,

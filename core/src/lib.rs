@@ -473,6 +473,10 @@ pub struct DhcpPrefixDelegationConfig {
     pub uplink_interface: Option<String>,
     /// Stable subnet identifier selected from the delegated prefix.
     pub subnet_id: Option<u64>,
+    /// Optional IPv6 interface identifier to use within the delegated prefix.
+    /// For example, `::1` assigns the router address ending in `::1` instead of EUI-64.
+    #[serde(default)]
+    pub ipv6_token: Option<String>,
     /// Advertise the delegated subnet through Router Advertisements.
     #[serde(default = "default_true")]
     pub announce: bool,
@@ -483,6 +487,7 @@ impl Default for DhcpPrefixDelegationConfig {
         Self {
             uplink_interface: None,
             subnet_id: None,
+            ipv6_token: None,
             announce: true,
         }
     }

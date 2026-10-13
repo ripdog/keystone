@@ -517,6 +517,9 @@ fn generate_dhcp_prefix_delegation_section(
     if let Some(subnet_id) = cfg.subnet_id {
         writeln!(output, "SubnetId={}", subnet_id).unwrap();
     }
+    if let Some(token) = &cfg.ipv6_token {
+        writeln!(output, "Token=static:{}", token).unwrap();
+    }
     writeln!(output, "Announce={}", bool_to_yesno(cfg.announce)).unwrap();
     writeln!(output).unwrap();
     output
@@ -999,6 +1002,7 @@ mod tests {
             dhcp_prefix_delegation: Some(keystone_core::DhcpPrefixDelegationConfig {
                 uplink_interface: Some("wan0".to_string()),
                 subnet_id: Some(1),
+                ipv6_token: Some("::1".to_string()),
                 announce: true,
             }),
             ip_forward: IpForwardMode::Yes,
@@ -1010,6 +1014,7 @@ mod tests {
         assert!(lan_output.contains("[DHCPPrefixDelegation]"));
         assert!(lan_output.contains("UplinkInterface=wan0"));
         assert!(lan_output.contains("SubnetId=1"));
+        assert!(lan_output.contains("Token=static:::1"));
         assert!(lan_output.contains("Announce=yes"));
 
         let configs = [wan, lan];

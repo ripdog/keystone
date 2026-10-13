@@ -53,6 +53,7 @@ pub fn InterfaceEditPage(
     let (pd_enabled, set_pd_enabled) = signal(false);
     let (pd_uplink, set_pd_uplink) = signal(String::new());
     let (pd_subnet_id, set_pd_subnet_id) = signal(String::new());
+    let (pd_ipv6_token, set_pd_ipv6_token) = signal(String::new());
     let (pd_announce, set_pd_announce) = signal(true);
     let (ip_forward, set_ip_forward) = signal(IpForwardMode::No);
     let (link_mtu, set_link_mtu) = signal(String::new());
@@ -121,6 +122,7 @@ pub fn InterfaceEditPage(
                                     .map(|id| id.to_string())
                                     .unwrap_or_default(),
                             );
+                            set_pd_ipv6_token.set(pd_cfg.ipv6_token.clone().unwrap_or_default());
                             set_pd_announce.set(pd_cfg.announce);
                         }
                         set_ip_forward.set(cfg.ip_forward);
@@ -313,6 +315,14 @@ pub fn InterfaceEditPage(
             if let Some(token) = auth_token.get()
                 && let Some(current) = config.get()
             {
+                let ipv6_token = pd_ipv6_token.get().trim().to_string();
+                if !ipv6_token.is_empty() && ipv6_token.parse::<std::net::Ipv6Addr>().is_err() {
+                    set_error.set(Some(
+                        "IPv6 token must be a valid IPv6 address, such as ::1".to_string(),
+                    ));
+                    set_saving.set(false);
+                    return;
+                }
                 let gw = gateway.get();
                 let desc = description.get();
                 let current_dhcp_mode = dhcp_mode.get();
@@ -391,6 +401,10 @@ pub fn InterfaceEditPage(
                                 Some(uplink)
                             },
                             subnet_id: pd_subnet_id.get().parse::<u64>().ok(),
+                            ipv6_token: {
+                                let value = pd_ipv6_token.get().trim().to_string();
+                                if value.is_empty() { None } else { Some(value) }
+                            },
                             announce: pd_announce.get(),
                         })
                     } else {
@@ -521,9 +535,9 @@ pub fn InterfaceEditPage(
                         <p class="text-gray-500 text-sm mt-1">"Optional human-readable description"</p>
                     </div>
 
-                    // DHCP Mode
+                    // DHCP Client Mode
                     <div>
-                        <label class="block text-gray-300 mb-2 font-medium">"DHCP Mode"</label>
+                        <label class="block text-gray-300 mb-2 font-medium">"DHCP Client Mode"</label>
                         <select
                             class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
                             on:change=move |ev| {
@@ -896,6 +910,17 @@ pub fn InterfaceEditPage(
                                         on:input=move |ev| set_pd_subnet_id.set(event_target_value(&ev))
                                         class="w-full bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
                                     />
+                                </div>
+                                <div class="col-span-2">
+                                    <label class="block text-gray-400 text-sm mb-1">"Router IPv6 Address Token (optional)"</label>
+                                    <input
+                                        type="text"
+                                        placeholder="::1 (leave blank for automatic EUI-64)"
+                                        prop:value=move || pd_ipv6_token.get()
+                                        on:input=move |ev| set_pd_ipv6_token.set(event_target_value(&ev))
+                                        class="w-full bg-gray-700 text-white rounded px-3 py-1.5 border border-gray-600"
+                                    />
+                                    <p class="text-xs text-gray-500 mt-1">"Uses this IPv6 interface identifier within the delegated prefix. For example, ::1 makes the router address end in ::1."</p>
                                 </div>
                                 <label class="flex items-center gap-2 cursor-pointer col-span-2">
                                     <input

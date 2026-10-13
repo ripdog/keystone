@@ -290,6 +290,16 @@ impl<'a> InterfacesDb<'a> {
         for name in &config.vlans {
             keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
         }
+        if let Some(token) = config
+            .dhcp_prefix_delegation
+            .as_ref()
+            .and_then(|pd| pd.ipv6_token.as_deref())
+        {
+            anyhow::ensure!(
+                token.parse::<std::net::Ipv6Addr>().is_ok(),
+                "DHCP prefix delegation IPv6 token must be a valid IPv6 address (for example ::1)"
+            );
+        }
         if let Some(dhcpv6) = &config.dhcpv6_client {
             anyhow::ensure!(
                 matches!(
@@ -313,7 +323,8 @@ impl<'a> InterfacesDb<'a> {
                    role = ?, enabled = ?, description = ?, dhcp_mode = ?, gateway = ?,
                    ipv6_accept_ra = ?, ipv6_send_ra = ?,
                    dhcp_prefix_delegation_enabled = ?, dhcp_prefix_delegation_uplink = ?,
-                   dhcp_prefix_delegation_subnet_id = ?, dhcp_prefix_delegation_announce = ?,
+                   dhcp_prefix_delegation_subnet_id = ?, dhcp_prefix_delegation_token = ?,
+                   dhcp_prefix_delegation_announce = ?,
                    ip_forward = ?, ip_masquerade = ?, link_local = ?, required_for_online = ?,
                    activation_policy = ?, mtu = ?, updated_at = ?
                    WHERE id = ?"#,
@@ -332,6 +343,7 @@ impl<'a> InterfacesDb<'a> {
                     .and_then(|pd| pd.subnet_id)
                     .map(|id| id as i64),
             )
+            .bind(prefix_delegation.and_then(|pd| pd.ipv6_token.as_deref()))
             .bind(prefix_delegation.is_some_and(|pd| pd.announce))
             .bind(config.ip_forward.to_string())
             .bind(config.ip_masquerade.to_string())
@@ -356,9 +368,9 @@ impl<'a> InterfacesDb<'a> {
                    (interface_name, role, enabled, description, dhcp_mode, gateway,
                     ipv6_accept_ra, ipv6_send_ra, dhcp_prefix_delegation_enabled,
                     dhcp_prefix_delegation_uplink, dhcp_prefix_delegation_subnet_id,
-                    dhcp_prefix_delegation_announce, ip_forward, ip_masquerade, link_local,
+                    dhcp_prefix_delegation_token, dhcp_prefix_delegation_announce, ip_forward, ip_masquerade, link_local,
                     required_for_online, activation_policy, mtu, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(interface_name) DO UPDATE SET
                      role = excluded.role,
                      enabled = excluded.enabled,
@@ -370,6 +382,7 @@ impl<'a> InterfacesDb<'a> {
                      dhcp_prefix_delegation_enabled = excluded.dhcp_prefix_delegation_enabled,
                      dhcp_prefix_delegation_uplink = excluded.dhcp_prefix_delegation_uplink,
                      dhcp_prefix_delegation_subnet_id = excluded.dhcp_prefix_delegation_subnet_id,
+                     dhcp_prefix_delegation_token = excluded.dhcp_prefix_delegation_token,
                      dhcp_prefix_delegation_announce = excluded.dhcp_prefix_delegation_announce,
                      ip_forward = excluded.ip_forward,
                      ip_masquerade = excluded.ip_masquerade,
@@ -394,6 +407,7 @@ impl<'a> InterfacesDb<'a> {
                     .and_then(|pd| pd.subnet_id)
                     .map(|id| id as i64),
             )
+            .bind(prefix_delegation.and_then(|pd| pd.ipv6_token.as_deref()))
             .bind(prefix_delegation.is_some_and(|pd| pd.announce))
             .bind(config.ip_forward.to_string())
             .bind(config.ip_masquerade.to_string())
@@ -721,9 +735,10 @@ impl<'a> InterfacesDb<'a> {
         &self,
         config_id: i64,
     ) -> Result<Option<DhcpPrefixDelegationConfig>> {
-        let row = sqlx::query_as::<_, (bool, Option<String>, Option<i64>, bool)>(
+        let row = sqlx::query_as::<_, (bool, Option<String>, Option<i64>, Option<String>, bool)>(
             r#"SELECT dhcp_prefix_delegation_enabled, dhcp_prefix_delegation_uplink,
-                      dhcp_prefix_delegation_subnet_id, dhcp_prefix_delegation_announce
+                      dhcp_prefix_delegation_subnet_id, dhcp_prefix_delegation_token,
+                      dhcp_prefix_delegation_announce
                FROM interface_config WHERE id = ?"#,
         )
         .bind(config_id)
@@ -731,15 +746,16 @@ impl<'a> InterfacesDb<'a> {
         .await
         .context("Failed to fetch DHCP prefix delegation config")?;
 
-        Ok(
-            row.and_then(|(enabled, uplink_interface, subnet_id, announce)| {
+        Ok(row.and_then(
+            |(enabled, uplink_interface, subnet_id, ipv6_token, announce)| {
                 enabled.then_some(DhcpPrefixDelegationConfig {
                     uplink_interface,
                     subnet_id: subnet_id.map(|id| id as u64),
+                    ipv6_token,
                     announce,
                 })
-            }),
-        )
+            },
+        ))
     }
 
     async fn save_ipv6_accept_ra_config_tx(
@@ -791,6 +807,37 @@ mod managed_interface_tests {
     use super::*;
     use crate::db::Database;
     use keystone_core::{Dhcpv4ClientIdentifier, Dhcpv6ClientConfig};
+
+    #[tokio::test]
+    async fn delegated_prefix_ipv6_token_round_trips_and_is_validated() {
+        let db = Database::new_in_memory().await.unwrap();
+        let config = InterfaceConfig {
+            name: "lan0".into(),
+            dhcp_prefix_delegation: Some(DhcpPrefixDelegationConfig {
+                uplink_interface: Some("wan0".into()),
+                subnet_id: Some(1),
+                ipv6_token: Some("::1".into()),
+                announce: true,
+            }),
+            ..Default::default()
+        };
+        db.save_interface_config(&config).await.unwrap();
+        let saved = db.get_interface_config("lan0").await.unwrap().unwrap();
+        assert_eq!(
+            saved.dhcp_prefix_delegation.unwrap().ipv6_token.as_deref(),
+            Some("::1")
+        );
+
+        let invalid = InterfaceConfig {
+            name: "lan1".into(),
+            dhcp_prefix_delegation: Some(DhcpPrefixDelegationConfig {
+                ipv6_token: Some("not-an-ipv6-address".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(db.save_interface_config(&invalid).await.is_err());
+    }
 
     #[tokio::test]
     async fn managed_interfaces_reflect_authoritative_configs_without_overwriting_them() {

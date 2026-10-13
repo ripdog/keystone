@@ -8,7 +8,9 @@ use crate::firewall::generate::statements::{
     create_daddr_match, create_dport_match, create_iif_match, create_ipv4_match,
     create_protocol_match, create_saddr_match,
 };
-use crate::firewall::generate::{NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones};
+use crate::firewall::generate::{
+    NAT_TABLE, find_ipv4_masquerade_zones, find_wan_zones, resolve_zone_interfaces,
+};
 use keystone_core::{FirewallConfig, PortForward, RuleProtocol};
 use nftables::{
     batch::Batch,
@@ -108,13 +110,16 @@ fn create_port_forward_rule(
     }
     let mut exprs: Vec<Statement> = vec![create_ipv4_match()];
 
-    // Match source zone (input interface)
-    if let Some(ref zone_name) = pf.source_zone
-        && let Some(interfaces) = zone_interfaces.get(zone_name)
-        && !interfaces.is_empty()
+    // Match source zone (input interface). An unresolvable zone fails closed.
+    if let Some(interfaces) =
+        resolve_zone_interfaces(pf.source_zone.as_deref(), zone_interfaces, &pf.name).ok()?
     {
         exprs.push(create_iif_match(interfaces));
     }
+
+    // Only traffic addressed to the router itself may be DNATed; otherwise
+    // LAN clients' outbound traffic to the same port would be hijacked.
+    exprs.push(create_fib_daddr_local_match());
 
     // Match source IP if specified
     if let Some(ref src_ip) = pf.source_ip {
@@ -153,6 +158,18 @@ fn create_port_forward_rule(
     })
 }
 
+/// Match packets addressed to one of the router's own IPs (`fib daddr type local`)
+fn create_fib_daddr_local_match() -> Statement<'static> {
+    Statement::Match(Match {
+        left: Expression::Named(nftables::expr::NamedExpression::Fib(nftables::expr::Fib {
+            result: nftables::expr::FibResult::Type,
+            flags: [nftables::expr::FibFlag::Daddr].into_iter().collect(),
+        })),
+        right: Expression::String(Cow::Borrowed("local")),
+        op: Operator::EQ,
+    })
+}
+
 /// Create a hairpin NAT DNAT rule for LAN clients accessing port forwards via external IP
 ///
 /// Hairpin NAT allows LAN clients to access port-forwarded services using the router's
@@ -178,14 +195,7 @@ fn create_hairpin_dnat_rule(
         create_dport_match(pf.external_port_start, pf.external_port_end),
         // Match packets destined to a local address (router's own IPs)
         // This catches traffic to any of the router's IPs, including WAN IP
-        Statement::Match(Match {
-            left: Expression::Named(nftables::expr::NamedExpression::Fib(nftables::expr::Fib {
-                result: nftables::expr::FibResult::Type,
-                flags: [nftables::expr::FibFlag::Daddr].into_iter().collect(),
-            })),
-            right: Expression::String(Cow::Borrowed("local")),
-            op: Operator::EQ,
-        }),
+        create_fib_daddr_local_match(),
         // Counter
         Statement::Counter(Counter::Anonymous(None)),
     ];

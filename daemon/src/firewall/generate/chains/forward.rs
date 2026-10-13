@@ -3,19 +3,21 @@
 //! This module handles generation of the forward chain which controls
 //! traffic passing through the router (between interfaces/zones).
 
-use crate::firewall::generate::FILTER_TABLE;
 use crate::firewall::generate::chains::input::{
     create_conntrack_established_rule, create_conntrack_invalid_rule,
 };
 use crate::firewall::generate::statements::{
-    add_protocol_match_concrete, create_daddr_match, create_iif_match, create_oif_match,
-    create_saddr_match, expand_protocol, parse_rate_limit,
+    add_protocol_match_concrete, create_daddr_match, create_dport_match, create_iif_match,
+    create_ipv4_match, create_oif_match, create_protocol_match, create_saddr_match,
+    expand_protocol, parse_rate_limit, rule_options_are_safe,
 };
-use keystone_core::{FirewallAction, FirewallConfig, ForwardRule, ZoneForwardPolicy};
+use crate::firewall::generate::{FILTER_TABLE, resolve_zone_interfaces};
+use keystone_core::{FirewallAction, FirewallConfig, ForwardRule, PortForward, ZoneForwardPolicy};
 use nftables::{
     batch::Batch,
+    expr::Expression,
     schema::{Chain, NfListObject, Rule},
-    stmt::{Counter, Log, Statement},
+    stmt::{Counter, Log, Match, Operator, Statement},
     types::{NfChainPolicy, NfChainType, NfFamily, NfHook},
 };
 use std::borrow::Cow;
@@ -51,7 +53,16 @@ pub fn generate_forward_chain(
         "forward",
     )));
 
-    // Priority 3: User forward rules (position-ordered)
+    // Priority 3: Accept DNATed traffic for enabled port forwards. Without
+    // this, raw port forwards (which have no matching forward rule) would be
+    // dropped by the chain's default policy.
+    for pf in config.port_forwards.iter().filter(|pf| pf.enabled) {
+        for nf_rule in create_port_forward_accept_rules(pf) {
+            batch.add(NfListObject::Rule(nf_rule));
+        }
+    }
+
+    // Priority 4: User forward rules (position-ordered)
     let mut sorted_rules: Vec<_> = config.forward_rules.iter().filter(|r| r.enabled).collect();
     sorted_rules.sort_by_key(|r| r.position);
 
@@ -61,7 +72,7 @@ pub fn generate_forward_chain(
         }
     }
 
-    // Priority 4: Zone-to-zone forwarding policies
+    // Priority 5: Zone-to-zone forwarding policies
     for policy in &config.zone_forwards {
         if policy.enabled
             && let Some(nf_rule) = create_zone_forward_rule(policy, zone_interfaces)
@@ -69,6 +80,49 @@ pub fn generate_forward_chain(
             batch.add(NfListObject::Rule(nf_rule));
         }
     }
+}
+
+/// Accept rules for traffic that was DNATed to a port forward's destination.
+fn create_port_forward_accept_rules(pf: &PortForward) -> Vec<Rule<'static>> {
+    if pf.dest_ip.parse::<std::net::Ipv4Addr>().is_err() {
+        return Vec::new();
+    }
+    // Translated destination port(s): the explicit dest port, or the external range.
+    let (port_start, port_end) = match pf.dest_port {
+        Some(port) => (port, None),
+        None => (pf.external_port_start, pf.external_port_end),
+    };
+    expand_protocol(&pf.protocol)
+        .into_iter()
+        .flatten()
+        .filter(|proto| matches!(*proto, "tcp" | "udp"))
+        .map(|proto| Rule {
+            family: NfFamily::INet,
+            table: Cow::Borrowed(FILTER_TABLE),
+            chain: Cow::Borrowed("forward"),
+            expr: vec![
+                create_ipv4_match(),
+                Statement::Match(Match {
+                    left: Expression::Named(nftables::expr::NamedExpression::CT(
+                        nftables::expr::CT {
+                            key: Cow::Borrowed("status"),
+                            ..Default::default()
+                        },
+                    )),
+                    right: Expression::String(Cow::Borrowed("dnat")),
+                    op: Operator::IN,
+                }),
+                create_daddr_match(&pf.dest_ip),
+                create_protocol_match(proto),
+                create_dport_match(port_start, port_end),
+                Statement::Counter(Counter::Anonymous(None)),
+                Statement::Accept(None),
+            ]
+            .into(),
+            comment: Some(Cow::Owned(format!("{} DNAT accept ({})", pf.name, proto))),
+            ..Default::default()
+        })
+        .collect()
 }
 
 /// Create nftables rules from a ForwardRule.
@@ -88,7 +142,7 @@ fn create_forward_rules(
 
     protocols
         .into_iter()
-        .map(|proto| {
+        .filter_map(|proto| {
             create_forward_rule_for_protocol(
                 rule,
                 zone_interfaces,
@@ -107,21 +161,22 @@ fn create_forward_rule_for_protocol(
     protocol: Option<&'static str>,
     port_start: Option<u16>,
     port_end: Option<u16>,
-) -> Rule<'static> {
+) -> Option<Rule<'static>> {
+    if !rule_options_are_safe(protocol, port_start, rule.rate_limit.as_deref(), &rule.name) {
+        return None;
+    }
     let mut exprs: Vec<Statement> = Vec::new();
 
-    // Match source zone
-    if let Some(ref zone_name) = rule.source_zone
-        && let Some(interfaces) = zone_interfaces.get(zone_name)
-        && !interfaces.is_empty()
+    // Match source zone. An unresolvable zone fails closed.
+    if let Some(interfaces) =
+        resolve_zone_interfaces(rule.source_zone.as_deref(), zone_interfaces, &rule.name).ok()?
     {
         exprs.push(create_iif_match(interfaces));
     }
 
     // Match destination zone
-    if let Some(ref zone_name) = rule.dest_zone
-        && let Some(interfaces) = zone_interfaces.get(zone_name)
-        && !interfaces.is_empty()
+    if let Some(interfaces) =
+        resolve_zone_interfaces(rule.dest_zone.as_deref(), zone_interfaces, &rule.name).ok()?
     {
         exprs.push(create_oif_match(interfaces));
     }
@@ -173,14 +228,14 @@ fn create_forward_rule_for_protocol(
         FirewallAction::Reject => Statement::Reject(None),
     });
 
-    Rule {
+    Some(Rule {
         family: NfFamily::INet,
         table: Cow::Borrowed(FILTER_TABLE),
         chain: Cow::Borrowed("forward"),
         expr: exprs.into(),
         comment: Some(Cow::Owned(rule.name.clone())),
         ..Default::default()
-    }
+    })
 }
 
 /// Create a zone-to-zone forwarding rule

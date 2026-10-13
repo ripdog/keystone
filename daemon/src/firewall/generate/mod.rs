@@ -88,6 +88,29 @@ pub fn build_zone_interface_map(zones: &[FirewallZone]) -> HashMap<String, Vec<S
         .collect()
 }
 
+/// Resolve an optional zone reference to its interfaces.
+///
+/// `Ok(None)` means no zone was referenced (match any interface). A referenced
+/// zone that is missing or has no interfaces is `Err(())`: callers must emit no
+/// rule, otherwise the interface match would be dropped and the rule would
+/// apply to every interface.
+pub(crate) fn resolve_zone_interfaces<'a>(
+    zone: Option<&str>,
+    zone_interfaces: &'a HashMap<String, Vec<String>>,
+    rule_name: &str,
+) -> Result<Option<&'a [String]>, ()> {
+    let Some(name) = zone else { return Ok(None) };
+    match zone_interfaces.get(name) {
+        Some(interfaces) if !interfaces.is_empty() => Ok(Some(interfaces.as_slice())),
+        _ => {
+            tracing::warn!(
+                "Skipping rule '{rule_name}': zone '{name}' does not exist or has no interfaces"
+            );
+            Err(())
+        }
+    }
+}
+
 /// Find explicitly Internet-facing zones.
 pub fn find_wan_zones(zones: &[FirewallZone]) -> Vec<&FirewallZone> {
     zones.iter().filter(|zone| zone.is_wan).collect()
@@ -283,5 +306,84 @@ mod tests {
         let wan_zones = find_wan_zones(&zones);
         assert_eq!(wan_zones.len(), 1);
         assert_eq!(wan_zones[0].name, "wan");
+    }
+
+    fn json_of(config: &FirewallConfig) -> String {
+        serde_json::to_string(&generate_ruleset(config).nftables).unwrap()
+    }
+
+    #[test]
+    fn rule_with_missing_zone_is_not_emitted() {
+        let mut config = create_test_config();
+        config.input_rules[0].zone = Some("nope".to_string());
+        config.forward_rules.push(keystone_core::ForwardRule {
+            name: "Fwd to nowhere".to_string(),
+            dest_zone: Some("nope".to_string()),
+            ..Default::default()
+        });
+        let json = json_of(&config);
+        assert!(!json.contains("Allow SSH from LAN"));
+        assert!(!json.contains("Fwd to nowhere"));
+    }
+
+    #[test]
+    fn rule_with_empty_zone_is_not_emitted() {
+        let mut config = create_test_config();
+        config.zones[1].interfaces.clear();
+        config.port_forwards[0].source_zone = Some("lan".to_string());
+        let json = json_of(&config);
+        assert!(!json.contains("Allow SSH from LAN"));
+        assert!(!json.contains("Web Server (tcp)\""));
+    }
+
+    #[test]
+    fn port_on_non_port_protocol_is_not_emitted() {
+        let mut config = create_test_config();
+        config.input_rules[0].protocol = Some(RuleProtocol::Any);
+        config.input_rules[0].port_start = Some(22);
+        assert!(!json_of(&config).contains("Allow SSH from LAN"));
+        config.input_rules[0].protocol = Some(RuleProtocol::Tcp);
+        assert!(json_of(&config).contains("Allow SSH from LAN"));
+    }
+
+    #[test]
+    fn invalid_rate_limit_rule_is_not_emitted() {
+        let mut config = create_test_config();
+        config.input_rules[0].rate_limit = Some("bogus".to_string());
+        assert!(!json_of(&config).contains("Allow SSH from LAN"));
+        config.input_rules[0].rate_limit = Some("10/minute".to_string());
+        assert!(json_of(&config).contains("Allow SSH from LAN"));
+    }
+
+    #[test]
+    fn port_forward_dnat_only_matches_local_destinations() {
+        let config = create_test_config();
+        let json = serde_json::to_value(&generate_ruleset(&config).nftables).unwrap();
+        let rules = json["nftables"].as_array().unwrap();
+        let dnat = rules
+            .iter()
+            .find(|r| r["add"]["rule"]["comment"] == "Web Server (tcp)")
+            .expect("dnat rule");
+        let text = dnat.to_string();
+        assert!(text.contains("\"fib\""), "{text}");
+        assert!(text.contains("local"));
+    }
+
+    #[test]
+    fn port_forward_gets_forward_accept_before_user_rules() {
+        let config = create_test_config();
+        let json = serde_json::to_value(&generate_ruleset(&config).nftables).unwrap();
+        let rules = json["nftables"].as_array().unwrap();
+        let accept = rules
+            .iter()
+            .find(|r| r["add"]["rule"]["comment"] == "Web Server DNAT accept (tcp)")
+            .expect("forward accept rule");
+        let text = accept.to_string();
+        assert!(text.contains("\"status\""), "{text}");
+        assert!(text.contains("dnat"));
+        assert!(text.contains("192.168.1.100"));
+        // Translated port 80, not external 8080.
+        assert!(text.contains("80") && !text.contains("8080"));
+        assert_eq!(accept["add"]["rule"]["chain"], "forward");
     }
 }

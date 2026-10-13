@@ -5,9 +5,9 @@
 
 use crate::firewall::generate::statements::{
     add_protocol_match_concrete, create_iif_match, create_saddr_match, expand_protocol,
-    parse_rate_limit,
+    parse_rate_limit, rule_options_are_safe,
 };
-use crate::firewall::generate::{FILTER_TABLE, find_wan_zones};
+use crate::firewall::generate::{FILTER_TABLE, find_wan_zones, resolve_zone_interfaces};
 use keystone_core::{FirewallAction, FirewallConfig, FirewallPolicy, FirewallZone, InputRule};
 use nftables::{
     batch::Batch,
@@ -554,7 +554,7 @@ fn create_input_rules(
 
     protocols
         .into_iter()
-        .map(|proto| {
+        .filter_map(|proto| {
             create_input_rule_for_protocol(
                 rule,
                 zone_interfaces,
@@ -573,13 +573,17 @@ fn create_input_rule_for_protocol(
     protocol: Option<&'static str>,
     port_start: Option<u16>,
     port_end: Option<u16>,
-) -> Rule<'static> {
+) -> Option<Rule<'static>> {
+    // Defence in depth: a port on a non-TCP/UDP protocol, or an unparsable
+    // rate limit, would otherwise widen the rule. Emit nothing instead.
+    if !rule_options_are_safe(protocol, port_start, rule.rate_limit.as_deref(), &rule.name) {
+        return None;
+    }
     let mut exprs: Vec<Statement> = Vec::new();
 
-    // Match source zone (interface)
-    if let Some(ref zone_name) = rule.zone
-        && let Some(interfaces) = zone_interfaces.get(zone_name)
-        && !interfaces.is_empty()
+    // Match source zone (interface). An unresolvable zone fails closed.
+    if let Some(interfaces) =
+        resolve_zone_interfaces(rule.zone.as_deref(), zone_interfaces, &rule.name).ok()?
     {
         exprs.push(create_iif_match(interfaces));
     }
@@ -626,14 +630,14 @@ fn create_input_rule_for_protocol(
         FirewallAction::Reject => Statement::Reject(None),
     });
 
-    Rule {
+    Some(Rule {
         family: NfFamily::INet,
         table: Cow::Borrowed(FILTER_TABLE),
         chain: Cow::Borrowed("input"),
         expr: exprs.into(),
         comment: Some(Cow::Owned(rule.name.clone())),
         ..Default::default()
-    }
+    })
 }
 
 /// Create a zone default input policy rule

@@ -211,6 +211,30 @@ pub fn add_protocol_match_concrete(
     }
 }
 
+/// Check that a rule's port and rate-limit options can be expressed exactly.
+///
+/// Ports are only matchable for tcp/udp and an unparsable rate limit cannot be
+/// emitted; in either case silently dropping the option would widen the rule,
+/// so callers must emit no rule (this logs a warning).
+pub fn rule_options_are_safe(
+    protocol: Option<&'static str>,
+    port_start: Option<u16>,
+    rate_limit: Option<&str>,
+    rule_name: &str,
+) -> bool {
+    if port_start.is_some() && !matches!(protocol, Some("tcp" | "udp")) {
+        tracing::warn!("Skipping rule '{rule_name}': ports require protocol tcp or udp");
+        return false;
+    }
+    if let Some(rate) = rate_limit
+        && parse_rate_limit(rate).is_none()
+    {
+        tracing::warn!("Skipping rule '{rule_name}': invalid rate limit '{rate}'");
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

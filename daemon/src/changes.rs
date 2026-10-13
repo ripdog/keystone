@@ -63,7 +63,7 @@ async fn generate(component: Component, db: &Database) -> Result<Generated> {
             .collect(),
         Component::Firewall => BTreeMap::from([(
             FIREWALL_RULESET_LABEL.to_string(),
-            crate::firewall::generate_preview(db).await?,
+            without_generation_time(crate::firewall::generate_preview(db).await?),
         )]),
         Component::Dnsmasq => BTreeMap::from([(
             crate::dnsmasq::DNSMASQ_CONFIG_PATH.to_string(),
@@ -74,6 +74,16 @@ async fn generate(component: Component, db: &Database) -> Result<Generated> {
             crate::caddy::preview_caddyfile(db.pool()).await?,
         )]),
     })
+}
+
+/// The ruleset preview begins with the time it was generated. Two sides
+/// generated a second apart would then always differ, so that header line is
+/// dropped before comparing.
+fn without_generation_time(ruleset: String) -> String {
+    ruleset
+        .split_inclusive('\n')
+        .filter(|line| !line.starts_with("# Generated:"))
+        .collect()
 }
 
 /// Generate for one side of a comparison. Errors are kept as text so that they
@@ -601,6 +611,25 @@ mod tests {
         assert!(files[0].unified_diff.contains("+two"));
         assert!(files[0].unified_diff.contains("applied/a.conf"));
         assert!(compare_files(&new, &new, "applied", "live").is_empty());
+    }
+
+    #[test]
+    fn firewall_generation_time_is_not_a_change() {
+        let at = |secs: &str| {
+            format!(
+                "# Keystone\n# Generated: Unix timestamp: {secs}\n\ntable inet keystone {{\n}}\n"
+            )
+        };
+        assert_eq!(
+            without_generation_time(at("100")),
+            without_generation_time(at("101"))
+        );
+        let edited = at("101").replace("table inet keystone", "table inet other");
+        assert_ne!(
+            without_generation_time(at("100")),
+            without_generation_time(edited)
+        );
+        assert!(without_generation_time(at("100")).ends_with("}\n"));
     }
 
     #[test]

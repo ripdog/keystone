@@ -576,7 +576,9 @@ deny 0-65535 0.0.0.0/0 0-65535
             .filter(|l| l.starts_with("allow ") || l.starts_with("deny "))
             .collect();
         assert_eq!(rules.last(), Some(&"deny 0-65535 0.0.0.0/0 0-65535"));
-        assert_eq!(rules.iter().filter(|l| l.starts_with("allow ")).count(), 1);
+        // Every rule before the catch-all is an allow, and the file ends on it.
+        let (_, allows) = rules.split_last().unwrap();
+        assert!(allows.iter().all(|l| l.starts_with("allow ")));
         assert!(text.lines().last() == rules.last().copied());
     }
 

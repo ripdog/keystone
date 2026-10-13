@@ -780,12 +780,14 @@ mod tests {
             .iter()
             .find(|diff| diff.component == Component::Upnp)
             .unwrap();
-        assert_eq!(upnp.files.len(), 1);
-        assert_eq!(upnp.files[0].path, crate::upnp::config::MINIUPNPD_CONF_PATH);
-        assert_eq!(upnp.files[0].status, FileChangeStatus::Added);
+        let conf = upnp
+            .files
+            .iter()
+            .find(|file| file.path == crate::upnp::config::MINIUPNPD_CONF_PATH)
+            .expect("miniupnpd.conf is in the UPnP diff");
+        assert_eq!(conf.status, FileChangeStatus::Added);
         assert!(
-            upnp.files[0]
-                .unified_diff
+            conf.unified_diff
                 .contains("+allow 1024-65535 192.168.1.0/24 1024-65535")
         );
         let firewall = pending

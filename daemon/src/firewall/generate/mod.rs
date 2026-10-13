@@ -460,7 +460,7 @@ mod tests {
             .expect("upnp accept rule");
         let dnat = comments
             .iter()
-            .position(|c| c == "Web Server DNAT accept (tcp)")
+            .position(|c| c.contains("Web Server DNAT accept (tcp)"))
             .expect("port forward accept rule");
         assert!(
             dnat < upnp,

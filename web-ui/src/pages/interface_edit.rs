@@ -28,6 +28,11 @@ pub fn InterfaceEditPage(
     let (error, set_error) = signal::<Option<String>>(None);
     let (success, set_success) = signal::<Option<String>>(None);
     let (is_new, set_is_new) = signal(false);
+    // Saving only updates the database; these track the follow-up steps that
+    // write the networkd files and re-apply them to the running link.
+    let (needs_apply, set_needs_apply) = signal(false);
+    let (applying, set_applying) = signal(false);
+    let (reconfiguring, set_reconfiguring) = signal(false);
 
     // Form fields
     let (role, set_role) = signal(InterfaceRole::LAN);
@@ -425,6 +430,7 @@ pub fn InterfaceEditPage(
                             }));
                             set_is_new.set(false);
                             set_success.set(Some("Configuration saved".to_string()));
+                            set_needs_apply.set(true);
                         } else {
                             set_error.set(Some(response.message));
                         }
@@ -439,6 +445,50 @@ pub fn InterfaceEditPage(
                 }
             }
             set_saving.set(false);
+        });
+    };
+
+    let apply_to_system = move |_| {
+        let Some(token) = auth_token.get_untracked() else {
+            return;
+        };
+        set_applying.set(true);
+        set_error.set(None);
+        set_success.set(None);
+        spawn_local(async move {
+            match api::apply_networkd(&token).await {
+                Ok(response) if response.success => set_success.set(Some(response.message)),
+                Ok(response) => set_error.set(Some(if response.errors.is_empty() {
+                    response.message
+                } else {
+                    format!("{}: {}", response.message, response.errors.join(", "))
+                })),
+                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
+                Err(e) => set_error.set(Some(e)),
+            }
+            set_applying.set(false);
+        });
+    };
+
+    let reconfigure_link = move |_| {
+        let Some(token) = auth_token.get_untracked() else {
+            return;
+        };
+        let name = interface_name.get_untracked();
+        set_reconfiguring.set(true);
+        set_error.set(None);
+        set_success.set(None);
+        spawn_local(async move {
+            match api::reconfigure_interface(&token, &name).await {
+                Ok(response) if response.success => {
+                    set_success.set(Some(response.message));
+                    set_needs_apply.set(false);
+                }
+                Ok(response) => set_error.set(Some(response.message)),
+                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
+                Err(e) => set_error.set(Some(format!("Failed to reconfigure {name}: {e}"))),
+            }
+            set_reconfiguring.set(false);
         });
     };
 
@@ -494,6 +544,27 @@ pub fn InterfaceEditPage(
             <Show when=move || success.get().is_some()>
                 <div class="bg-green-900/50 border border-green-500 text-green-200 px-4 py-3 rounded">
                     {move || success.get().unwrap_or_default()}
+                </div>
+            </Show>
+            <Show when=move || needs_apply.get() && !is_new.get()>
+                <div class="bg-yellow-900/30 border border-yellow-600 text-yellow-200 px-4 py-3 rounded flex items-center gap-3 flex-wrap">
+                    <span class="flex-1">
+                        "Saved, but not live yet. Apply to System writes the networkd files; Reconfigure Link then makes networkd re-read them on this link (a link with DHCP may briefly lose its lease)."
+                    </span>
+                    <button
+                        class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+                        disabled=move || applying.get() || reconfiguring.get()
+                        on:click=apply_to_system
+                    >
+                        {move || if applying.get() { "Applying..." } else { "Apply to System" }}
+                    </button>
+                    <button
+                        class="bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+                        disabled=move || applying.get() || reconfiguring.get()
+                        on:click=reconfigure_link
+                    >
+                        {move || if reconfiguring.get() { "Reconfiguring..." } else { "Reconfigure Link" }}
+                    </button>
                 </div>
             </Show>
 

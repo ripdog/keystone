@@ -185,6 +185,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/interface-config", post(save_interface_config))
         .route("/interface-config/{name}", delete(delete_interface_config))
         .route("/interfaces/{name}/renew", post(renew_interface))
+        .route(
+            "/interfaces/{name}/reconfigure",
+            post(reconfigure_interface),
+        )
         .route("/vlans", get(get_vlans))
         .route("/vlans/{id}", get(get_vlan))
         .route("/vlans", post(save_vlan))
@@ -518,7 +522,8 @@ fn is_blocked_before_setup(path: &str) -> bool {
         || path == "/apply-networkd"
         || path == "/apply-all"
         || path == "/networkd-preview"
-        || (path.starts_with("/interfaces/") && path.ends_with("/renew"))
+        || (path.starts_with("/interfaces/")
+            && (path.ends_with("/renew") || path.ends_with("/reconfigure")))
         || (path.starts_with("/firewall/") && !firewall_recovery_endpoint)
         || path.starts_with("/dnsmasq/")
         || path.starts_with("/caddy/")
@@ -955,22 +960,45 @@ async fn delete_interface_config(
 }
 
 /// POST /interfaces/:name/renew - Ask networkd to renew dynamic settings.
-///
-/// The selected interface must be a real, enabled, Keystone-managed link.
-/// Execute fixed arguments directly, never through a shell.
 async fn renew_interface(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Result<Json<RenewInterfaceResponse>, AppError> {
-    keystone_core::validation::interface_name(&name)
+    run_networkctl_on_managed_link(&state, "renew", &name).await?;
+    Ok(Json(RenewInterfaceResponse {
+        success: true,
+        message: format!("Renewal requested for {name}"),
+    }))
+}
+
+/// POST /interfaces/:name/reconfigure - Re-apply the link's `.network` file.
+async fn reconfigure_interface(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<RenewInterfaceResponse>, AppError> {
+    run_networkctl_on_managed_link(&state, "reconfigure", &name).await?;
+    Ok(Json(RenewInterfaceResponse {
+        success: true,
+        message: format!("Reconfiguration requested for {name}"),
+    }))
+}
+
+/// Run `networkctl <action> <name>` for a real, enabled, Keystone-managed link.
+/// Execute fixed arguments directly, never through a shell.
+async fn run_networkctl_on_managed_link(
+    state: &AppState,
+    action: &'static str,
+    name: &str,
+) -> Result<(), AppError> {
+    keystone_core::validation::interface_name(name)
         .map_err(|err| AppError(anyhow::anyhow!(err)))?;
-    let config = state.db.get_interface_config(&name).await?;
+    let config = state.db.get_interface_config(name).await?;
     if !config.is_some_and(|config| config.enabled) {
         return Err(AppError(anyhow::anyhow!(
             "Interface is not managed or is disabled"
         )));
     }
-    if !Path::new("/sys/class/net").join(&name).exists() {
+    if !Path::new("/sys/class/net").join(name).exists() {
         return Err(AppError(anyhow::anyhow!(
             "Interface does not exist on this system"
         )));
@@ -979,24 +1007,21 @@ async fn renew_interface(
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         tokio::process::Command::new("/usr/bin/networkctl")
-            .arg("renew")
-            .arg(&name)
+            .arg(action)
+            .arg(name)
             .kill_on_drop(true)
             .output(),
     )
     .await
-    .map_err(|_| anyhow::anyhow!("networkctl renew timed out"))??;
+    .map_err(|_| anyhow::anyhow!("networkctl {action} timed out"))??;
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
         return Err(AppError(anyhow::anyhow!(
-            "networkctl renew failed: {}",
+            "networkctl {action} failed: {}",
             error.trim()
         )));
     }
-    Ok(Json(RenewInterfaceResponse {
-        success: true,
-        message: format!("Renewal requested for {name}"),
-    }))
+    Ok(())
 }
 
 // ============================================================================
@@ -1513,6 +1538,7 @@ mod tests {
         assert!(is_blocked_before_setup("/dashboard"));
         assert!(is_blocked_before_setup("/apply-all"));
         assert!(is_blocked_before_setup("/interfaces/enp3s0/renew"));
+        assert!(is_blocked_before_setup("/interfaces/enp3s0/reconfigure"));
     }
 
     #[test]

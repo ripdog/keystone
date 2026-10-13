@@ -74,6 +74,14 @@ pub async fn renew_interface(token: &str, name: &str) -> Result<RenewInterfaceRe
     post_empty(&format!("/api/interfaces/{name}/renew"), token).await
 }
 
+/// Ask networkd to re-read and re-apply one managed link's `.network` file.
+pub async fn reconfigure_interface(
+    token: &str,
+    name: &str,
+) -> Result<RenewInterfaceResponse, String> {
+    post_empty(&format!("/api/interfaces/{name}/reconfigure"), token).await
+}
+
 /// Get networkd configuration preview without writing to disk
 pub async fn get_networkd_preview(token: &str) -> Result<NetworkdPreviewResponse, String> {
     get("/api/networkd-preview", token).await

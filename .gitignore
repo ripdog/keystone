@@ -24,6 +24,9 @@ web-ui/pkg/
 /logs
 session-*
 
+# Local release automation (contains machine-specific deployment target)
+/scripts/release.sh
+
 # Local USB build artifacts
 *.iso
 

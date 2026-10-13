@@ -2390,6 +2390,122 @@ pub struct FirewallCountersResponse {
 }
 
 // ============================================================================
+// Packet Tester Types
+// ============================================================================
+
+/// A packet to trace through the firewall. The trace is a simulation from the
+/// configuration: connection state and kernel behaviour are not modelled
+/// beyond what the response notes say.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TestPacketRequest {
+    /// Interface the packet arrives on. Set exactly one of this and `ingress_zone`.
+    #[serde(default)]
+    pub ingress_interface: Option<String>,
+    /// Zone the packet arrives in, on any of its interfaces.
+    #[serde(default)]
+    pub ingress_zone: Option<String>,
+    pub source_ip: String,
+    /// May be one of the router's own addresses, or a host behind it.
+    pub destination_ip: String,
+    /// `any`, `tcp`, `udp`, `icmp` or `icmpv6`. `tcp+udp` is not a packet protocol.
+    pub protocol: RuleProtocol,
+    #[serde(default)]
+    pub source_port: Option<u16>,
+    /// Required for `tcp` and `udp`, and not allowed otherwise.
+    #[serde(default)]
+    pub destination_port: Option<u16>,
+    /// ICMP or ICMPv6 type. Defaults to echo request.
+    #[serde(default)]
+    pub icmp_type: Option<u8>,
+    /// Interface a forwarded packet leaves through. Omit to use the live routing table.
+    #[serde(default)]
+    pub egress_interface: Option<String>,
+}
+
+/// Where in the pipeline a trace step happens.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceStage {
+    Prerouting,
+    Routing,
+    Input,
+    Forward,
+    Postrouting,
+}
+
+/// Which rule a trace step is about.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TraceOrigin {
+    /// A rule the user configured. `rule_kind` is `input`, `forward`,
+    /// `portfwd`, `portfwd-accept`, `portfwd-hairpin` or `portfwd-hairpin-snat`.
+    User {
+        rule_kind: String,
+        rule_id: Option<i64>,
+    },
+    /// Keystone's own rule, such as the ICMP safety drops.
+    Builtin,
+    /// A zone-level policy: zone-to-zone forwarding, or a zone default accept.
+    Policy,
+    /// The routing decision between the input and forward chains.
+    Routing,
+    /// A chain's default policy, applied when no rule matched.
+    ChainPolicy,
+}
+
+/// One rule the packet was tested against, in evaluation order.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceStep {
+    pub stage: TraceStage,
+    pub origin: TraceOrigin,
+    /// The rule's name, or its built-in or policy description.
+    pub label: String,
+    pub matched: bool,
+    /// True for the step that decided the packet's fate in its chain.
+    pub decisive: bool,
+    /// Short reason: the condition that failed, or what matched.
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceVerdict {
+    Accept,
+    Drop,
+    Reject,
+}
+
+/// Destination rewrite applied by a port forward.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceDnat {
+    pub address: String,
+    /// `None` when the original port is kept.
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TestPacketResponse {
+    /// `saved` when the configuration as edited was traced, `applied` when the
+    /// last applied configuration was.
+    pub baseline: String,
+    /// Snapshot whose configuration was traced, for `applied`.
+    pub applied_snapshot_id: Option<i64>,
+    /// Interfaces the packet was treated as arriving on.
+    pub ingress: Vec<String>,
+    /// Interface a forwarded packet leaves through, if known.
+    pub egress: Option<String>,
+    /// Chain the packet reaches after routing.
+    pub path: TraceStage,
+    pub dnat: Option<TraceDnat>,
+    /// Whether the packet's source is rewritten on the way out.
+    pub masquerade: bool,
+    pub steps: Vec<TraceStep>,
+    pub verdict: TraceVerdict,
+    /// What the simulation does not model, and other context for the verdict.
+    pub notes: Vec<String>,
+}
+
+// ============================================================================
 // Global Settings Types
 // ============================================================================
 

@@ -19,16 +19,18 @@ use crate::firewall::validate::{
     validate_zone_forward,
 };
 use crate::firewall::{FirewallApplyManager, generate_json, generate_preview};
-use crate::snapshots;
+use crate::snapshots::{self, Component};
 use axum::{
     Json, Router,
-    extract::{Extension, Path, State},
+    extract::{Extension, Path, Query, State},
+    http::StatusCode,
     routing::{delete, get, post, put},
 };
 use keystone_core::api::{
     ConfirmFirewall, CreateSimpleForward, Endpoint, ReorderForwardRules, ReorderInputRules, Req,
     Res, SaveAddressGroup, SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule,
-    SaveInputRule, SavePortForward, SavePortGroup, SaveZoneForward, UpdateSimpleForward,
+    SaveInputRule, SavePortForward, SavePortGroup, SaveZoneForward, TestFirewallPacket,
+    UpdateSimpleForward,
 };
 use keystone_core::{
     AddressGroup, AddressGroupsResponse, DeleteResponse, FirewallApplyResponse,
@@ -40,6 +42,8 @@ use keystone_core::{
     SaveInputRuleResponse, SavePortForwardResponse, SavePortGroupResponse, SaveZoneForwardResponse,
     ZoneForwardsResponse,
 };
+use serde::Deserialize;
+use serde_json::json;
 use std::sync::Arc;
 use tracing::info;
 
@@ -104,6 +108,8 @@ pub fn firewall_routes(state: FirewallState) -> Router<Arc<crate::AppState>> {
         .route("/firewall/config", get(get_firewall_config))
         // Hit counters for user rules
         .route("/firewall/counters", get(get_rule_counters))
+        // Trace one packet through the saved (or applied) configuration
+        .route(TestFirewallPacket::PATH, post(test_firewall_packet))
         // Preview and Apply
         .route("/firewall/preview", get(preview_firewall))
         .route("/firewall/preview/json", get(preview_firewall_json))
@@ -724,6 +730,82 @@ async fn preview_firewall_json(State(state): State<FirewallState>) -> Result<Str
 async fn get_rule_counters() -> Result<Json<FirewallCountersResponse>, AppError> {
     let counters = super::counters::read_rule_counters().await?;
     Ok(Json(FirewallCountersResponse { counters }))
+}
+
+/// Query of `POST /firewall/test-packet`.
+#[derive(Debug, Deserialize)]
+struct TestPacketQuery {
+    /// `saved` (default) traces the configuration as edited; `applied` traces
+    /// the last applied configuration.
+    #[serde(default)]
+    baseline: Option<String>,
+}
+
+/// Error response with a status and a message the client can show.
+fn error_response(
+    status: StatusCode,
+    message: impl Into<String>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (status, Json(json!({ "error": message.into() })))
+}
+
+/// POST /firewall/test-packet - Trace one packet through the firewall
+async fn test_firewall_packet(
+    State(state): State<FirewallState>,
+    Query(query): Query<TestPacketQuery>,
+    Json(request): Json<Req<TestFirewallPacket>>,
+) -> Result<Json<Res<TestFirewallPacket>>, (StatusCode, Json<serde_json::Value>)> {
+    let internal = |error: anyhow::Error| {
+        error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{error:#}"))
+    };
+    let (config, baseline, snapshot_id) = match query.baseline.as_deref() {
+        None | Some("saved") => {
+            let config = state.db.get_firewall_config().await.map_err(internal)?;
+            (config, "saved", None)
+        }
+        Some("applied") => {
+            let applied = snapshots::latest_applied_for(&state.db, Component::Firewall)
+                .await
+                .map_err(internal)?
+                .ok_or_else(|| {
+                    error_response(
+                        StatusCode::NOT_FOUND,
+                        "no applied firewall configuration to trace",
+                    )
+                })?;
+            let opened = snapshots::open_snapshot(&state.db, applied.id)
+                .await
+                .map_err(internal)?;
+            let config = opened
+                .database()
+                .get_firewall_config()
+                .await
+                .map_err(internal)?;
+            (config, "applied", Some(applied.id))
+        }
+        Some(other) => {
+            return Err(error_response(
+                StatusCode::BAD_REQUEST,
+                format!("baseline must be 'saved' or 'applied', not '{other}'"),
+            ));
+        }
+    };
+
+    let view = super::trace::live_view().await.map_err(internal)?;
+    let packet = super::trace::packet_from_request(&request, &config)
+        .map_err(|message| error_response(StatusCode::BAD_REQUEST, message))?;
+    let mut response = super::trace::trace(&config, &view, &packet);
+    response.baseline = baseline.to_string();
+    response.applied_snapshot_id = snapshot_id;
+    if request.egress_interface.is_none() && response.path == keystone_core::TraceStage::Forward {
+        response.notes.push(match &response.egress {
+            Some(egress) => {
+                format!("The outgoing interface {egress} is taken from the live routing table.")
+            }
+            None => "No route to the destination is known in the live routing table.".to_string(),
+        });
+    }
+    Ok(Json(response))
 }
 
 /// POST /firewall/apply - Apply firewall configuration

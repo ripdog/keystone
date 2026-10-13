@@ -29,6 +29,7 @@ pub mod groups;
 pub mod routes;
 pub(crate) mod rules;
 pub mod simple;
+pub(crate) mod trace;
 pub mod validate;
 
 pub use apply::*;

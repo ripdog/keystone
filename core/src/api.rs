@@ -102,6 +102,8 @@ endpoints! {
     SavePortForward: Post "/firewall/port-forwards", SavePortForwardRequest => SavePortForwardResponse;
     SaveFirewallGlobalSettings: Post "/firewall/settings", SaveFirewallGlobalSettingsRequest => SaveFirewallGlobalSettingsResponse;
     ConfirmFirewall: Post "/firewall/confirm", FirewallConfirmRequest => FirewallConfirmResponse;
+    /// Optional query parameter `baseline=applied` traces the last applied configuration instead of the saved one.
+    TestFirewallPacket: Post "/firewall/test-packet", TestPacketRequest => TestPacketResponse;
 
     SaveDnsmasqConfig: Put "/dnsmasq/config", SaveDnsmasqConfigRequest => SaveDnsmasqConfigResponse;
     SaveDhcpRange: Post "/dnsmasq/ranges", SaveDhcpRangeRequest => SaveDhcpRangeResponse;

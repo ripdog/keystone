@@ -47,4 +47,5 @@ package() {
   install -Dm644 "${startdir}/web-ui/dist/index.html" "${pkgdir}/usr/share/keystone/dist/index.html"
   install -Dm644 "${startdir}/web-ui/dist/keystone-web-ui.js" "${pkgdir}/usr/share/keystone/dist/keystone-web-ui.js"
   install -Dm644 "${startdir}/web-ui/dist/keystone-web-ui_bg.wasm" "${pkgdir}/usr/share/keystone/dist/keystone-web-ui_bg.wasm"
+  install -Dm644 "${startdir}/web-ui/dist/tailwind.css" "${pkgdir}/usr/share/keystone/dist/tailwind.css"
 }

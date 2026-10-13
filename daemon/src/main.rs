@@ -1536,7 +1536,7 @@ async fn networkd_status(
     Ok(Json(state.firewall_manager.status().await))
 }
 
-/// POST /apply-all - Apply all configuration (networkd, firewall, dnsmasq, caddy)
+/// POST /apply-all - Apply all configuration (networkd, firewall, sqm, dnsmasq, caddy)
 async fn apply_all(
     State(state): State<Arc<AppState>>,
     actor: Option<Extension<Actor>>,

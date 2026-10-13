@@ -450,16 +450,26 @@ async fn ifb_present(ifb: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether `qdiscs` include an ingress qdisc.
+fn has_ingress_qdisc(qdiscs: &[Value]) -> bool {
+    qdiscs
+        .iter()
+        .any(|qdisc| qdisc.get("kind").and_then(Value::as_str) == Some("ingress"))
+}
+
 async fn removal_present(what: Removal, device: &str) -> bool {
     match what {
         Removal::EgressCake => qdisc_list(device)
             .await
             .is_some_and(|qdiscs| qdiscs.iter().any(is_root_cake)),
-        Removal::IngressQdisc => qdisc_list(device).await.is_some_and(|qdiscs| {
-            qdiscs
-                .iter()
-                .any(|qdisc| qdisc.get("kind").and_then(Value::as_str) == Some("ingress"))
-        }),
+        // Only an ingress qdisc with this WAN's IFB device behind it is ours.
+        // Another ingress qdisc on the WAN is left alone.
+        Removal::IngressQdisc => {
+            qdisc_list(device)
+                .await
+                .is_some_and(|qdiscs| has_ingress_qdisc(&qdiscs))
+                && ifb_present(&ifb_name(device)).await
+        }
         Removal::IfbDevice => ifb_present(device).await,
     }
 }
@@ -552,11 +562,9 @@ async fn shaping_missing(applied: &SqmConfig) -> bool {
         return true;
     }
     if applied.download_kbit > 0 {
-        let has_ingress = qdisc_list(wan).await.is_some_and(|qdiscs| {
-            qdiscs
-                .iter()
-                .any(|qdisc| qdisc.get("kind").and_then(Value::as_str) == Some("ingress"))
-        });
+        let has_ingress = qdisc_list(wan)
+            .await
+            .is_some_and(|qdiscs| has_ingress_qdisc(&qdiscs));
         let ifb = ifb_name(wan);
         let has_ifb_cake = qdisc_list(&ifb)
             .await

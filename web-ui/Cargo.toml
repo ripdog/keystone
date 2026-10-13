@@ -2,6 +2,7 @@
 name = "keystone-web-ui"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -37,9 +38,6 @@ thiserror.workspace = true
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 
-# HTTP client for proxying (server only)
-reqwest = { version = "0.12", features = ["json"], optional = true }
-
 # WASM support
 wasm-bindgen = "0.2"
 console_error_panic_hook = "0.1"
@@ -51,7 +49,7 @@ urlencoding = "2.1"
 
 [features]
 default = ["server"]
-server = ["tokio", "axum", "tower", "tower-http", "hyper", "hyper-util", "http-body-util", "anyhow", "tracing", "tracing-subscriber", "reqwest"]
+server = ["tokio", "axum", "tower", "tower-http", "hyper", "hyper-util", "http-body-util", "anyhow", "tracing", "tracing-subscriber"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

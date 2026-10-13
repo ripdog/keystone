@@ -2,6 +2,7 @@
 name = "keystone-daemon"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
@@ -38,10 +39,9 @@ nix = { version = "0.30.1", features = ["user"] }
 
 # Authentication
 argon2.workspace = true
-jsonwebtoken.workspace = true
-jsonwebtoken.features = ['rust_crypto']
+jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 rand.workspace = true
-toml = "0.9.10"
+toml = "1.1"
 libc = "0.2.178"
 
 # Firewall (nftables)
@@ -49,7 +49,7 @@ nftables = "0.6"
 uuid = { version = "1.11", features = ["v4"] }
 
 # Systemd D-Bus client
-zbus_systemd = { version = "0.25900", features = ["systemd1"] }
+zbus_systemd = { version = "0.26200", features = ["systemd1"] }
 zbus = "5.3"
 
 [[bin]]

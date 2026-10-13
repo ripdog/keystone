@@ -5,6 +5,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.99"
 authors = ["Keystone Project"]
 license = "GPL-3.0-only"
 
@@ -32,17 +33,11 @@ leptos_router = "0.8"
 
 # Auth
 argon2 = "0.5"
-jsonwebtoken = "10.2.0"
+jsonwebtoken = "11.1"
 rand = "0.9.2"
 
-# Database
-# sqlx's `sqlite` feature should bundle SQLite, but proc-macros are built as host
-# shared objects and can accidentally pick up system SQLite. Force bundled sqlite
-# via an explicit libsqlite3-sys dependency.
-# Database
-# Use system SQLite on Arch to avoid proc-macro symbol issues when building under makepkg.
-# `sqlite-unbundled` links against the distro-provided libsqlite3.
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite-unbundled", "migrate", "macros"] }
+# Use the system SQLite on Arch (including makepkg builds).
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite-unbundled", "migrate", "macros"] }
 
 # Others
 tracing = "0.1"

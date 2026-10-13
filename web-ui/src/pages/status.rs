@@ -108,7 +108,9 @@ pub fn StatusPage(
                                 // Summary card
                                 <div class=move || format!(
                                     "rounded-lg p-6 mb-6 {}",
-                                    if s.all_checks_pass {
+                                    if s.all_checks_pass && s.warning_count > 0 {
+                                        "bg-yellow-900/30 border border-yellow-500"
+                                    } else if s.all_checks_pass {
                                         "bg-green-900/30 border border-green-500"
                                     } else {
                                         "bg-red-900/30 border border-red-500"
@@ -117,7 +119,9 @@ pub fn StatusPage(
                                     <div class="flex items-center justify-between">
                                         <div>
                                             <h2 class="text-xl font-semibold text-white mb-1">
-                                                {if s.all_checks_pass {
+                                                {if s.all_checks_pass && s.warning_count > 0 {
+                                                    "Passed with Warnings"
+                                                } else if s.all_checks_pass {
                                                     "All Checks Passed"
                                                 } else {
                                                     "Issues Found"
@@ -288,7 +292,7 @@ fn CheckItem(check: SystemCheck) -> impl IntoView {
                     <Show when=move || has_fix_advice>
                         <div class="mt-2 p-2 bg-gray-800 rounded text-sm">
                             <span class="text-gray-500">"Fix: "</span>
-                            <code class="text-blue-300">{fix_advice_text.clone()}</code>
+                            <span class="text-blue-300 break-words">{fix_advice_text.clone()}</span>
                         </div>
                     </Show>
                 </div>

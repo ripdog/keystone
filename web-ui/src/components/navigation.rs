@@ -149,6 +149,7 @@ pub fn breadcrumb(path: &str) -> String {
         "/ssh" => "SSH Server".to_string(),
         "/services" => "Services".to_string(),
         "/networkd-preview" => "Networkd Preview".to_string(),
+        "/sqm" => "Traffic Shaping (SQM)".to_string(),
         p if p.starts_with("/interfaces/") => "Interfaces / Edit".to_string(),
         p if p.starts_with("/services/") => "Services / Detail".to_string(),
         _ => "Keystone".to_string(),
@@ -169,6 +170,7 @@ fn icon_path(kind: &str) -> &'static str {
         "shield" => "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Zm-4-10 3 3 5-6",
         "terminal" => "m4 7 5 5-5 5M12 18h8",
         "services" => "M4 4h16v6H4zM4 14h16v6H4zM7 7h.01M7 17h.01",
+        "gauge" => "M4 15a8 8 0 1 1 16 0M12 15l3.5-3.5M4 15h1.5M18.5 15H20",
         "settings" => {
             "M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"
         }
@@ -299,6 +301,7 @@ pub fn SidebarNavigation(on_navigate: Callback<()>) -> impl IntoView {
             <div class="space-y-1">
                 <p class="px-3 mb-2 text-[10px] uppercase tracking-[0.22em] font-semibold text-slate-500">"Security & System"</p>
                 <NavSection base="/firewall" title="Firewall" icon="shield" items=FIREWALL expanded=expanded on_navigate=on_navigate />
+                <NavLink href="/sqm" title="Traffic Shaping" icon="gauge" on_navigate=on_navigate />
                 <NavLink href="/networkd-preview" title="Networkd Preview" icon="network" on_navigate=on_navigate />
                 <NavSection base="/settings" title="Settings" icon="settings" items=SETTINGS expanded=expanded on_navigate=on_navigate />
             </div>

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 /// Kernel counters are bytes; network throughput is conventionally shown
 /// in decimal bits per second. Both axes and hover values use the same units.
-fn format_rate(bytes_per_second: f64) -> String {
+pub fn format_rate(bytes_per_second: f64) -> String {
     let bits = bytes_per_second * 8.0;
     let (scaled, unit) = if bits >= 1_000_000_000.0 {
         (bits / 1_000_000_000.0, "Gbit/s")

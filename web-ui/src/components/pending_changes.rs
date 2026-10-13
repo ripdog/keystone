@@ -48,6 +48,7 @@ pub fn component_display_name(component: Component) -> &'static str {
         Component::Firewall => "Firewall",
         Component::Dnsmasq => "DNS & DHCP",
         Component::Caddy => "Web Server",
+        Component::Sqm => "Traffic Shaping",
     }
 }
 
@@ -173,11 +174,12 @@ pub fn apply_outcome_label(result: &ComponentResult) -> &'static str {
     }
 }
 
-/// The four component results of an apply, in apply order.
+/// The component results of an apply, in apply order.
 pub fn apply_outcome_rows(results: &ApplyComponentResults) -> Vec<(Component, ComponentResult)> {
     vec![
         (Component::Networkd, results.networkd.clone()),
         (Component::Firewall, results.firewall.clone()),
+        (Component::Sqm, results.sqm.clone()),
         (Component::Dnsmasq, results.dnsmasq.clone()),
         (Component::Caddy, results.caddy.clone()),
     ]

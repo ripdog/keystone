@@ -12,6 +12,7 @@
 //! - `clients` - Unified LAN client inventory
 //! - `caddy` - Caddy reverse proxy configuration
 //! - `changes` - Pending changes, apply-all and configuration snapshots
+//! - `sqm` - Traffic shaping (SQM / CAKE)
 //! - `services` - Systemd service management
 //!
 //! All functions use the shared `client` module for HTTP requests,
@@ -29,6 +30,7 @@ pub mod firewall;
 pub mod interfaces;
 pub mod services;
 pub mod settings;
+pub mod sqm;
 pub mod ssh;
 pub mod users;
 pub mod vlans;
@@ -48,6 +50,7 @@ pub use firewall::*;
 pub use interfaces::*;
 pub use services::*;
 pub use settings::*;
+pub use sqm::*;
 pub use ssh::*;
 pub use users::*;
 pub use vlans::*;

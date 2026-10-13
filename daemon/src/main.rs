@@ -7,6 +7,7 @@ mod apply;
 mod auth;
 mod caddy;
 mod changes;
+mod clients;
 mod config;
 mod config_validation;
 mod consistency;

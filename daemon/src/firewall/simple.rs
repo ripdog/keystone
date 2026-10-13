@@ -2,21 +2,20 @@
 //! and DNAT tables: there is deliberately no separate "simple forwards" table.
 use super::routes::FirewallState;
 use crate::AppError;
+use crate::clients::lan_neighbours;
 use axum::{
     Json,
     extract::{Path, State},
 };
 use keystone_core::api::{CreateSimpleForward, Req, Res, UpdateSimpleForward};
 use keystone_core::{
-    CreateSimplePortForwardRequest, DeleteResponse, FirewallAction, FirewallConfig, InterfaceRole,
-    LanDevice, LanDevicesResponse, PortForward, RuleProtocol, SimplePortForward,
-    SimplePortForwardsResponse,
+    CreateSimplePortForwardRequest, DeleteResponse, FirewallAction, FirewallConfig, LanDevice,
+    LanDevicesResponse, PortForward, RuleProtocol, SimplePortForward, SimplePortForwardsResponse,
 };
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     net::{IpAddr, Ipv4Addr},
 };
-use tokio::process::Command;
 
 fn protocols_match(a: RuleProtocol, b: RuleProtocol) -> bool {
     a == b
@@ -585,77 +584,26 @@ pub async fn remove(
 pub async fn devices(
     State(state): State<FirewallState>,
 ) -> Result<Json<LanDevicesResponse>, AppError> {
-    let zones = state.db.get_firewall_zones().await?;
-    let wan_interfaces: HashSet<_> = zones
-        .iter()
-        .filter(|z| z.is_wan)
-        .flat_map(|z| z.interfaces.iter().cloned())
-        .collect();
-    let mut interfaces: HashSet<_> = zones
-        .iter()
-        .filter(|z| !z.is_wan)
-        .flat_map(|z| z.interfaces.iter().cloned())
-        .collect();
-    // Also recognise interfaces classified as LAN in the network configuration,
-    // including systems without explicit firewall-zone interface assignments.
-    for iface in state.db.get_interface_configs().await? {
-        if iface.enabled && iface.role == InterfaceRole::LAN {
-            interfaces.insert(iface.name);
-        }
-    }
-    interfaces.retain(|name| !wan_interfaces.contains(name));
-    let output = Command::new("ip")
-        .args(["-j", "neigh", "show"])
-        .output()
-        .await
-        .map_err(|e| anyhow::anyhow!("Cannot inspect neighbour table: {e}"))?;
-    if !output.status.success() {
-        return Err(anyhow::anyhow!("Failed to inspect LAN neighbours").into());
-    }
-    let neighbours: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout)
-        .map_err(|e| anyhow::anyhow!("Cannot parse neighbour table: {e}"))?;
     let mut devices: BTreeMap<String, LanDevice> = BTreeMap::new();
-    for neighbour in neighbours {
-        let (Some(mac), Some(iface), Some(addr)) = (
-            neighbour.get("lladdr").and_then(|s| s.as_str()),
-            neighbour.get("dev").and_then(|s| s.as_str()),
-            neighbour.get("dst").and_then(|s| s.as_str()),
-        ) else {
-            continue;
-        };
-        if !interfaces.contains(iface)
-            || mac == "00:00:00:00:00:00"
-            || neighbour
-                .get("state")
-                .and_then(|s| s.as_array())
-                .is_some_and(|states| {
-                    states
-                        .iter()
-                        .any(|s| matches!(s.as_str(), Some("FAILED" | "INCOMPLETE")))
-                })
-        {
-            continue;
-        }
-        let Ok(ip) = addr.parse::<IpAddr>() else {
-            continue;
-        };
+    for neighbour in lan_neighbours(&state.db).await? {
         let entry = devices
-            .entry(mac.to_ascii_lowercase())
+            .entry(neighbour.mac.clone())
             .or_insert_with(|| LanDevice {
-                mac: mac.to_ascii_lowercase(),
+                mac: neighbour.mac.clone(),
                 hostname: None,
                 ipv4: vec![],
                 ipv6: vec![],
             });
-        match ip {
+        let addr = neighbour.address.to_string();
+        match neighbour.address {
             IpAddr::V4(_) => {
-                if !entry.ipv4.contains(&addr.to_string()) {
-                    entry.ipv4.push(addr.into());
+                if !entry.ipv4.contains(&addr) {
+                    entry.ipv4.push(addr);
                 }
             }
             IpAddr::V6(v6) => {
-                if !v6.is_unicast_link_local() && !entry.ipv6.contains(&addr.to_string()) {
-                    entry.ipv6.push(addr.into());
+                if !v6.is_unicast_link_local() && !entry.ipv6.contains(&addr) {
+                    entry.ipv6.push(addr);
                 }
             }
         }

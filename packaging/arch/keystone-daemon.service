@@ -25,7 +25,9 @@ StateDirectoryMode=0700
 
 # Ensure managed configuration directories exist before the read-only
 # filesystem sandbox is constructed (Caddy itself remains optional).
-ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d
+# miniupnpd is created here too, so /etc/miniupnpd exists before the sandbox is
+# built; the write access it needs is granted below.
+ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d miniupnpd
 ConfigurationDirectoryMode=0755
 
 # Restrict capabilities
@@ -48,6 +50,13 @@ ReadWritePaths=/etc/ssh/sshd_config.d
 # as the caddy user, so the caddy-owned log/state directories remain private.
 ReadWritePaths=-/etc/dnsmasq.conf -/var/lib/dnsmasq
 ReadWritePaths=/etc/caddy -/var/log/caddy -/var/lib/caddy -/run/caddy
+# UPnP: Keystone writes /etc/miniupnpd/miniupnpd.conf (atomically, via a temp
+# file in the same directory). miniupnpd's lease file in /var/lib/miniupnpd
+# (its StateDirectory, root-owned, created by miniupnpd.service) is only read,
+# to list mappings. /var/lib is not hidden by the sandbox, so no path is
+# writable for it here. Mapping rules live in the nftables table keystone_upnp,
+# which needs CAP_NET_ADMIN like the rest of the firewall.
+ReadWritePaths=/etc/miniupnpd
 PrivateTmp=yes
 
 # Additional hardening

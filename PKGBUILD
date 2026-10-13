@@ -6,6 +6,7 @@ arch=("x86_64")
 url="https://github.com/ripdog/keystone"
 license=("GPL-3.0-only")
 depends=("glibc" "sqlite" "nftables" "systemd" "iproute2" "iputils" "dnsmasq" "hwdata")
+optdepends=('miniupnpd-nft: UPnP IGD and NAT-PMP port mapping (AUR; the extra/miniupnpd build uses iptables and is unsupported)')
 makedepends=("rust" "cargo" "trunk" "git")
 # Do not inherit host-specific -march=native/-O3/LTO flags. C dependencies
 # (including cryptographic RNG implementations) control their own optimisation.
@@ -38,6 +39,7 @@ package() {
 
   install -Dm644 "${startdir}/packaging/arch/keystone-daemon.service" "${pkgdir}/usr/lib/systemd/system/keystone-daemon.service"
   install -Dm644 "${startdir}/packaging/arch/keystone-web-ui.service" "${pkgdir}/usr/lib/systemd/system/keystone-web-ui.service"
+  install -Dm644 "${startdir}/packaging/arch/miniupnpd.service.d/keystone.conf" "${pkgdir}/usr/lib/systemd/system/miniupnpd.service.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/sysusers.conf" "${pkgdir}/usr/lib/sysusers.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/tmpfiles.conf" "${pkgdir}/usr/lib/tmpfiles.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/keystone-modules.conf" "${pkgdir}/usr/lib/modules-load.d/keystone.conf"

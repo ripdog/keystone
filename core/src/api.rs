@@ -7,6 +7,7 @@
 //! wrong body shape to a route without a compile error.
 
 use crate::changes::*;
+use crate::sqm::*;
 use crate::*;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -108,6 +109,8 @@ endpoints! {
     SaveAddressOverride: Post "/dnsmasq/overrides", SaveAddressOverrideRequest => SaveAddressOverrideResponse;
 
     SaveCaddyConfig: Put "/caddy/config", SaveCaddyConfigRequest => SaveCaddyConfigResponse;
+
+    SaveSqmConfig: Put "/sqm/config", SaveSqmConfigRequest => SaveSqmConfigResponse;
 
     ApplySsh: Post "/ssh/apply", SshConfig => SshApplyResponse;
 

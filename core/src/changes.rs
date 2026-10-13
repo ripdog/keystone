@@ -1,9 +1,9 @@
 //! Configuration components, snapshots and pending-change models.
 //!
-//! The router configuration is split into four components. Each one is
-//! generated into system files by its own apply step, so a snapshot records
-//! which components it was taken as applied for, and pending changes are
-//! computed per component.
+//! The router configuration is split into five components. Each one is
+//! generated into system files (or traffic-control state) by its own apply
+//! step, so a snapshot records which components it was taken as applied for,
+//! and pending changes are computed per component.
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -15,15 +15,18 @@ use std::str::FromStr;
 pub enum Component {
     Networkd,
     Firewall,
+    /// Traffic shaping (SQM / CAKE) applied with `tc`.
+    Sqm,
     Dnsmasq,
     Caddy,
 }
 
 impl Component {
     /// Every component, in apply order.
-    pub const ALL: [Component; 4] = [
+    pub const ALL: [Component; 5] = [
         Component::Networkd,
         Component::Firewall,
+        Component::Sqm,
         Component::Dnsmasq,
         Component::Caddy,
     ];
@@ -32,6 +35,7 @@ impl Component {
         match self {
             Component::Networkd => "networkd",
             Component::Firewall => "firewall",
+            Component::Sqm => "sqm",
             Component::Dnsmasq => "dnsmasq",
             Component::Caddy => "caddy",
         }
@@ -57,7 +61,7 @@ impl FromStr for Component {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::parse(value).ok_or_else(|| {
             format!(
-                "unknown component {value:?}; expected one of networkd, firewall, dnsmasq, caddy"
+                "unknown component {value:?}; expected one of networkd, firewall, sqm, dnsmasq, caddy"
             )
         })
     }
@@ -244,6 +248,8 @@ pub struct ComponentDiff {
 pub struct ComponentBaselines {
     pub networkd: Option<i64>,
     pub firewall: Option<i64>,
+    #[serde(default)]
+    pub sqm: Option<i64>,
     pub dnsmasq: Option<i64>,
     pub caddy: Option<i64>,
 }
@@ -253,6 +259,7 @@ impl ComponentBaselines {
         match component {
             Component::Networkd => self.networkd,
             Component::Firewall => self.firewall,
+            Component::Sqm => self.sqm,
             Component::Dnsmasq => self.dnsmasq,
             Component::Caddy => self.caddy,
         }
@@ -262,6 +269,7 @@ impl ComponentBaselines {
         match component {
             Component::Networkd => self.networkd = id,
             Component::Firewall => self.firewall = id,
+            Component::Sqm => self.sqm = id,
             Component::Dnsmasq => self.dnsmasq = id,
             Component::Caddy => self.caddy = id,
         }

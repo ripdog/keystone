@@ -40,6 +40,10 @@ type Generated = BTreeMap<String, String>;
 /// file on disk, so the ruleset is compared under this name.
 const FIREWALL_RULESET_LABEL: &str = "keystone.nft";
 
+/// Label for the traffic-shaping commands, which `tc` and `ip` apply instead of
+/// writing a file.
+const SQM_PLAN_LABEL: &str = "tc:sqm";
+
 /// Longest note accepted on a manual snapshot.
 const MAX_NOTE_BYTES: usize = 500;
 
@@ -65,6 +69,15 @@ async fn generate(component: Component, db: &Database) -> Result<Generated> {
             FIREWALL_RULESET_LABEL.to_string(),
             without_generation_time(crate::firewall::generate_preview(db).await?),
         )]),
+        // The planned tc/ip commands. Nothing is generated while shaping is off.
+        Component::Sqm => {
+            let plan = crate::sqm::preview_sqm(db.pool()).await?;
+            if plan.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(SQM_PLAN_LABEL.to_string(), plan)])
+            }
+        }
         Component::Dnsmasq => BTreeMap::from([(
             crate::dnsmasq::DNSMASQ_CONFIG_PATH.to_string(),
             crate::dnsmasq::preview_dnsmasq_config(db.pool()).await?,
@@ -726,6 +739,51 @@ mod tests {
 
         let after = pending_changes(&db).await.unwrap();
         assert!(!changed(&after, Component::Dnsmasq));
+    }
+
+    #[tokio::test]
+    async fn an_sqm_edit_is_pending_only_for_sqm_and_lists_the_tc_commands() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+
+        sqlx::query(
+            "UPDATE sqm_config SET enabled = 1, interface = 'eth0', download_kbit = 90000, upload_kbit = 18000 WHERE id = 1",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let pending = pending_changes(&db).await.unwrap();
+        assert!(changed(&pending, Component::Sqm));
+        assert!(!changed(&pending, Component::Dnsmasq));
+        assert!(!changed(&pending, Component::Firewall));
+        let sqm = pending
+            .components
+            .iter()
+            .find(|diff| diff.component == Component::Sqm)
+            .unwrap();
+        assert_eq!(sqm.files.len(), 1);
+        assert_eq!(sqm.files[0].path, "tc:sqm");
+        assert_eq!(sqm.files[0].status, FileChangeStatus::Added);
+        assert!(
+            sqm.files[0]
+                .unified_diff
+                .contains("+tc qdisc replace dev eth0 root cake bandwidth 18000kbit")
+        );
+        assert!(
+            sqm.files[0]
+                .unified_diff
+                .contains("+tc qdisc replace dev ifb4eth0 root cake bandwidth 90000kbit")
+        );
+
+        let outcome = discard_changes(&db, Some(vec![Component::Sqm]), None)
+            .await
+            .unwrap();
+        assert_eq!(outcome.components, vec![Component::Sqm]);
+        assert!(!changed(
+            &pending_changes(&db).await.unwrap(),
+            Component::Sqm
+        ));
     }
 
     #[tokio::test]

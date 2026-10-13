@@ -8,6 +8,7 @@ use thiserror::Error;
 
 pub mod api;
 pub mod changes;
+pub mod sqm;
 pub mod validation;
 
 // ============================================================================
@@ -2566,6 +2567,8 @@ pub struct ApplyAllResponse {
 pub struct ApplyComponentResults {
     pub networkd: ComponentResult,
     pub firewall: ComponentResult,
+    #[serde(default)]
+    pub sqm: ComponentResult,
     pub dnsmasq: ComponentResult,
     pub caddy: ComponentResult,
 }

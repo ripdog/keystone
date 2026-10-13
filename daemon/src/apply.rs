@@ -17,6 +17,7 @@ use crate::firewall::DEFAULT_CONFIRM_TIMEOUT_SECS;
 use crate::firewall::FirewallApplyManager;
 use crate::networkd::NetworkdApplyManager;
 use crate::snapshots;
+use crate::sqm;
 
 /// Re-export the result type for use by main.rs
 pub use keystone_core::ApplyAllResponse as ApplyAllResult;
@@ -52,8 +53,9 @@ fn component_skipped(message: impl Into<String>) -> ComponentResult {
 /// 1. First check if config changes are disabled
 /// 2. Apply networkd configuration (interfaces, VLANs, bridges)
 /// 3. Apply firewall configuration (with rollback protection)
-/// 4. Apply dnsmasq configuration (DNS/DHCP)
-/// 5. Apply Caddy configuration (web server)
+/// 4. Apply traffic shaping (SQM / CAKE)
+/// 5. Apply dnsmasq configuration (DNS/DHCP)
+/// 6. Apply Caddy configuration (web server)
 ///
 /// If any component fails, subsequent components are still attempted to avoid
 /// leaving the system in an inconsistent state. A configuration snapshot is
@@ -158,7 +160,21 @@ pub async fn apply_all(
         }
     }
 
-    // 3. Apply dnsmasq configuration
+    // 4. Apply traffic shaping (tc qdiscs on the WAN and its IFB device)
+    info!("Applying SQM configuration...");
+    components.sqm = match sqm::apply_saved(db).await {
+        Ok(()) => {
+            info!("SQM: applied successfully");
+            component_success("Applied successfully")
+        }
+        Err(e) => {
+            error!("SQM failed: {e:#}");
+            all_success = false;
+            component_failure(format!("{e:#}"))
+        }
+    };
+
+    // 5. Apply dnsmasq configuration
     info!("Applying dnsmasq configuration...");
     components.dnsmasq = match dnsmasq::apply_dnsmasq_config(db.pool()).await {
         Ok(()) => {
@@ -172,7 +188,7 @@ pub async fn apply_all(
         }
     };
 
-    // 4. Apply Caddy configuration
+    // 6. Apply Caddy configuration
     info!("Applying Caddy configuration...");
     components.caddy = match caddy::apply_caddy_config(db.pool()).await {
         Ok(()) => {
@@ -208,7 +224,12 @@ pub async fn apply_all(
         };
         // A firewall skipped because another apply still awaits confirmation
         // did not take this configuration, so it is not part of this baseline.
-        let mut applied = vec![Component::Networkd, Component::Dnsmasq, Component::Caddy];
+        let mut applied = vec![
+            Component::Networkd,
+            Component::Sqm,
+            Component::Dnsmasq,
+            Component::Caddy,
+        ];
         if !components.firewall.skipped {
             applied.push(Component::Firewall);
         }
@@ -232,6 +253,7 @@ fn format_failed_components(components: &ApplyComponentResults) -> String {
     let failures = [
         ("networkd", &components.networkd),
         ("firewall", &components.firewall),
+        ("sqm", &components.sqm),
         ("dnsmasq", &components.dnsmasq),
         ("caddy", &components.caddy),
     ]
@@ -284,6 +306,7 @@ mod tests {
         let components = ApplyComponentResults {
             networkd: component_failure("systemctl reload failed"),
             firewall: component_success("applied"),
+            sqm: component_success("applied"),
             dnsmasq: component_failure("address already in use"),
             caddy: component_skipped("not configured"),
         };

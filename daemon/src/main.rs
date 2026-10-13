@@ -19,6 +19,7 @@ mod networkd;
 mod snapshot_validation;
 mod snapshots;
 mod soho;
+mod sqm;
 mod ssh;
 mod status;
 mod systemd;
@@ -204,6 +205,7 @@ async fn main() -> anyhow::Result<()> {
     }
     ssh::start_reconciler(db.clone());
     caddy::start_reconciler(db.pool().clone());
+    sqm::start_reconciler(db.clone());
 
     let state = Arc::new(AppState::new(
         auth_manager,
@@ -229,6 +231,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Create Caddy state for Caddy routes
     let caddy_state = caddy::routes::CaddyState { db: db.clone() };
+
+    // Create SQM state for traffic-shaping routes
+    let sqm_state = sqm::routes::SqmState { db: db.clone() };
 
     // Build the router with protected routes
     let protected = Router::new()
@@ -273,6 +278,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(clients::clients_routes(db.clone()))
         // Merge Caddy routes
         .merge(caddy::routes::caddy_routes(caddy_state))
+        // Merge traffic shaping (SQM) routes
+        .merge(sqm::routes::sqm_routes(sqm_state))
         // Merge pending-change and snapshot routes
         .merge(changes::changes_routes(changes_state))
         // Merge systemd routes

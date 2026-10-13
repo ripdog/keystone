@@ -87,6 +87,7 @@ pub const CONFIG_TABLES: &[&str] = &[
     "dnsmasq_cname_records",
     "dnsmasq_address_overrides",
     "caddy_config",
+    "sqm_config",
 ];
 
 /// Tables that are never captured into or restored from a snapshot: accounts
@@ -108,6 +109,9 @@ pub const NON_CONFIG_TABLES: &[&str] = &[
     "firewall_active_config",
     // Setup and wizard progress, plus the configuration-changes lock.
     "global_settings",
+    // Shaping rules last applied with tc. Runtime state that the SQM
+    // reconciler re-applies, not configuration.
+    "sqm_applied",
 ];
 
 /// The component whose generated files depend on a configuration table.
@@ -118,7 +122,7 @@ pub const NON_CONFIG_TABLES: &[&str] = &[
 /// generator today. They describe systemd-networkd features (DHCPServer and
 /// IPv6SendRA), so they belong to networkd.
 pub fn component_of(table: &str) -> Option<Component> {
-    use Component::{Caddy, Dnsmasq, Firewall, Networkd};
+    use Component::{Caddy, Dnsmasq, Firewall, Networkd, Sqm};
     Some(match table {
         "managed_interfaces"
         | "interface_config"
@@ -160,6 +164,7 @@ pub fn component_of(table: &str) -> Option<Component> {
         | "dnsmasq_host_record_names"
         | "dnsmasq_cname_records"
         | "dnsmasq_address_overrides" => Dnsmasq,
+        "sqm_config" => Sqm,
         "caddy_config" => Caddy,
         _ => return None,
     })

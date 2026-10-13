@@ -99,6 +99,23 @@ pub fn generate_prerouting_chain(
     }
 }
 
+/// True when the external side of the forward is a port range.
+fn is_range(pf: &PortForward) -> bool {
+    pf.external_port_end
+        .is_some_and(|end| end > pf.external_port_start)
+}
+
+/// Port to translate to, or `None` to keep the original port. A range without
+/// an explicit destination port keeps each port as-is instead of collapsing
+/// the whole range onto its first port.
+fn dnat_port(pf: &PortForward) -> Option<u16> {
+    match pf.dest_port {
+        Some(port) => Some(port),
+        None if is_range(pf) => None,
+        None => Some(pf.external_port_start),
+    }
+}
+
 /// Create a port forward (DNAT) rule
 fn create_port_forward_rule(
     pf: &PortForward,
@@ -139,12 +156,10 @@ fn create_port_forward_rule(
     exprs.push(Statement::Counter(Counter::Anonymous(None)));
 
     // DNAT action
-    let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
-
     exprs.push(Statement::DNAT(Some(nftables::stmt::NAT {
         addr: Some(Expression::String(Cow::Owned(pf.dest_ip.clone()))),
         family: None,
-        port: Some(Expression::Number(dest_port as u32)),
+        port: dnat_port(pf).map(|port| Expression::Number(port as u32)),
         flags: None,
     })));
 
@@ -201,12 +216,10 @@ fn create_hairpin_dnat_rule(
     ];
 
     // DNAT action
-    let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
-
     exprs.push(Statement::DNAT(Some(nftables::stmt::NAT {
         addr: Some(Expression::String(Cow::Owned(pf.dest_ip.clone()))),
         family: None,
-        port: Some(Expression::Number(dest_port as u32)),
+        port: dnat_port(pf).map(|port| Expression::Number(port as u32)),
         flags: None,
     })));
 
@@ -320,8 +333,13 @@ fn create_hairpin_snat_rule(
     exprs.push(create_daddr_match(&pf.dest_ip));
 
     // Match destination port (the internal server port)
-    let dest_port = pf.dest_port.unwrap_or(pf.external_port_start);
-    exprs.push(create_dport_match(dest_port, None));
+    match dnat_port(pf) {
+        Some(port) => exprs.push(create_dport_match(port, None)),
+        None => exprs.push(create_dport_match(
+            pf.external_port_start,
+            pf.external_port_end,
+        )),
+    }
 
     // Counter
     exprs.push(Statement::Counter(Counter::Anonymous(None)));
@@ -369,5 +387,80 @@ fn create_masquerade_rule(interface: &str) -> Rule<'static> {
         .into(),
         comment: Some(Cow::Owned(format!("Masquerade for {}", interface))),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn forward(start: u16, end: Option<u16>, dest_port: Option<u16>) -> PortForward {
+        PortForward {
+            id: None,
+            name: "pf".to_string(),
+            enabled: true,
+            protocol: RuleProtocol::Tcp,
+            external_port_start: start,
+            external_port_end: end,
+            dest_ip: "192.168.1.10".to_string(),
+            dest_port,
+            source_zone: None,
+            source_ip: None,
+            description: None,
+        }
+    }
+
+    fn dnat_port_of(rule: &Rule<'static>) -> Option<Expression<'static>> {
+        rule.expr
+            .iter()
+            .find_map(|stmt| match stmt {
+                Statement::DNAT(Some(nat)) => Some(nat.port.clone()),
+                _ => None,
+            })
+            .expect("rule has a DNAT statement")
+    }
+
+    #[test]
+    fn single_port_defaults_to_same_port() {
+        let pf = forward(8080, None, None);
+        let zones = HashMap::new();
+        let rule = create_port_forward_rule(&pf, &zones, "tcp").unwrap();
+        assert!(matches!(
+            dnat_port_of(&rule),
+            Some(Expression::Number(8080))
+        ));
+    }
+
+    #[test]
+    fn explicit_dest_port_is_used() {
+        let pf = forward(8080, None, Some(80));
+        let zones = HashMap::new();
+        let rule = create_port_forward_rule(&pf, &zones, "tcp").unwrap();
+        assert!(matches!(dnat_port_of(&rule), Some(Expression::Number(80))));
+        let hairpin = create_hairpin_dnat_rule(&pf, &["eth1".to_string()], "tcp").unwrap();
+        assert!(matches!(
+            dnat_port_of(&hairpin),
+            Some(Expression::Number(80))
+        ));
+    }
+
+    #[test]
+    fn range_without_dest_port_preserves_original_port() {
+        let pf = forward(5000, Some(5010), None);
+        let zones = HashMap::new();
+        let rule = create_port_forward_rule(&pf, &zones, "tcp").unwrap();
+        assert!(dnat_port_of(&rule).is_none());
+        let hairpin = create_hairpin_dnat_rule(&pf, &["eth1".to_string()], "tcp").unwrap();
+        assert!(dnat_port_of(&hairpin).is_none());
+    }
+
+    #[test]
+    fn hairpin_snat_matches_whole_range_when_port_preserved() {
+        let pf = forward(5000, Some(5010), None);
+        let rule = create_hairpin_snat_rule(&pf, &["eth1".to_string()], "tcp").unwrap();
+        let expected = create_dport_match(5000, Some(5010));
+        assert!(rule.expr.iter().any(|stmt| {
+            serde_json::to_value(stmt).unwrap() == serde_json::to_value(&expected).unwrap()
+        }));
     }
 }

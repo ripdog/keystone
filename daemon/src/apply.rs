@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use keystone_core::changes::Component;
 use keystone_core::{ApplyComponentResults, ComponentResult};
 use tracing::{error, info, warn};
 
@@ -205,7 +206,13 @@ pub async fn apply_all(
         } else {
             None
         };
-        snapshots::record_applied(db, actor, pending_session, "unified apply").await;
+        // A firewall skipped because another apply still awaits confirmation
+        // did not take this configuration, so it is not part of this baseline.
+        let mut applied = vec![Component::Networkd, Component::Dnsmasq, Component::Caddy];
+        if !components.firewall.skipped {
+            applied.push(Component::Firewall);
+        }
+        snapshots::record_applied(db, actor, pending_session, &applied, "unified apply").await;
     }
 
     Ok(ApplyAllResult {

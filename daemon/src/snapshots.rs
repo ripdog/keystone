@@ -18,18 +18,20 @@
 // Read and restore entry points are consumed by the HTTP layer in a later phase.
 #![allow(dead_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 use tracing::{info, warn};
 use uuid::Uuid;
+
+pub use keystone_core::changes::{Component, SnapshotKind, SnapshotStatus};
 
 use crate::db::Database;
 
@@ -110,61 +112,84 @@ pub const NON_CONFIG_TABLES: &[&str] = &[
     "global_settings",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SnapshotKind {
-    Applied,
-    PreRestore,
-    Imported,
-    Manual,
+/// The component whose generated files depend on a configuration table.
+/// Every table in [`CONFIG_TABLES`] maps to exactly one component, so a
+/// component's rows can be restored without touching the others.
+///
+/// `dhcp_server_*`, `ipv6_ra_*` and `dhcp_static_leases` are not read by any
+/// generator today. They describe systemd-networkd features (DHCPServer and
+/// IPv6SendRA), so they belong to networkd.
+pub fn component_of(table: &str) -> Option<Component> {
+    use Component::{Caddy, Dnsmasq, Firewall, Networkd};
+    Some(match table {
+        "managed_interfaces"
+        | "interface_config"
+        | "interface_addresses"
+        | "interface_routes"
+        | "interface_dns"
+        | "interface_domains"
+        | "dhcpv4_client_config"
+        | "dhcpv6_client_config"
+        | "dhcp_server_config"
+        | "dhcp_server_dns"
+        | "dhcp_server_ntp"
+        | "dhcp_static_leases"
+        | "ipv6_ra_config"
+        | "ipv6_ra_dns"
+        | "ipv6_ra_search_domains"
+        | "ipv6_ra_prefixes"
+        | "ipv6_accept_ra_config"
+        | "vlan_config"
+        | "bridge_config" => Networkd,
+        "firewall_zones"
+        | "firewall_zone_interfaces"
+        | "firewall_zone_forwards"
+        | "firewall_port_forwards"
+        | "firewall_input_rules"
+        | "firewall_forward_rules"
+        | "firewall_global_settings" => Firewall,
+        "dnsmasq_config"
+        | "dnsmasq_listen_interfaces"
+        | "dnsmasq_except_interfaces"
+        | "dnsmasq_no_dhcp_interfaces"
+        | "dnsmasq_upstream_servers"
+        | "dnsmasq_dhcp_ranges"
+        | "dnsmasq_static_leases"
+        | "dnsmasq_static_lease_tags"
+        | "dnsmasq_dhcp_options"
+        | "dnsmasq_dhcp_option_tags"
+        | "dnsmasq_host_records"
+        | "dnsmasq_host_record_names"
+        | "dnsmasq_cname_records"
+        | "dnsmasq_address_overrides" => Dnsmasq,
+        "caddy_config" => Caddy,
+        _ => return None,
+    })
 }
 
-impl SnapshotKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Applied => "applied",
-            Self::PreRestore => "pre_restore",
-            Self::Imported => "imported",
-            Self::Manual => "manual",
-        }
-    }
+/// Comma list stored in `config_snapshots.components`. Sorted and de-duplicated.
+fn encode_components(components: &[Component]) -> String {
+    let mut sorted = components.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    sorted
+        .iter()
+        .map(|component| component.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
-    fn parse(value: &str) -> Result<Self> {
-        Ok(match value {
-            "applied" => Self::Applied,
-            "pre_restore" => Self::PreRestore,
-            "imported" => Self::Imported,
-            "manual" => Self::Manual,
-            other => bail!("unknown snapshot kind {other:?}"),
+fn decode_components(value: &str) -> Result<Vec<Component>> {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    value
+        .split(',')
+        .map(|name| {
+            Component::parse(name)
+                .with_context(|| format!("unknown component {name:?} in snapshot record"))
         })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SnapshotStatus {
-    Active,
-    PendingConfirmation,
-    RolledBack,
-}
-
-impl SnapshotStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::PendingConfirmation => "pending_confirmation",
-            Self::RolledBack => "rolled_back",
-        }
-    }
-
-    fn parse(value: &str) -> Result<Self> {
-        Ok(match value {
-            "active" => Self::Active,
-            "pending_confirmation" => Self::PendingConfirmation,
-            "rolled_back" => Self::RolledBack,
-            other => bail!("unknown snapshot status {other:?}"),
-        })
-    }
+        .collect()
 }
 
 /// Metadata for one snapshot row.
@@ -179,6 +204,8 @@ pub struct SnapshotInfo {
     pub file_name: String,
     pub schema_version: i64,
     pub session_id: Option<String>,
+    /// Components this snapshot is the applied baseline for.
+    pub components: Vec<Component>,
 }
 
 /// Parameters for recording a new snapshot.
@@ -187,14 +214,20 @@ pub struct NewSnapshot<'a> {
     pub status: SnapshotStatus,
     /// Apply session that must be confirmed; set only for pending snapshots.
     pub session_id: Option<&'a str>,
+    /// Components this snapshot is the applied baseline for. Empty means the
+    /// snapshot is never a baseline.
+    pub components: &'a [Component],
     pub actor: Option<&'a str>,
     pub note: Option<&'a str>,
 }
 
-/// Result of restoring a snapshot.
+/// Result of restoring snapshots into the live database.
 #[derive(Debug)]
 pub struct RestoreOutcome {
-    pub restored: SnapshotInfo,
+    /// The snapshots the configuration was taken from, in id order.
+    pub restored: Vec<SnapshotInfo>,
+    /// Components whose tables were replaced, in component order.
+    pub components: Vec<Component>,
     /// The automatic backup of the configuration that was replaced.
     pub pre_restore: SnapshotInfo,
 }
@@ -373,20 +406,33 @@ async fn working_copy(db: &Database, id: i64, purpose: &str) -> Result<(Snapshot
 // Querying
 // ============================================================================
 
-const SNAPSHOT_COLUMNS: &str =
-    "id, created_at, kind, status, actor, note, file_name, schema_version, session_id";
+const SNAPSHOT_COLUMNS: &str = "id, created_at, kind, status, actor, note, file_name, \
+     schema_version, session_id, components";
+
+fn parse_known<T>(value: &str, parse: fn(&str) -> Option<T>, what: &str) -> Result<T> {
+    parse(value).with_context(|| format!("unknown {what} {value:?}"))
+}
 
 fn info_from_row(row: &SqliteRow) -> Result<SnapshotInfo> {
     Ok(SnapshotInfo {
         id: row.try_get("id")?,
         created_at: row.try_get("created_at")?,
-        kind: SnapshotKind::parse(&row.try_get::<String, _>("kind")?)?,
-        status: SnapshotStatus::parse(&row.try_get::<String, _>("status")?)?,
+        kind: parse_known(
+            &row.try_get::<String, _>("kind")?,
+            SnapshotKind::parse,
+            "snapshot kind",
+        )?,
+        status: parse_known(
+            &row.try_get::<String, _>("status")?,
+            SnapshotStatus::parse,
+            "snapshot status",
+        )?,
         actor: row.try_get("actor")?,
         note: row.try_get("note")?,
         file_name: row.try_get("file_name")?,
         schema_version: row.try_get("schema_version")?,
         session_id: row.try_get("session_id")?,
+        components: decode_components(&row.try_get::<String, _>("components")?)?,
     })
 }
 
@@ -418,6 +464,27 @@ pub async fn latest_active_snapshot(db: &Database) -> Result<Option<SnapshotInfo
         "SELECT {SNAPSHOT_COLUMNS} FROM config_snapshots
          WHERE status = 'active' ORDER BY id DESC LIMIT 1"
     )))
+    .fetch_optional(db.pool())
+    .await?
+    .as_ref()
+    .map(info_from_row)
+    .transpose()
+}
+
+/// The newest active snapshot that is the applied baseline for `component`.
+/// Pending, rolled-back, manual, imported and pre-restore snapshots never
+/// qualify, and neither does a snapshot taken for other components only.
+pub async fn latest_applied_for(
+    db: &Database,
+    component: Component,
+) -> Result<Option<SnapshotInfo>> {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT {SNAPSHOT_COLUMNS} FROM config_snapshots
+         WHERE status = 'active'
+           AND instr(',' || components || ',', ',' || ? || ',') > 0
+         ORDER BY id DESC LIMIT 1"
+    )))
+    .bind(component.as_str())
     .fetch_optional(db.pool())
     .await?
     .as_ref()
@@ -464,8 +531,9 @@ pub async fn create_snapshot(db: &Database, new: NewSnapshot<'_>) -> Result<Snap
         strip_to_configuration(&path).await?;
         let id = sqlx::query(
             "INSERT INTO config_snapshots
-                (created_at, kind, status, actor, note, file_name, schema_version, session_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (created_at, kind, status, actor, note, file_name, schema_version, session_id,
+                 components)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(unix_secs())
         .bind(new.kind.as_str())
@@ -475,6 +543,7 @@ pub async fn create_snapshot(db: &Database, new: NewSnapshot<'_>) -> Result<Snap
         .bind(file_name.as_str())
         .bind(schema)
         .bind(new.session_id)
+        .bind(encode_components(new.components))
         .execute(db.pool())
         .await?
         .last_insert_rowid();
@@ -539,21 +608,42 @@ async fn strip_to_configuration(path: &Path) -> Result<()> {
     result
 }
 
-/// Delete the oldest snapshots beyond `keep`, with their files. The newest
-/// active snapshot and any snapshot awaiting confirmation are always kept.
+/// Snapshot ids that retention must keep regardless of age: the newest active
+/// snapshot, and the newest active baseline of each component.
+fn protected_snapshot_ids(newest_first: &[SnapshotInfo]) -> BTreeSet<i64> {
+    let mut protected = BTreeSet::new();
+    let active = || {
+        newest_first
+            .iter()
+            .filter(|snapshot| snapshot.status == SnapshotStatus::Active)
+    };
+    if let Some(newest) = active().next() {
+        protected.insert(newest.id);
+    }
+    for component in Component::ALL {
+        if let Some(baseline) = active().find(|s| s.components.contains(&component)) {
+            protected.insert(baseline.id);
+        }
+    }
+    protected
+}
+
+/// Delete the oldest snapshots beyond `keep`, with their files. Pending
+/// snapshots and the snapshots protected by [`protected_snapshot_ids`] are
+/// always kept.
 pub async fn prune_snapshots(db: &Database, keep: usize) -> Result<usize> {
     let dir = snapshot_dir(db).await?;
-    let keep = i64::try_from(keep).context("retention count is too large")?;
-    let victims: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, file_name FROM config_snapshots
-         WHERE id NOT IN (SELECT id FROM config_snapshots ORDER BY id DESC LIMIT ?)
-           AND status <> 'pending_confirmation'
-           AND id IS NOT (SELECT MAX(id) FROM config_snapshots WHERE status = 'active')
-         ORDER BY id",
-    )
-    .bind(keep)
-    .fetch_all(db.pool())
-    .await?;
+    let newest_first = list_snapshots(db).await?;
+    let protected = protected_snapshot_ids(&newest_first);
+
+    let mut victims: Vec<(i64, String)> = newest_first
+        .iter()
+        .skip(keep)
+        .filter(|snapshot| snapshot.status != SnapshotStatus::PendingConfirmation)
+        .filter(|snapshot| !protected.contains(&snapshot.id))
+        .map(|snapshot| (snapshot.id, snapshot.file_name.clone()))
+        .collect();
+    victims.reverse();
 
     let mut removed = 0;
     for (id, file_name) in victims {
@@ -576,12 +666,17 @@ pub async fn prune_snapshots(db: &Database, keep: usize) -> Result<usize> {
     Ok(removed)
 }
 
-/// Record the configuration after a successful apply. Snapshot failures are
-/// logged and never fail the apply that was already carried out.
+/// Record the configuration after a successful apply of `components`. Snapshot
+/// failures are logged and never fail the apply that was already carried out.
+///
+/// Only the listed components become applied baselines. The database holds
+/// every component, but the other components' generated files were not
+/// written by this apply.
 pub async fn record_applied(
     db: &Database,
     actor: Option<&str>,
     pending_session: Option<&str>,
+    components: &[Component],
     note: &str,
 ) {
     let status = if pending_session.is_some() {
@@ -593,6 +688,7 @@ pub async fn record_applied(
         kind: SnapshotKind::Applied,
         status,
         session_id: pending_session,
+        components,
         actor,
         note: Some(note),
     };
@@ -692,6 +788,7 @@ pub async fn reconcile_on_startup(db: &Database, live_sessions: &[String]) -> Re
                 kind: SnapshotKind::Applied,
                 status,
                 session_id,
+                components: &Component::ALL,
                 actor: None,
                 note: Some("Daemon startup baseline"),
             },
@@ -705,40 +802,115 @@ pub async fn reconcile_on_startup(db: &Database, live_sessions: &[String]) -> Re
 // Restoring and previewing
 // ============================================================================
 
-/// Replace the live configuration with a snapshot's. The current configuration
-/// is first saved as a `pre_restore` snapshot, so the restore can be undone.
+/// Replace the live configuration with a snapshot's, or with the chosen
+/// components of it. The current configuration is first saved as a
+/// `pre_restore` snapshot, so the restore can be undone. Nothing is applied to
+/// the system; the restored configuration becomes pending changes.
 pub async fn restore_snapshot(
     db: &Database,
     id: i64,
     actor: Option<&str>,
+    components: Option<&[Component]>,
 ) -> Result<RestoreOutcome> {
-    let (snapshot, work) = working_copy(db, id, "restore").await?;
+    let components = components.map_or_else(|| Component::ALL.to_vec(), <[Component]>::to_vec);
+    restore_components(db, &[(id, components)], actor).await
+}
 
-    let result: Result<SnapshotInfo> = async {
-        // Validate and migrate before anything is saved or changed.
-        prepare_copy(&work).await?;
-        let note = format!("Automatic backup before restoring snapshot {id}");
-        let pre_restore = create_snapshot(
-            db,
-            NewSnapshot {
-                kind: SnapshotKind::PreRestore,
-                status: SnapshotStatus::Active,
-                session_id: None,
-                actor,
-                note: Some(&note),
-            },
-        )
-        .await?;
-        replace_configuration(db.pool(), &work).await?;
-        Ok(pre_restore)
+/// Replace configuration tables from several snapshots at once. Each plan entry
+/// pairs a snapshot id with the components to take from it, and a component may
+/// appear only once. The whole plan is one transaction: either every selected
+/// table is replaced or none is.
+pub async fn restore_components(
+    db: &Database,
+    plan: &[(i64, Vec<Component>)],
+    actor: Option<&str>,
+) -> Result<RestoreOutcome> {
+    ensure!(!plan.is_empty(), "no snapshot was selected for restore");
+
+    let mut by_snapshot: BTreeMap<i64, Vec<Component>> = BTreeMap::new();
+    let mut seen = BTreeSet::new();
+    for (id, components) in plan {
+        ensure!(
+            !components.is_empty(),
+            "no components selected from snapshot {id}"
+        );
+        for component in components {
+            ensure!(
+                seen.insert(*component),
+                "component {component} is selected from more than one snapshot"
+            );
+        }
+        by_snapshot
+            .entry(*id)
+            .or_default()
+            .extend(components.iter().copied());
     }
-    .await;
 
-    remove_snapshot_files(&work);
-    let pre_restore = result?;
-    info!("Restored configuration snapshot {id}");
+    // Working copies are removed on every path, including refusals.
+    let mut copies: Vec<(SnapshotInfo, PathBuf)> = Vec::new();
+    let outcome = restore_from_copies(db, &by_snapshot, actor, &mut copies).await;
+    for (_, work) in &copies {
+        remove_snapshot_files(work);
+    }
+    let outcome = outcome?;
+    info!(
+        "Restored configuration components {:?} from snapshots {:?}",
+        outcome.components,
+        outcome.restored.iter().map(|s| s.id).collect::<Vec<_>>()
+    );
+    Ok(outcome)
+}
+
+async fn restore_from_copies(
+    db: &Database,
+    by_snapshot: &BTreeMap<i64, Vec<Component>>,
+    actor: Option<&str>,
+    copies: &mut Vec<(SnapshotInfo, PathBuf)>,
+) -> Result<RestoreOutcome> {
+    for id in by_snapshot.keys() {
+        copies.push(working_copy(db, *id, "restore").await?);
+    }
+    // Validate and migrate every source before anything is saved or changed.
+    for (_, work) in copies.iter() {
+        prepare_copy(work).await?;
+    }
+
+    let ids: Vec<String> = by_snapshot.keys().map(i64::to_string).collect();
+    let note = format!(
+        "Automatic backup before restoring snapshot {}",
+        ids.join(", ")
+    );
+    let pre_restore = create_snapshot(
+        db,
+        NewSnapshot {
+            kind: SnapshotKind::PreRestore,
+            status: SnapshotStatus::Active,
+            session_id: None,
+            // The replaced state was not necessarily applied, so it never
+            // becomes an applied baseline.
+            components: &[],
+            actor,
+            note: Some(&note),
+        },
+    )
+    .await?;
+
+    let sources: Vec<(String, PathBuf, Vec<Component>)> = copies
+        .iter()
+        .zip(by_snapshot.values())
+        .enumerate()
+        .map(|(index, ((_, work), components))| {
+            (source_alias(index), work.clone(), components.clone())
+        })
+        .collect();
+    replace_configuration(db.pool(), &sources).await?;
+
+    let mut components: Vec<Component> = by_snapshot.values().flatten().copied().collect();
+    components.sort();
+    let restored = copies.iter().map(|(info, _)| info.clone()).collect();
     Ok(RestoreOutcome {
-        restored: snapshot,
+        restored,
+        components,
         pre_restore,
     })
 }
@@ -761,6 +933,137 @@ pub async fn open_snapshot(db: &Database, id: i64) -> Result<OpenedSnapshot> {
             Err(error)
         }
     }
+}
+
+/// Largest uploaded snapshot accepted. Configuration snapshots are small, so
+/// this only bounds the work done on an untrusted file.
+pub const MAX_IMPORT_BYTES: usize = 32 * 1024 * 1024;
+
+const SQLITE_HEADER: &[u8] = b"SQLite format 3\0";
+
+/// Store an uploaded configuration snapshot as an `imported` snapshot.
+///
+/// The upload is never attached to the live database. It is written to a
+/// private file, checked read-only, migrated and stripped to configuration
+/// there, and only then registered. An imported snapshot has no components, so
+/// it never becomes an applied baseline. Restoring it is a separate step.
+pub async fn import_snapshot(
+    db: &Database,
+    bytes: &[u8],
+    actor: Option<&str>,
+) -> Result<SnapshotInfo> {
+    ensure!(
+        bytes.len() <= MAX_IMPORT_BYTES,
+        "snapshot upload is larger than the {MAX_IMPORT_BYTES}-byte limit"
+    );
+    ensure!(
+        bytes.starts_with(SQLITE_HEADER),
+        "uploaded file is not an SQLite database"
+    );
+    let dir = snapshot_dir(db).await?;
+    ensure_private_dir(&dir)?;
+
+    let staged = dir.join(format!("import-{}.db", Uuid::new_v4().simple()));
+    let file_name = format!("{}-{}.db", unix_millis(), Uuid::new_v4().simple());
+    let final_path = snapshot_file_path(&dir, &file_name)?;
+
+    let result: Result<SnapshotInfo> = async {
+        write_private_file(&staged, bytes)?;
+        precheck_read_only(&staged).await?;
+        prepare_copy(&staged).await?;
+        strip_to_configuration(&staged).await?;
+        let schema = {
+            let pool = open_sqlite(&staged, true).await?;
+            let version = schema_version(&pool).await;
+            pool.close().await;
+            version?
+        };
+
+        std::fs::rename(&staged, &final_path).context("Failed to store the imported snapshot")?;
+        restrict_file(&final_path)?;
+        let id = sqlx::query(
+            "INSERT INTO config_snapshots
+                (created_at, kind, status, actor, note, file_name, schema_version, session_id,
+                 components)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, '')",
+        )
+        .bind(unix_secs())
+        .bind(SnapshotKind::Imported.as_str())
+        .bind(SnapshotStatus::Active.as_str())
+        .bind(actor)
+        .bind("Imported from an uploaded file")
+        .bind(file_name.as_str())
+        .bind(schema)
+        .execute(db.pool())
+        .await?
+        .last_insert_rowid();
+        get_snapshot(db, id)
+            .await?
+            .context("snapshot row disappeared after insert")
+    }
+    .await;
+
+    remove_snapshot_files(&staged);
+    match result {
+        Ok(info) => {
+            info!("Imported configuration snapshot {}", info.id);
+            Ok(info)
+        }
+        Err(error) => {
+            remove_snapshot_files(&final_path);
+            Err(error)
+        }
+    }
+}
+
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("Failed to create {}", path.display()))?;
+    file.write_all(bytes)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("Failed to flush {}", path.display()))?;
+    Ok(())
+}
+
+/// Validate an untrusted file without writing to it: integrity, schema version
+/// and table classification. Runs before any migration or stripping.
+async fn precheck_read_only(path: &Path) -> Result<()> {
+    let pool = open_sqlite(path, true).await?;
+    let result: Result<()> = async {
+        let integrity: Vec<String> =
+            sqlx::query_scalar("SELECT integrity_check FROM pragma_integrity_check")
+                .fetch_all(&pool)
+                .await
+                .context("uploaded file is not a readable SQLite database")?;
+        ensure!(
+            integrity == ["ok"],
+            "uploaded snapshot failed the integrity check: {}",
+            integrity.join("; ")
+        );
+
+        let newest_known = MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0);
+        let applied = schema_version(&pool)
+            .await
+            .context("uploaded file has no migration history")?;
+        ensure!(
+            applied <= newest_known,
+            "uploaded snapshot uses schema version {applied}, newer than this daemon's {newest_known}"
+        );
+
+        let names = table_names(&pool).await?;
+        check_classified(names.iter().map(String::as_str))?;
+        Ok(())
+    }
+    .await;
+    pool.close().await;
+    result
 }
 
 /// Validate a snapshot copy and migrate it to this daemon's schema. Snapshots
@@ -799,9 +1102,16 @@ async fn prepare_copy(path: &Path) -> Result<()> {
     result
 }
 
-/// Replace configuration rows in the live database with those of a validated
-/// snapshot copy at `snapshot`, in one transaction.
-async fn replace_configuration(live: &SqlitePool, snapshot: &Path) -> Result<()> {
+fn source_alias(index: usize) -> String {
+    format!("restore_source_{index}")
+}
+
+/// Replace configuration rows in the live database with those of validated
+/// snapshot copies. Each source contributes the tables of its components.
+async fn replace_configuration(
+    live: &SqlitePool,
+    sources: &[(String, PathBuf, Vec<Component>)],
+) -> Result<()> {
     let names = table_names(live).await?;
     check_classified(names.iter().map(String::as_str))?;
 
@@ -812,7 +1122,7 @@ async fn replace_configuration(live: &SqlitePool, snapshot: &Path) -> Result<()>
         .execute(&mut *conn)
         .await?;
 
-    let outcome = restore_tables(&mut conn, snapshot).await;
+    let outcome = restore_tables(&mut conn, sources).await;
 
     if let Err(error) = sqlx::query("PRAGMA foreign_keys = ON")
         .execute(&mut *conn)
@@ -825,32 +1135,60 @@ async fn replace_configuration(live: &SqlitePool, snapshot: &Path) -> Result<()>
     outcome
 }
 
-async fn restore_tables(conn: &mut SqliteConnection, snapshot: &Path) -> Result<()> {
-    let path = snapshot
-        .to_str()
-        .context("snapshot path is not valid UTF-8")?;
-    // ATTACH cannot run inside a transaction, so it happens first.
-    sqlx::query("ATTACH DATABASE ? AS restore_source")
-        .bind(path)
-        .execute(&mut *conn)
-        .await
-        .context("Failed to attach the snapshot")?;
+async fn restore_tables(
+    conn: &mut SqliteConnection,
+    sources: &[(String, PathBuf, Vec<Component>)],
+) -> Result<()> {
+    // ATTACH cannot run inside a transaction, so every source is attached first.
+    let mut attached = Vec::new();
+    let mut result: Result<()> = Ok(());
+    for (alias, path, _) in sources {
+        let attach = async {
+            let path = path.to_str().context("snapshot path is not valid UTF-8")?;
+            sqlx::query(sqlx::AssertSqlSafe(format!("ATTACH DATABASE ? AS {alias}")))
+                .bind(path)
+                .execute(&mut *conn)
+                .await
+                .context("Failed to attach the snapshot")?;
+            anyhow::Ok(())
+        }
+        .await;
+        match attach {
+            Ok(()) => attached.push(alias.clone()),
+            Err(error) => {
+                result = Err(error);
+                break;
+            }
+        }
+    }
 
-    let result = replace_rows(conn).await;
+    if result.is_ok() {
+        result = replace_rows(conn, sources).await;
+    }
     if result.is_err() {
         // Nothing to roll back if BEGIN itself never ran.
         let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
     }
-    let detach = sqlx::query("DETACH DATABASE restore_source")
-        .execute(&mut *conn)
-        .await;
+
+    let mut detach_result: Result<()> = Ok(());
+    for alias in &attached {
+        if let Err(error) = sqlx::query(sqlx::AssertSqlSafe(format!("DETACH DATABASE {alias}")))
+            .execute(&mut *conn)
+            .await
+        {
+            detach_result = Err(error.into());
+        }
+    }
 
     result?;
-    detach?;
+    detach_result?;
     Ok(())
 }
 
-async fn replace_rows(conn: &mut SqliteConnection) -> Result<()> {
+async fn replace_rows(
+    conn: &mut SqliteConnection,
+    sources: &[(String, PathBuf, Vec<Component>)],
+) -> Result<()> {
     sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
     for table in CONFIG_TABLES {
@@ -858,8 +1196,17 @@ async fn replace_rows(conn: &mut SqliteConnection) -> Result<()> {
             is_safe_identifier(table),
             "unsupported table name {table:?}"
         );
+        let component =
+            component_of(table).with_context(|| format!("{table} has no owning component"))?;
+        let Some((alias, _, _)) = sources
+            .iter()
+            .find(|(_, _, components)| components.contains(&component))
+        else {
+            continue;
+        };
+
         let live_columns = column_names(conn, "main", table).await?;
-        let snapshot_columns = column_names(conn, "restore_source", table).await?;
+        let snapshot_columns = column_names(conn, alias, table).await?;
         ensure!(
             live_columns.iter().collect::<BTreeSet<_>>()
                 == snapshot_columns.iter().collect::<BTreeSet<_>>(),
@@ -876,7 +1223,7 @@ async fn replace_rows(conn: &mut SqliteConnection) -> Result<()> {
             .execute(&mut *conn)
             .await?;
         sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO main.{table} ({columns}) SELECT {columns} FROM restore_source.{table}"
+            "INSERT INTO main.{table} ({columns}) SELECT {columns} FROM {alias}.{table}"
         )))
         .execute(&mut *conn)
         .await?;
@@ -915,15 +1262,15 @@ async fn column_names(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A scratch directory holding a file-backed database, so the snapshot
     /// directory is derived exactly as it is in production.
-    struct Scratch(PathBuf);
+    pub(crate) struct Scratch(PathBuf);
 
     impl Scratch {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
                 "keystone-snapshot-test-{}",
                 Uuid::new_v4().simple()
@@ -932,11 +1279,11 @@ mod tests {
             Self(path)
         }
 
-        fn db_path(&self) -> PathBuf {
+        pub(crate) fn db_path(&self) -> PathBuf {
             self.0.join("keystone.db")
         }
 
-        fn snapshot_dir(&self) -> PathBuf {
+        pub(crate) fn snapshot_dir(&self) -> PathBuf {
             self.0.join(SNAPSHOT_DIR_NAME)
         }
     }
@@ -947,7 +1294,7 @@ mod tests {
         }
     }
 
-    async fn open(scratch: &Scratch) -> Database {
+    pub(crate) async fn open(scratch: &Scratch) -> Database {
         Database::open_at(&scratch.db_path()).await.unwrap()
     }
 
@@ -956,6 +1303,7 @@ mod tests {
             kind: SnapshotKind::Applied,
             status: SnapshotStatus::Active,
             session_id: None,
+            components: &Component::ALL,
             actor: Some("admin"),
             note: Some("test"),
         }
@@ -1036,11 +1384,11 @@ mod tests {
         db.create_user("later", None, "hash-later").await.unwrap();
         assert!(zone_exists(&db, "guest").await);
 
-        let outcome = restore_snapshot(&db, snapshot.id, Some("admin"))
+        let outcome = restore_snapshot(&db, snapshot.id, Some("admin"), None)
             .await
             .unwrap();
 
-        assert_eq!(outcome.restored.id, snapshot.id);
+        assert_eq!(outcome.restored[0].id, snapshot.id);
         assert!(zone_exists(&db, "office").await);
         assert!(
             !zone_exists(&db, "guest").await,
@@ -1106,7 +1454,7 @@ mod tests {
         let snapshot = create_snapshot(&db, applied_now()).await.unwrap();
         insert_zone(&db, "guest").await;
 
-        let outcome = restore_snapshot(&db, snapshot.id, Some("admin"))
+        let outcome = restore_snapshot(&db, snapshot.id, Some("admin"), None)
             .await
             .unwrap();
 
@@ -1116,7 +1464,7 @@ mod tests {
         assert!(!zone_exists(&db, "guest").await);
 
         // Restoring the automatic backup brings back the replaced change.
-        restore_snapshot(&db, outcome.pre_restore.id, Some("admin"))
+        restore_snapshot(&db, outcome.pre_restore.id, Some("admin"), None)
             .await
             .unwrap();
         assert!(zone_exists(&db, "guest").await);
@@ -1153,7 +1501,9 @@ mod tests {
                 .await
                 .unwrap();
 
-        let error = restore_snapshot(&db, snapshot.id, None).await.unwrap_err();
+        let error = restore_snapshot(&db, snapshot.id, None, None)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("foreign key"), "{error:#}");
 
         assert!(
@@ -1192,7 +1542,9 @@ mod tests {
         copy.close().await;
 
         insert_zone(&db, "guest").await;
-        let error = restore_snapshot(&db, snapshot.id, None).await.unwrap_err();
+        let error = restore_snapshot(&db, snapshot.id, None, None)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("newer"), "{error:#}");
         assert!(zone_exists(&db, "guest").await);
         // Refusal happens before the automatic backup, so no extra snapshot appears.
@@ -1242,6 +1594,7 @@ mod tests {
                         kind: SnapshotKind::Applied,
                         status,
                         session_id: session,
+                        components: &Component::ALL,
                         actor: None,
                         note: None,
                     },
@@ -1279,6 +1632,7 @@ mod tests {
                 kind: SnapshotKind::Applied,
                 status: SnapshotStatus::PendingConfirmation,
                 session_id: Some("session-a"),
+                components: &Component::ALL,
                 actor: None,
                 note: None,
             },
@@ -1303,6 +1657,7 @@ mod tests {
                 kind: SnapshotKind::Applied,
                 status: SnapshotStatus::PendingConfirmation,
                 session_id: Some("old-session"),
+                components: &Component::ALL,
                 actor: None,
                 note: None,
             },
@@ -1362,5 +1717,419 @@ mod tests {
         );
         assert!(latest_active_snapshot(&db).await.unwrap().is_none());
         assert_eq!(status_of(&db, rolled.id).await, SnapshotStatus::RolledBack);
+    }
+
+    async fn count_rows(pool: &SqlitePool, table: &str) -> i64 {
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    async fn dnsmasq_cache_size(db: &Database) -> i64 {
+        sqlx::query_scalar("SELECT cache_size FROM dnsmasq_config WHERE id = 1")
+            .fetch_one(db.pool())
+            .await
+            .unwrap()
+    }
+
+    async fn set_dnsmasq_cache_size(db: &Database, size: i64) {
+        sqlx::query("UPDATE dnsmasq_config SET cache_size = ? WHERE id = 1")
+            .bind(size)
+            .execute(db.pool())
+            .await
+            .unwrap();
+    }
+
+    fn applied_for(components: &'static [Component]) -> NewSnapshot<'static> {
+        NewSnapshot {
+            kind: SnapshotKind::Applied,
+            status: SnapshotStatus::Active,
+            session_id: None,
+            components,
+            actor: None,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn every_config_table_belongs_to_exactly_one_component() {
+        let owners: Vec<(&str, Component)> = CONFIG_TABLES
+            .iter()
+            .map(|table| {
+                let owner = component_of(table)
+                    .unwrap_or_else(|| panic!("{table} has no owning component"));
+                (*table, owner)
+            })
+            .collect();
+        assert_eq!(owners.len(), CONFIG_TABLES.len());
+        for component in Component::ALL {
+            assert!(
+                owners.iter().any(|(_, owner)| *owner == component),
+                "{component} owns no configuration table"
+            );
+        }
+        assert_eq!(component_of("users"), None);
+        assert_eq!(component_of("config_snapshots"), None);
+        assert_eq!(component_of("mystery"), None);
+    }
+
+    #[test]
+    fn component_lists_round_trip_and_reject_unknown_names() {
+        let encoded = encode_components(&[Component::Caddy, Component::Networkd, Component::Caddy]);
+        assert_eq!(encoded, "networkd,caddy");
+        assert_eq!(
+            decode_components(&encoded).unwrap(),
+            vec![Component::Networkd, Component::Caddy]
+        );
+        assert_eq!(encode_components(&[]), "");
+        assert!(decode_components("").unwrap().is_empty());
+        assert!(decode_components("networkd,mystery").is_err());
+    }
+
+    #[tokio::test]
+    async fn migration_gives_existing_rows_every_component() {
+        let db = Database::new_in_memory().await.unwrap();
+        let components: String = sqlx::query_scalar(
+            "SELECT dflt_value FROM pragma_table_info('config_snapshots') WHERE name = 'components'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(components, "'networkd,firewall,dnsmasq,caddy'");
+    }
+
+    #[tokio::test]
+    async fn per_subsystem_apply_does_not_make_other_components_look_applied() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        record_applied(
+            &db,
+            Some("admin"),
+            None,
+            &[Component::Dnsmasq],
+            "dnsmasq apply",
+        )
+        .await;
+
+        let dnsmasq = latest_applied_for(&db, Component::Dnsmasq)
+            .await
+            .unwrap()
+            .expect("dnsmasq baseline");
+        assert_eq!(dnsmasq.components, vec![Component::Dnsmasq]);
+        for other in [Component::Networkd, Component::Firewall, Component::Caddy] {
+            assert!(
+                latest_applied_for(&db, other).await.unwrap().is_none(),
+                "{other} must not be marked applied by a dnsmasq apply"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn only_active_snapshots_covering_a_component_are_its_baseline() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+
+        let firewall = create_snapshot(&db, applied_for(&[Component::Firewall]))
+            .await
+            .unwrap();
+        // Manual, imported and pre-restore snapshots carry no components, so
+        // they are never a baseline even though they are active.
+        for kind in [
+            SnapshotKind::Manual,
+            SnapshotKind::Imported,
+            SnapshotKind::PreRestore,
+        ] {
+            create_snapshot(
+                &db,
+                NewSnapshot {
+                    kind,
+                    components: &[],
+                    ..applied_for(&[])
+                },
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            latest_applied_for(&db, Component::Firewall)
+                .await
+                .unwrap()
+                .map(|s| s.id),
+            Some(firewall.id)
+        );
+        assert!(
+            latest_applied_for(&db, Component::Dnsmasq)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // A pending apply is not applied until it is confirmed, and a rolled
+        // back one never is.
+        record_applied(
+            &db,
+            None,
+            Some("session-pending"),
+            &[Component::Firewall],
+            "firewall apply",
+        )
+        .await;
+        let pending = list_snapshots(&db).await.unwrap()[0].id;
+        assert_eq!(
+            latest_applied_for(&db, Component::Firewall)
+                .await
+                .unwrap()
+                .map(|s| s.id),
+            Some(firewall.id),
+            "a pending apply must not replace the baseline"
+        );
+        settle_session(&db, "session-pending", SnapshotStatus::Active).await;
+        assert_eq!(
+            latest_applied_for(&db, Component::Firewall)
+                .await
+                .unwrap()
+                .map(|s| s.id),
+            Some(pending)
+        );
+        settle_session(&db, "session-pending", SnapshotStatus::RolledBack).await;
+    }
+
+    #[tokio::test]
+    async fn restoring_one_component_leaves_the_others_alone() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        insert_zone(&db, "office").await;
+        set_dnsmasq_cache_size(&db, 1000).await;
+        let snapshot = create_snapshot(&db, applied_now()).await.unwrap();
+
+        insert_zone(&db, "guest").await;
+        set_dnsmasq_cache_size(&db, 4321).await;
+
+        restore_snapshot(&db, snapshot.id, None, Some(&[Component::Dnsmasq]))
+            .await
+            .unwrap();
+
+        assert_eq!(dnsmasq_cache_size(&db).await, 1000);
+        assert!(
+            zone_exists(&db, "guest").await,
+            "firewall rows must not change when only dnsmasq is restored"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_plan_takes_each_component_from_its_own_snapshot() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        insert_zone(&db, "firewall-a").await;
+        set_dnsmasq_cache_size(&db, 100).await;
+        let a = create_snapshot(&db, applied_now()).await.unwrap();
+
+        sqlx::query("DELETE FROM firewall_zones")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        insert_zone(&db, "firewall-b").await;
+        set_dnsmasq_cache_size(&db, 200).await;
+        let b = create_snapshot(&db, applied_now()).await.unwrap();
+
+        sqlx::query("DELETE FROM firewall_zones")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        insert_zone(&db, "live").await;
+        set_dnsmasq_cache_size(&db, 300).await;
+
+        let outcome = restore_components(
+            &db,
+            &[
+                (a.id, vec![Component::Firewall]),
+                (b.id, vec![Component::Dnsmasq]),
+            ],
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome.components,
+            vec![Component::Firewall, Component::Dnsmasq]
+        );
+        assert!(zone_exists(&db, "firewall-a").await);
+        assert!(!zone_exists(&db, "firewall-b").await);
+        assert!(!zone_exists(&db, "live").await);
+        assert_eq!(dnsmasq_cache_size(&db).await, 200);
+        // The replaced state is saved, and never counts as an applied baseline.
+        assert!(outcome.pre_restore.components.is_empty());
+    }
+
+    #[tokio::test]
+    async fn restore_plan_refuses_a_component_from_two_snapshots() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        insert_zone(&db, "office").await;
+        let snapshot = create_snapshot(&db, applied_now()).await.unwrap();
+        insert_zone(&db, "guest").await;
+
+        let error = restore_components(
+            &db,
+            &[
+                (snapshot.id, vec![Component::Firewall]),
+                (snapshot.id, vec![Component::Firewall]),
+            ],
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("more than one"), "{error:#}");
+        assert!(zone_exists(&db, "guest").await);
+        assert_eq!(list_snapshots(&db).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retention_keeps_each_components_newest_baseline() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+
+        let networkd = create_snapshot(&db, applied_for(&[Component::Networkd]))
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            create_snapshot(
+                &db,
+                NewSnapshot {
+                    status: SnapshotStatus::RolledBack,
+                    ..applied_for(&Component::ALL)
+                },
+            )
+            .await
+            .unwrap();
+        }
+        // The newest snapshot is a manual one: it must not push the networkd
+        // baseline out of retention.
+        let manual = create_snapshot(
+            &db,
+            NewSnapshot {
+                kind: SnapshotKind::Manual,
+                components: &[],
+                ..applied_for(&[])
+            },
+        )
+        .await
+        .unwrap();
+
+        let removed = prune_snapshots(&db, 1).await.unwrap();
+        assert_eq!(removed, 3);
+        let remaining: Vec<i64> = list_snapshots(&db)
+            .await
+            .unwrap()
+            .iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(remaining, vec![manual.id, networkd.id]);
+        assert_eq!(
+            latest_applied_for(&db, Component::Networkd)
+                .await
+                .unwrap()
+                .map(|s| s.id),
+            Some(networkd.id)
+        );
+    }
+
+    #[tokio::test]
+    async fn import_strips_accounts_and_is_never_a_baseline() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        db.create_user("admin", None, "hash-admin").await.unwrap();
+        insert_zone(&db, "office").await;
+
+        // A full copy of the live database, accounts included.
+        let full = scratch.snapshot_dir().join("full-copy.db");
+        std::fs::create_dir_all(scratch.snapshot_dir()).unwrap();
+        sqlx::query("VACUUM INTO ?")
+            .bind(full.to_str().unwrap())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let bytes = std::fs::read(&full).unwrap();
+        std::fs::remove_file(&full).unwrap();
+
+        let imported = import_snapshot(&db, &bytes, Some("admin")).await.unwrap();
+        assert_eq!(imported.kind, SnapshotKind::Imported);
+        assert_eq!(imported.status, SnapshotStatus::Active);
+        assert!(imported.components.is_empty());
+        for component in Component::ALL {
+            assert!(latest_applied_for(&db, component).await.unwrap().is_none());
+        }
+
+        let copy = open_sqlite(&snapshot_path(&db, imported.id).await.unwrap(), true)
+            .await
+            .unwrap();
+        assert_eq!(
+            count_rows(&copy, "users").await,
+            0,
+            "accounts must be stripped"
+        );
+        assert_eq!(count_rows(&copy, "jwt_key").await, 0);
+        let office: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM firewall_zones WHERE name = 'office'")
+                .fetch_one(&copy)
+                .await
+                .unwrap();
+        assert_eq!(office, 1, "configuration must survive the import");
+        copy.close().await;
+
+        // The upload restores like any other snapshot.
+        insert_zone(&db, "guest").await;
+        restore_snapshot(&db, imported.id, None, None)
+            .await
+            .unwrap();
+        assert!(zone_exists(&db, "office").await);
+        assert!(!zone_exists(&db, "guest").await);
+    }
+
+    #[tokio::test]
+    async fn import_rejects_non_sqlite_bytes_and_leaves_no_files() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        create_snapshot(&db, applied_now()).await.unwrap();
+        let before = std::fs::read_dir(scratch.snapshot_dir()).unwrap().count();
+
+        let error = import_snapshot(&db, b"#!/bin/sh\necho nope\n", None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not an SQLite"), "{error:#}");
+        assert_eq!(
+            std::fs::read_dir(scratch.snapshot_dir()).unwrap().count(),
+            before
+        );
+        assert_eq!(list_snapshots(&db).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn import_rejects_a_newer_schema_and_leaves_no_files() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        let snapshot = create_snapshot(&db, applied_now()).await.unwrap();
+        let path = snapshot_path(&db, snapshot.id).await.unwrap();
+        let copy = open_sqlite(&path, false).await.unwrap();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+             VALUES (99991231000000, 'from the future', 1, X'00', 0)",
+        )
+        .execute(&copy)
+        .await
+        .unwrap();
+        copy.close().await;
+        let bytes = std::fs::read(&path).unwrap();
+        let before = std::fs::read_dir(scratch.snapshot_dir()).unwrap().count();
+
+        let error = import_snapshot(&db, &bytes, None).await.unwrap_err();
+        assert!(error.to_string().contains("newer"), "{error:#}");
+        assert_eq!(
+            std::fs::read_dir(scratch.snapshot_dir()).unwrap().count(),
+            before
+        );
+        assert_eq!(list_snapshots(&db).await.unwrap().len(), 1);
     }
 }

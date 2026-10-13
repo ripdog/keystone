@@ -576,7 +576,14 @@ async fn apply_dnsmasq(
     match dnsmasq::apply_dnsmasq_config(pool).await {
         Ok(()) => {
             let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
-            snapshots::record_applied(&state.db, actor, None, "dnsmasq apply").await;
+            snapshots::record_applied(
+                &state.db,
+                actor,
+                None,
+                &[keystone_core::changes::Component::Dnsmasq],
+                "dnsmasq apply",
+            )
+            .await;
             Ok(Json(DnsmasqApplyResponse {
                 success: true,
                 message: "dnsmasq configuration applied successfully".to_string(),

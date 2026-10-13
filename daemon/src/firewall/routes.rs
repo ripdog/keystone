@@ -558,7 +558,14 @@ async fn apply_firewall(
         } else {
             None
         };
-        snapshots::record_applied(&state.db, actor, pending, "firewall apply").await;
+        snapshots::record_applied(
+            &state.db,
+            actor,
+            pending,
+            &[keystone_core::changes::Component::Firewall],
+            "firewall apply",
+        )
+        .await;
     }
     Ok(Json(response))
 }

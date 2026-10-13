@@ -1450,6 +1450,7 @@ async fn apply_networkd(
                     &state.db,
                     actor,
                     Some(&pending.session_id),
+                    &[snapshots::Component::Networkd],
                     "networkd apply",
                 )
                 .await;
@@ -1462,7 +1463,14 @@ async fn apply_networkd(
                     session_id: Some(pending.session_id.clone()),
                 }));
             }
-            snapshots::record_applied(&state.db, actor, None, "networkd apply").await;
+            snapshots::record_applied(
+                &state.db,
+                actor,
+                None,
+                &[snapshots::Component::Networkd],
+                "networkd apply",
+            )
+            .await;
             Ok(Json(ApplyConfigResponse {
                 success: true,
                 message,

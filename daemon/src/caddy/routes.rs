@@ -164,7 +164,14 @@ async fn apply_caddy(
     match caddy::apply_caddy_config(pool).await {
         Ok(()) => {
             let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
-            snapshots::record_applied(&state.db, actor, None, "caddy apply").await;
+            snapshots::record_applied(
+                &state.db,
+                actor,
+                None,
+                &[keystone_core::changes::Component::Caddy],
+                "caddy apply",
+            )
+            .await;
             Ok(Json(CaddyApplyResponse {
                 success: true,
                 message: "Caddy configuration applied successfully".to_string(),

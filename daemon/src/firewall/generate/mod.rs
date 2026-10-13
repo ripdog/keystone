@@ -47,7 +47,6 @@ pub fn generate_ruleset(config: &FirewallConfig) -> GeneratedRuleset<'static> {
     let mut batch = Batch::new();
 
     // Build zone-to-interfaces mapping for quick lookup
-    let zone_interfaces = build_zone_interface_map(&config.zones);
 
     // Note: Table creation is idempotent - if table exists, add just succeeds.
     // The apply function handles cleanup of existing tables separately.
@@ -118,7 +117,7 @@ pub fn generate_ruleset(config: &FirewallConfig) -> GeneratedRuleset<'static> {
     );
 
     let nftables = batch.to_nftables();
-    let preview = generate_preview(config, &zone_interfaces);
+    let preview = generate_preview(config);
 
     GeneratedRuleset { nftables, preview }
 }
@@ -141,14 +140,6 @@ pub(crate) fn rule_comment(kind: &str, id: Option<i64>, label: &str) -> String {
 
 /// Longest comment nftables accepts.
 const MAX_COMMENT_BYTES: usize = 127;
-
-/// Build a map of zone name -> interface list for quick lookups
-pub fn build_zone_interface_map(zones: &[FirewallZone]) -> HashMap<String, Vec<String>> {
-    zones
-        .iter()
-        .map(|z| (z.name.clone(), z.interfaces.clone()))
-        .collect()
-}
 
 /// Resolve an optional zone reference to its interfaces.
 ///
@@ -284,8 +275,7 @@ mod tests {
     #[test]
     fn test_generate_preview() {
         let config = create_test_config();
-        let zone_interfaces = build_zone_interface_map(&config.zones);
-        let preview = generate_preview(&config, &zone_interfaces);
+        let preview = generate_preview(&config);
 
         assert!(preview.contains("table inet keystone"));
         assert!(preview.contains("chain input"));
@@ -296,43 +286,10 @@ mod tests {
         assert!(preview.contains("masquerade"));
         assert!(preview.contains("udp sport 547 udp dport 546"));
         let dhcpv6 = preview.find("udp sport 547 udp dport 546").unwrap();
-        let drop_invalid = preview.find("ct state invalid drop").unwrap();
+        let drop_invalid = preview.find("ct state invalid counter drop").unwrap();
         assert!(
             dhcpv6 < drop_invalid,
             "DHCPv6 reply must precede invalid DROP"
-        );
-    }
-
-    #[test]
-    fn test_build_zone_interface_map() {
-        let zones = vec![
-            FirewallZone {
-                id: Some(1),
-                name: "wan".to_string(),
-                description: None,
-                interfaces: vec!["eth0".to_string()],
-                is_wan: true,
-                masquerade_ipv4: true,
-                default_input_policy: FirewallPolicy::Drop,
-                default_forward_policy: FirewallPolicy::Drop,
-            },
-            FirewallZone {
-                id: Some(2),
-                name: "lan".to_string(),
-                description: None,
-                interfaces: vec!["eth1".to_string(), "eth2".to_string()],
-                is_wan: false,
-                masquerade_ipv4: false,
-                default_input_policy: FirewallPolicy::Accept,
-                default_forward_policy: FirewallPolicy::Accept,
-            },
-        ];
-
-        let map = build_zone_interface_map(&zones);
-        assert_eq!(map.get("wan"), Some(&vec!["eth0".to_string()]));
-        assert_eq!(
-            map.get("lan"),
-            Some(&vec!["eth1".to_string(), "eth2".to_string()])
         );
     }
 

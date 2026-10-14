@@ -2890,6 +2890,35 @@ pub struct DashboardResponse {
     pub timestamp_ms: u64,
 }
 
+/// Usage of one mounted filesystem.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DiskUsage {
+    pub mount_point: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+}
+
+/// Basic host resource information for the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct SystemInfo {
+    pub hostname: String,
+    pub kernel: String,
+    pub uptime_secs: u64,
+    /// 1, 5 and 15 minute load averages.
+    pub load_average: [f64; 3],
+    pub cpu_model: Option<String>,
+    pub cpu_count: u32,
+    /// Busy share of all CPUs since the previous sample; `None` until two samples exist.
+    pub cpu_usage_percent: Option<f64>,
+    pub memory_total_bytes: u64,
+    pub memory_used_bytes: u64,
+    pub swap_total_bytes: u64,
+    pub swap_used_bytes: u64,
+    pub disks: Vec<DiskUsage>,
+    /// Hottest CPU temperature sensor, if the hardware exposes one.
+    pub cpu_temperature_c: Option<f64>,
+}
+
 /// Response from applying configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyConfigResponse {

@@ -27,6 +27,7 @@ mod soho;
 mod sqm;
 mod ssh;
 mod status;
+mod sysinfo;
 mod systemd;
 mod traffic;
 mod upnp;
@@ -274,6 +275,7 @@ async fn main() -> anyhow::Result<()> {
     let protected = Router::new()
         .route("/state", get(get_state))
         .route("/dashboard", get(get_dashboard))
+        .route("/system/info", get(get_system_info))
         .route("/apply-networkd", post(apply_networkd))
         .route("/apply-all", post(apply_all))
         .route(ConfirmNetworkd::PATH, post(confirm_networkd))
@@ -748,6 +750,14 @@ async fn get_dashboard(
     Ok(Json(
         read_dashboard(&configs, gateways, traffic).unwrap_or_default(),
     ))
+}
+
+/// GET /system/info - Host CPU, memory, disk and uptime for the dashboard
+async fn get_system_info() -> Result<Json<keystone_core::SystemInfo>, AppError> {
+    let info = tokio::task::spawn_blocking(sysinfo::collect)
+        .await
+        .map_err(|e| anyhow::anyhow!("system info task failed: {e}"))?;
+    Ok(Json(info))
 }
 
 fn read_dashboard(

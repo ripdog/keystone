@@ -2566,6 +2566,40 @@ pub struct FirewallLogResponse {
 }
 
 // ============================================================================
+// Journal Log Viewer Types
+// ============================================================================
+
+/// One journal entry of a managed service.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JournalEntry {
+    /// Journal cursor of the entry. Pass it back to continue before or after it.
+    pub cursor: String,
+    /// Time the journal received the entry, in microseconds since the epoch.
+    pub realtime_us: u64,
+    /// Unit the entry belongs to, such as `dnsmasq.service`.
+    pub unit: String,
+    /// Program name (`SYSLOG_IDENTIFIER`).
+    pub identifier: String,
+    pub pid: Option<u32>,
+    /// Syslog severity: 0 (emergency) to 7 (debug). Entries without one are 6.
+    pub priority: u8,
+    /// The log text, cut at [`JOURNAL_MESSAGE_MAX_BYTES`].
+    pub message: String,
+}
+
+/// Longest message kept in a [`JournalEntry`]. Longer ones are cut and end in `…`.
+pub const JOURNAL_MESSAGE_MAX_BYTES: usize = 4096;
+
+/// Entries of one journal page, oldest first.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JournalResponse {
+    pub entries: Vec<JournalEntry>,
+    /// True when `after` was given but the journal no longer has that cursor
+    /// (rotation, or a reboot). The entries are then the most recent ones.
+    pub cursor_reset: bool,
+}
+
+// ============================================================================
 // Connection Tracking Types
 // ============================================================================
 
@@ -3320,8 +3354,6 @@ pub struct SystemdUnitDetail {
     pub inactive_enter_timestamp: Option<u64>,
     /// Result of last run (success, exit-code, signal, etc.)
     pub result: Option<String>,
-    /// Recent log lines from journald
-    pub recent_logs: Vec<String>,
 }
 
 // ============================================================================

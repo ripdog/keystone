@@ -16,6 +16,7 @@ mod db;
 mod dnsmasq;
 mod firewall;
 mod gateway;
+mod logs;
 mod networkd;
 mod snapshot_validation;
 mod snapshots;
@@ -315,6 +316,7 @@ async fn main() -> anyhow::Result<()> {
         .merge(changes::changes_routes(changes_state))
         // Merge systemd routes
         .merge(systemd::routes::systemd_routes())
+        .merge(logs::logs_routes())
         .merge(ssh::routes())
         // Merge wizard routes
         .merge(wizard::wizard_routes())

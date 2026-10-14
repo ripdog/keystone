@@ -7,8 +7,7 @@ pub mod routes;
 
 use anyhow::{Context, Result};
 use keystone_core::{SystemdActiveState, SystemdLoadState, SystemdUnit, SystemdUnitDetail};
-use std::process::Command;
-use tracing::{debug, warn};
+use tracing::debug;
 use zbus::Connection;
 use zbus_systemd::systemd1;
 
@@ -78,21 +77,22 @@ pub async fn list_units(keystone_only: bool) -> Result<Vec<SystemdUnit>> {
     Ok(result)
 }
 
-/// Only explicitly managed services can be controlled by the privileged API.
-/// Filtering the displayed list is not a security boundary.
-fn is_keystone_related(name: &str) -> bool {
-    matches!(
-        name,
-        "keystone-daemon.service"
-            | "keystone-web-ui.service"
-            | "systemd-networkd.service"
-            | "nftables.service"
-            | "dnsmasq.service"
-            | "caddy.service"
-            | "miniupnpd.service"
-            | "keystone-blocky.service"
-            | "sshd.service"
-    )
+/// Services Keystone manages, and the only ones its API controls or reads logs
+/// of. Filtering the displayed list is not a security boundary.
+pub(crate) const MANAGED_UNITS: &[&str] = &[
+    "keystone-daemon.service",
+    "keystone-web-ui.service",
+    "systemd-networkd.service",
+    "nftables.service",
+    "dnsmasq.service",
+    "caddy.service",
+    "miniupnpd.service",
+    "keystone-blocky.service",
+    "sshd.service",
+];
+
+pub(crate) fn is_keystone_related(name: &str) -> bool {
+    MANAGED_UNITS.contains(&name)
 }
 
 fn ensure_managed_unit(name: &str) -> Result<()> {
@@ -168,9 +168,6 @@ pub async fn get_unit_detail(unit_name: &str) -> Result<Option<SystemdUnitDetail
         (None, None, None)
     };
 
-    // Get recent logs using journalctl
-    let recent_logs = get_recent_logs(unit_name, 50).await;
-
     Ok(Some(SystemdUnitDetail {
         unit: SystemdUnit {
             name: unit_name.to_string(),
@@ -185,7 +182,6 @@ pub async fn get_unit_detail(unit_name: &str) -> Result<Option<SystemdUnitDetail
         active_enter_timestamp,
         inactive_enter_timestamp,
         result,
-        recent_logs,
     }))
 }
 
@@ -294,39 +290,6 @@ pub async fn disable_unit(unit_name: &str) -> Result<()> {
         .context("Failed to reload systemd daemon")?;
 
     Ok(())
-}
-
-/// Get recent log lines for a unit using journalctl
-async fn get_recent_logs(unit_name: &str, lines: usize) -> Vec<String> {
-    let output = Command::new("journalctl")
-        .args([
-            "-u",
-            unit_name,
-            "-n",
-            &lines.to_string(),
-            "--no-pager",
-            "-o",
-            "short-iso",
-        ])
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            stdout.lines().map(|s| s.to_string()).collect()
-        }
-        Ok(o) => {
-            warn!(
-                "journalctl returned error: {}",
-                String::from_utf8_lossy(&o.stderr)
-            );
-            Vec::new()
-        }
-        Err(e) => {
-            warn!("Failed to run journalctl: {}", e);
-            Vec::new()
-        }
-    }
 }
 
 fn parse_load_state(state: &str) -> SystemdLoadState {

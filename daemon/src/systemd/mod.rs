@@ -21,6 +21,10 @@ pub async fn list_units(keystone_only: bool) -> Result<Vec<SystemdUnit>> {
         .await
         .context("Failed to create systemd manager proxy")?;
 
+    if keystone_only {
+        return list_managed_units(&manager).await;
+    }
+
     // ListUnits returns: (name, description, load_state, active_state, sub_state, following, unit_path, job_id, job_type, job_path)
     let units = manager
         .list_units()
@@ -73,6 +77,40 @@ pub async fn list_units(keystone_only: bool) -> Result<Vec<SystemdUnit>> {
         )
         .collect();
 
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(result)
+}
+
+/// Fast path for the dashboard, which polls every few seconds: query only the
+/// managed units. `ListUnits` + `ListUnitFiles` make PID 1 walk every unit
+/// directory on disk, which showed up as sustained systemd CPU load.
+async fn list_managed_units(manager: &systemd1::ManagerProxy<'_>) -> Result<Vec<SystemdUnit>> {
+    let names: Vec<String> = MANAGED_UNITS.iter().map(|n| n.to_string()).collect();
+    let units = manager
+        .list_units_by_names(names)
+        .await
+        .context("Failed to list managed systemd units")?;
+
+    let mut result = Vec::with_capacity(units.len());
+    for (name, description, load_state, active_state, sub_state, _, _, _, _, _) in units {
+        // Match `ListUnits`, which only reports units systemd has loaded.
+        if load_state == "not-found" {
+            continue;
+        }
+        let enabled = manager
+            .get_unit_file_state(name.clone())
+            .await
+            .map(|state| matches!(state.as_str(), "enabled" | "enabled-runtime" | "static"))
+            .unwrap_or(false);
+        result.push(SystemdUnit {
+            name,
+            description,
+            load_state: parse_load_state(&load_state),
+            active_state: parse_active_state(&active_state),
+            sub_state,
+            enabled,
+        });
+    }
     result.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(result)
 }

@@ -102,19 +102,7 @@ pub fn DashboardPage(
     view! {
         <div class="space-y-6">
             <style>{forge_charts::CHART_CSS}</style>
-            <style>{r#"
-                .keystone-traffic-graph .charts-tooltip {
-                    background: rgba(13, 23, 39, 0.97);
-                    color: #f1f5f9;
-                    border: 1px solid rgba(148, 163, 184, 0.25);
-                }
-                .keystone-traffic-graph .charts-line {
-                    stroke-width: 2.25;
-                    stroke-linejoin: round;
-                    stroke-linecap: round;
-                    vector-effect: non-scaling-stroke;
-                }
-            "#}</style>
+            <style>{crate::components::TRAFFIC_GRAPH_CSS}</style>
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"Dashboard"</h1>
             </div>

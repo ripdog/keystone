@@ -5,16 +5,19 @@
 //! the filter text and an open reservation form survive each refresh.
 
 use crate::api;
-use crate::components::use_config_changed;
 use crate::components::use_toasts;
+use crate::components::{ClientTrafficGraph, TRAFFIC_GRAPH_CSS, use_config_changed};
 use gloo_timers::callback::Interval;
-use keystone_core::{Client, DnsmasqStaticLease};
+use keystone_core::{Client, ClientTrafficSample, DnsmasqStaticLease};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
 use leptos_router::hooks::use_query_map;
+use std::collections::HashMap;
 
 const REFRESH_MS: u32 = 5_000;
+/// Open traffic graphs update as often as the dashboard's.
+const TRAFFIC_REFRESH_MS: u32 = 1_000;
 
 const CHIP: &str = "inline-flex items-center gap-2 rounded-full bg-gray-800 px-3 py-1.5 text-sm text-gray-300 ring-1 ring-inset ring-gray-700";
 const BADGE_STATIC: &str = "inline-flex items-center rounded-md bg-sky-400/10 px-2 py-0.5 text-xs font-medium text-sky-200 ring-1 ring-inset ring-sky-400/20";
@@ -39,6 +42,10 @@ struct ReserveForm {
 #[derive(Clone, Copy)]
 struct PageContext {
     clients: RwSignal<Option<Vec<Client>>>,
+    /// MACs whose traffic graph is open.
+    graphs_open: RwSignal<Vec<String>>,
+    /// Last minute of WAN throughput for each open graph, by MAC.
+    traffic: RwSignal<HashMap<String, Vec<ClientTrafficSample>>>,
     reserve: ReserveForm,
     save: Callback<()>,
 }
@@ -95,6 +102,36 @@ pub fn ClientsPage(
         }
     });
 
+    let graphs_open = RwSignal::new(Vec::<String>::new());
+    let traffic = RwSignal::new(HashMap::<String, Vec<ClientTrafficSample>>::new());
+    let poll_traffic = move || {
+        let macs = graphs_open.get_untracked();
+        let Some(token) = auth_token.get_untracked() else {
+            return;
+        };
+        if macs.is_empty() {
+            return;
+        }
+        spawn_local(async move {
+            match api::fetch_client_traffic(&token, &macs).await {
+                Ok(list) => traffic.update(|map| {
+                    for entry in list {
+                        map.insert(entry.mac, entry.samples);
+                    }
+                }),
+                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
+                // Graphs keep their last data; the list's own poll reports connection trouble.
+                Err(_) => {}
+            }
+        });
+    };
+    Effect::new(move |_prev: Option<Option<Interval>>| {
+        auth_token
+            .get()
+            .is_some()
+            .then(|| Interval::new(TRAFFIC_REFRESH_MS, poll_traffic))
+    });
+
     let save_reservation = move || {
         if reserve.saving.get_untracked() {
             return;
@@ -144,6 +181,8 @@ pub fn ClientsPage(
 
     let ctx = PageContext {
         clients,
+        graphs_open,
+        traffic,
         reserve,
         save: Callback::new(move |()| save_reservation()),
     };
@@ -175,6 +214,8 @@ pub fn ClientsPage(
 
     view! {
         <div class="space-y-6">
+            <style>{forge_charts::CHART_CSS}</style>
+            <style>{TRAFFIC_GRAPH_CSS}</style>
             <div class="flex flex-wrap justify-between items-start gap-3">
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"Clients"</h1>
@@ -272,6 +313,7 @@ fn matches_filter(client: &Client, needle: &str) -> bool {
 /// stack as a card on narrow ones.
 fn client_row(mac: String, ctx: PageContext) -> impl IntoView {
     let form_mac = mac.clone();
+    let graph_mac = mac.clone();
     let find = move || {
         ctx.clients.with(|list| {
             list.as_ref()
@@ -282,9 +324,29 @@ fn client_row(mac: String, ctx: PageContext) -> impl IntoView {
         <div class="py-3 md:py-2.5 md:grid md:grid-cols-12 md:gap-x-4 md:items-center border-b border-gray-700/70 text-sm text-gray-200">
             {move || find().map(|client| client_cells(client, ctx))}
             {move || {
+                let open = ctx.graphs_open.with(|open| open.contains(&graph_mac));
+                open.then(|| traffic_panel(graph_mac.clone(), ctx))
+            }}
+            {move || {
                 (ctx.reserve.mac.get().as_deref() == Some(form_mac.as_str()))
                     .then(|| reserve_form(ctx))
             }}
+        </div>
+    }
+}
+
+/// Full-width WAN throughput graph under a device's row.
+fn traffic_panel(mac: String, ctx: PageContext) -> impl IntoView {
+    let samples = Signal::derive(move || {
+        ctx.traffic
+            .with(|map| map.get(&mac).cloned().unwrap_or_default())
+    });
+    view! {
+        <div class="md:col-span-12 mt-3 md:mt-2 bg-[#121f30] rounded-lg border border-slate-700/60 p-4 space-y-2">
+            <p class="text-xs text-gray-400">
+                "Internet traffic for this device over the last minute. Traffic to other devices on your network is not counted."
+            </p>
+            <ClientTrafficGraph samples=samples />
         </div>
     }
 }
@@ -341,6 +403,20 @@ fn client_cells(client: Client, ctx: PageContext) -> impl IntoView {
     };
     let forward_href = format!("/firewall/port-forwards?mac={}", client.mac);
     let mac = client.mac.clone();
+    let toggle_mac = client.mac.clone();
+    let graph_open = {
+        let mac = client.mac.clone();
+        move || ctx.graphs_open.with(|open| open.contains(&mac))
+    };
+    let toggle_graph = move |_| {
+        ctx.graphs_open
+            .update(|open| match open.iter().position(|m| *m == toggle_mac) {
+                Some(index) => {
+                    open.remove(index);
+                }
+                None => open.push(toggle_mac.clone()),
+            });
+    };
 
     view! {
         <div class="flex items-start gap-3 min-w-0 mb-2 md:mb-0 md:col-span-3">
@@ -387,6 +463,9 @@ fn client_cells(client: Client, ctx: PageContext) -> impl IntoView {
             {has_static.then(|| view! {
                 <A href="/dnsmasq/static-leases" attr:class=ACTION>"Edit reservation"</A>
             })}
+            <button class=ACTION on:click=toggle_graph>
+                {move || if graph_open() { "Hide traffic" } else { "Traffic" }}
+            </button>
             <A href=forward_href attr:class=ACTION>"Port forward"</A>
         </div>
     }

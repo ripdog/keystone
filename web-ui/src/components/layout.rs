@@ -1,8 +1,8 @@
 //! Main application layout with navigation
 
 use crate::components::{
-    CommandPalette, ConfigRefresh, PendingChangesBar, SidebarNavigation, ToastHost, icon_path,
-    provide_pending_actions, provide_toasts,
+    CommandPalette, ConfigRefresh, KeystoneLogo, PendingChangesBar, SidebarNavigation, ToastHost,
+    icon_path, provide_pending_actions, provide_toasts,
 };
 use leptos::prelude::*;
 use leptos_router::components::A;
@@ -39,12 +39,7 @@ pub fn AppLayout(
             // Permanent desktop navigation
             <aside class="hidden lg:flex fixed inset-y-0 left-0 z-30 w-72 flex-col border-r border-slate-800/80 bg-[#0d1727]">
                 <A href="/" attr:class="h-[88px] px-6 flex items-center gap-3 shrink-0 border-b border-white/5" attr:aria-label="Keystone dashboard">
-                    <div class="h-10 w-10 rounded-xl bg-gradient-to-br from-sky-400 to-blue-700 flex items-center justify-center shadow-lg shadow-sky-900/30">
-                        <svg class="h-6 w-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M12 2 3 7v5c0 5 3.5 8 9 10 5.5-2 9-5 9-10V7l-9-5Z"/>
-                            <path d="m8 12 3 3 5-6"/>
-                        </svg>
-                    </div>
+                    <KeystoneLogo class="h-10 w-10 shrink-0"/>
                     <div class="text-lg font-bold tracking-tight text-white">"Keystone"</div>
                 </A>
                 <div class="flex-1 min-h-0 overflow-y-auto px-4 py-6">
@@ -63,7 +58,7 @@ pub fn AppLayout(
             // Mobile title bar and navigation drawer
             <header class="lg:hidden sticky top-0 z-30 bg-[#0d1727] border-b border-slate-800 px-4 py-3 flex items-center justify-between">
                 <A href="/" attr:class="flex items-center gap-2.5" attr:aria-label="Keystone dashboard">
-                    <span class="h-8 w-8 rounded-lg bg-gradient-to-br from-sky-400 to-blue-700 flex items-center justify-center font-bold">"K"</span>
+                    <KeystoneLogo class="h-8 w-8 shrink-0"/>
                     <span class="font-semibold tracking-tight">"Keystone"</span>
                 </A>
                 <button type="button" aria-label="Open navigation"

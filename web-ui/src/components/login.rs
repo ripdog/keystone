@@ -48,9 +48,8 @@ pub fn LoginPage(on_login: WriteSignal<Option<String>>) -> impl IntoView {
         <div class="min-h-screen bg-gray-900 flex items-center justify-center p-4">
             <div class="bg-gray-800 rounded-lg p-8 shadow-2xl max-w-md w-full">
                 <div class="text-center mb-8">
-                    <h1 class="text-3xl font-bold text-blue-400 mb-2">
-                        "🔐 Keystone"
-                    </h1>
+                    <crate::components::KeystoneLogo class="h-16 w-16 mx-auto mb-4"/>
+                    <h1 class="text-3xl font-bold text-blue-400 mb-2">"Keystone"</h1>
                     <p class="text-gray-400">"Router Manager"</p>
                 </div>
 

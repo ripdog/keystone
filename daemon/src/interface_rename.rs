@@ -18,6 +18,7 @@ use tracing::{info, warn};
 
 use crate::apply;
 use crate::db::Database;
+use crate::dhcp_session;
 use crate::firewall::FirewallApplyManager;
 use crate::networkd::link;
 use crate::sqm;
@@ -88,7 +89,7 @@ pub fn permanent_mac_from_ip_json(json: &str, name: &str) -> Result<String> {
     Ok(mac.to_string())
 }
 
-async fn run_ip(args: &[&str]) -> Result<String> {
+pub(crate) async fn run_ip(args: &[&str]) -> Result<String> {
     let output = tokio::process::Command::new("ip")
         .args(args)
         .output()
@@ -162,6 +163,7 @@ pub async fn rename_interface(
     actor: Option<&str>,
     old: &str,
     new: &str,
+    allow_dhcp_restart: bool,
 ) -> Result<RenameInterfaceResponse> {
     if db.get_global_settings().await?.config_changes_disabled {
         return Ok(refusal(
@@ -189,6 +191,19 @@ pub async fn rename_interface(
     };
     if let Err(reason) = check_rename(old, new, &context) {
         return Ok(refusal(reason));
+    }
+
+    // The apply that follows rewrites this interface's .network file, so
+    // networkd reconfigures the link and restarts its DHCP client from a
+    // DISCOVER. Some ISPs then stop routing until the lease expires.
+    if !allow_dhcp_restart
+        && configs
+            .iter()
+            .any(|config| config.name == old && config.enabled && dhcp_session::uses_dhcpv4(config))
+    {
+        return Ok(refusal(format!(
+            "{old} gets its address by DHCP. Renaming it restarts the DHCP client, and some ISPs then stop routing your traffic until the old lease expires (about 25 minutes). Confirm that you accept this to rename it anyway."
+        )));
     }
 
     let mac = permanent_mac(old).await?;

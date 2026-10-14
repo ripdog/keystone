@@ -2915,6 +2915,10 @@ pub struct ApplyConfigResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameInterfaceRequest {
     pub new_name: String,
+    /// Accept restarting the interface's DHCP client, which some ISPs answer
+    /// by not routing traffic until the old lease expires.
+    #[serde(default)]
+    pub allow_dhcp_restart: bool,
 }
 
 /// Result of renaming a physical network interface

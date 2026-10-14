@@ -14,6 +14,7 @@ mod config;
 mod config_validation;
 mod consistency;
 mod db;
+mod dhcp_session;
 mod dnsmasq;
 mod firewall;
 mod gateway;
@@ -1127,7 +1128,8 @@ async fn renew_interface(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Result<Json<RenewInterfaceResponse>, AppError> {
-    run_networkctl_on_managed_link(&state, "renew", &name).await?;
+    managed_link_config(&state, &name).await?;
+    run_networkctl(&name, "renew").await?;
     Ok(Json(RenewInterfaceResponse {
         success: true,
         message: format!("Renewal requested for {name}"),
@@ -1150,6 +1152,7 @@ async fn rename_interface(
         actor,
         &name,
         &request.new_name,
+        request.allow_dhcp_restart,
     )
     .await?;
     Ok(Json(response))
@@ -1160,34 +1163,54 @@ async fn reconfigure_interface(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Result<Json<RenewInterfaceResponse>, AppError> {
-    run_networkctl_on_managed_link(&state, "reconfigure", &name).await?;
+    let config = managed_link_config(&state, &name).await?;
+    if dhcp_session::uses_dhcpv4(&config) {
+        // `networkctl reconfigure` restarts the DHCP client from a DISCOVER,
+        // which breaks routing at some ISPs; a link bounce re-requests the
+        // old lease instead.
+        dhcp_session::bounce_link(&name).await?;
+        return Ok(Json(RenewInterfaceResponse {
+            success: true,
+            message: format!(
+                "Restarted the link of {name}; its DHCP client re-requests its current lease"
+            ),
+        }));
+    }
+    run_networkctl(&name, "reconfigure").await?;
     Ok(Json(RenewInterfaceResponse {
         success: true,
         message: format!("Reconfiguration requested for {name}"),
     }))
 }
 
-/// Run `networkctl <action> <name>` for a real, enabled, Keystone-managed link.
-/// Execute fixed arguments directly, never through a shell.
-async fn run_networkctl_on_managed_link(
+/// The configuration of a real, enabled, Keystone-managed link.
+async fn managed_link_config(
     state: &AppState,
-    action: &'static str,
     name: &str,
-) -> Result<(), AppError> {
+) -> Result<keystone_core::InterfaceConfig, AppError> {
     keystone_core::validation::interface_name(name)
         .map_err(|err| AppError(anyhow::anyhow!(err)))?;
-    let config = state.db.get_interface_config(name).await?;
-    if !config.is_some_and(|config| config.enabled) {
+    let Some(config) = state
+        .db
+        .get_interface_config(name)
+        .await?
+        .filter(|config| config.enabled)
+    else {
         return Err(AppError(anyhow::anyhow!(
             "Interface is not managed or is disabled"
         )));
-    }
+    };
     if !Path::new("/sys/class/net").join(name).exists() {
         return Err(AppError(anyhow::anyhow!(
             "Interface does not exist on this system"
         )));
     }
+    Ok(config)
+}
 
+/// Run `networkctl <action> <name>` for a link already checked by
+/// [`managed_link_config`]. Execute fixed arguments directly, never through a shell.
+async fn run_networkctl(name: &str, action: &'static str) -> Result<(), AppError> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(15),
         tokio::process::Command::new("/usr/bin/networkctl")

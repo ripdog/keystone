@@ -599,6 +599,15 @@ pub async fn apply_config(config: &SqmConfig, previous: Option<&SqmConfig>) -> R
     execute(&steps).await
 }
 
+/// Remove the shaper from `wan` and forget the applied state, ahead of the
+/// interface being renamed. The next apply shapes the new name from scratch;
+/// until then the reconciler has nothing to restore.
+pub async fn release_interface(db: &Database, wan: &str) -> Result<()> {
+    let _guard = APPLY_LOCK.lock().await;
+    execute(&teardown_steps(wan)).await?;
+    super::db::clear_applied(db.pool()).await
+}
+
 async fn interface_names(db: &Database) -> Result<Vec<String>> {
     Ok(db
         .get_interface_configs()

@@ -13,6 +13,7 @@
 pub mod bridges;
 pub mod firewall;
 pub mod interfaces;
+mod rename;
 pub mod settings;
 pub mod users;
 pub mod vlans;

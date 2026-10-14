@@ -14,6 +14,6 @@ mod db;
 pub mod routes;
 mod status;
 
-pub use apply::{apply_saved, preview_sqm, start_reconciler, validate_config};
+pub use apply::{apply_saved, preview_sqm, release_interface, start_reconciler, validate_config};
 pub use db::{load_sqm_config, save_sqm_config};
 pub use status::read_status;

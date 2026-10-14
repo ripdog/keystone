@@ -16,6 +16,7 @@ mod db;
 mod dnsmasq;
 mod firewall;
 mod gateway;
+mod interface_rename;
 mod logs;
 mod networkd;
 mod snapshot_validation;
@@ -41,8 +42,8 @@ use axum::{
 use config::Config;
 use db::Database;
 use keystone_core::api::{
-    ConfirmNetworkd, DeleteUser, Endpoint, Login, Req, Res, SaveBridge, SaveGlobalSettings,
-    SaveInterfaceConfig, SaveManagedInterfaces, SaveUser, SaveVlan,
+    ConfirmNetworkd, DeleteUser, Endpoint, Login, RenameInterface, Req, Res, SaveBridge,
+    SaveGlobalSettings, SaveInterfaceConfig, SaveManagedInterfaces, SaveUser, SaveVlan,
 };
 use keystone_core::{
     ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse, DashboardResponse,
@@ -282,6 +283,7 @@ async fn main() -> anyhow::Result<()> {
         .route(SaveInterfaceConfig::PATH, post(save_interface_config))
         .route("/interface-config/{name}", delete(delete_interface_config))
         .route("/interfaces/{name}/renew", post(renew_interface))
+        .route(RenameInterface::PATH, post(rename_interface))
         .route(
             "/interfaces/{name}/reconfigure",
             post(reconfigure_interface),
@@ -661,7 +663,9 @@ fn is_blocked_before_setup(path: &str) -> bool {
         || path == "/apply-all"
         || path == "/networkd-preview"
         || (path.starts_with("/interfaces/")
-            && (path.ends_with("/renew") || path.ends_with("/reconfigure")))
+            && (path.ends_with("/renew")
+                || path.ends_with("/reconfigure")
+                || path.ends_with("/rename")))
         || (path.starts_with("/firewall/") && !firewall_recovery_endpoint)
         || path.starts_with("/dnsmasq/")
         || path.starts_with("/caddy/")
@@ -1125,6 +1129,27 @@ async fn renew_interface(
         success: true,
         message: format!("Renewal requested for {name}"),
     }))
+}
+
+/// POST /interfaces/:name/rename - Give a physical interface a persistent
+/// custom name, then apply the configuration under it.
+async fn rename_interface(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    actor: Option<Extension<Actor>>,
+    Json(request): Json<Req<RenameInterface>>,
+) -> Result<Json<Res<RenameInterface>>, AppError> {
+    info!("Renaming interface {} to {}", name, request.new_name);
+    let actor = actor.as_ref().map(|Extension(actor)| actor.0.as_str());
+    let response = interface_rename::rename_interface(
+        &state.db,
+        &state.firewall_manager,
+        actor,
+        &name,
+        &request.new_name,
+    )
+    .await?;
+    Ok(Json(response))
 }
 
 /// POST /interfaces/:name/reconfigure - Re-apply the link's `.network` file.

@@ -118,3 +118,11 @@ pub async fn save_applied(pool: &SqlitePool, config: &SqmConfig) -> Result<()> {
     .await?;
     Ok(())
 }
+
+/// Forget the applied state, so the reconciler has nothing to restore.
+pub async fn clear_applied(pool: &SqlitePool) -> Result<()> {
+    sqlx::query("DELETE FROM sqm_applied WHERE id = 1")
+        .execute(pool)
+        .await?;
+    Ok(())
+}

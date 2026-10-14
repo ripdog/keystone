@@ -36,6 +36,7 @@ pub struct NetworkdApplySummary {
     pub bridges: usize,
 }
 
+pub mod link;
 mod pending;
 pub use pending::{ConfirmOutcome, NetworkdApplyManager, PendingInfo};
 

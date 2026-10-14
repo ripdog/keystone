@@ -9,6 +9,7 @@
 //! - `bridges` - Bridge configuration
 //! - `firewall` - Firewall zones, rules, and settings
 //! - `dnsmasq` - DNS/DHCP configuration
+//! - `blocky` - DNS filtering (ad-blocking and encrypted upstream DNS)
 //! - `clients` - Unified LAN client inventory
 //! - `caddy` - Caddy reverse proxy configuration
 //! - `changes` - Pending changes, apply-all and configuration snapshots
@@ -20,6 +21,7 @@
 //! which provides centralized error handling and authentication.
 
 pub mod auth;
+pub mod blocky;
 pub mod bridges;
 pub mod caddy;
 pub mod changes;
@@ -42,6 +44,7 @@ pub mod wizard;
 
 // Re-export all public functions from submodules for backward compatibility
 pub use auth::*;
+pub use blocky::*;
 pub use bridges::*;
 pub use caddy::*;
 pub use changes::*;

@@ -122,6 +122,8 @@ endpoints! {
 
     SaveBlockyConfig: Put "/blocky/config", SaveBlockyConfigRequest => SaveBlockyConfigResponse;
 
+    PauseBlocky: Post "/blocky/pause", BlockyPauseRequest => BlockyActionResponse;
+
     ApplySsh: Post "/ssh/apply", SshConfig => SshApplyResponse;
 
     AdvanceWizard: Post "/wizard/advance", WizardAdvanceRequest => WizardAdvanceResponse;

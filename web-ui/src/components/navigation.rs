@@ -175,6 +175,14 @@ pub const NAV_ITEMS: &[NavItem] = &[
         "generated config file dnsmasq",
     ),
     page(
+        "DNS filtering",
+        "/dnsmasq/filtering",
+        CONNECTIVITY,
+        DNSMASQ,
+        "dns",
+        "ads ad-blocking blocky blocklist tracker query log dnssec upstream encrypted doh dot pause",
+    ),
+    page(
         "Settings",
         "/caddy/settings",
         CONNECTIVITY,

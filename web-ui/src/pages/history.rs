@@ -250,7 +250,7 @@ pub fn HistoryPage(
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"Configuration history"</h1>
                 <p class="text-gray-400">
-                    "Saved copies of the router configuration. Each apply records one, and you can add your own. Restoring a snapshot makes it pending until you apply it."
+                    "Each apply records a snapshot. Restoring one makes it pending until you apply it."
                 </p>
             </div>
 

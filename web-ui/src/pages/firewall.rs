@@ -1093,9 +1093,6 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
                                     >
                                         {move || if is_saving.get() { "Saving..." } else { "Save Settings" }}
                                     </button>
-                                    <p class="text-sm text-gray-500 mt-2">
-                                        "Note: Changes take effect when you apply them with Apply all in the pending changes bar."
-                                    </p>
                                 </div>
                             </div>
                         }.into_any(),

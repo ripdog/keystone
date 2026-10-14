@@ -529,7 +529,7 @@ fn SettingsTab(form: FormState) -> impl IntoView {
                 prop:checked=move || form.enabled.get()
                 on:change=move |ev| form.enabled.set(event_target_checked(&ev))
             />
-            <span>"Enable DNS filtering. Blocky runs on this router, and DNS & DHCP sends its queries to it when Blocky is chosen as the upstream mode."</span>
+            <span>"Enable DNS filtering"</span>
         </label>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -914,7 +914,6 @@ fn StatusPanel(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
             <div class="flex flex-wrap justify-between items-start gap-3">
                 <div>
                     <h2 class="text-xl font-semibold text-blue-300">"Status"</h2>
-                    <p class=HELP>"Refreshes every 5 seconds. Saved settings take effect after they are applied."</p>
                 </div>
                 {move || status.get().map(|s| {
                     if !s.service_active {

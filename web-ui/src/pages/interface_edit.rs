@@ -569,7 +569,6 @@ pub fn InterfaceEditPage(
                             on:input=move |ev| set_description.set(event_target_value(&ev))
                             class="w-full bg-gray-700 text-white rounded px-4 py-2.5 border border-gray-600"
                         />
-                        <p class="text-gray-500 text-sm mt-1">"Optional human-readable description"</p>
                     </div>
 
                     // DHCP Client Mode
@@ -1036,7 +1035,6 @@ pub fn InterfaceEditPage(
                                         <option value="ipv4" selected=move || link_local.get() == LinkLocalMode::Ipv4>"IPv4 Only"</option>
                                         <option value="no" selected=move || link_local.get() == LinkLocalMode::No>"Disabled"</option>
                                     </select>
-                                    <p class="text-gray-500 text-sm mt-1">"Configure link-local address assignment"</p>
                                 </div>
 
                                 // Required for Online

@@ -591,7 +591,6 @@ fn UpnpMappingsPanel(token: Signal<String>, on_unauthorized: Callback<()>) -> im
             <div class="flex flex-wrap justify-between items-start gap-3">
                 <div>
                     <h2 class="text-xl font-semibold text-blue-300">"Active port mappings"</h2>
-                    <p class=HELP>"Mappings that clients have requested. Refreshes every 5 seconds."</p>
                 </div>
                 {move || status.get().map(|s| if s.service_active {
                     view! {

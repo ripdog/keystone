@@ -1553,7 +1553,6 @@ fn DhcpOptionsTab(
             <div class="flex justify-between items-center">
                 <div>
                     <h3 class="text-lg font-medium text-white">"DHCP Options"</h3>
-                    <p class="text-sm text-gray-400">"Custom DHCP options sent to clients"</p>
                 </div>
                 <button
                     on:click=open_new_modal
@@ -1858,7 +1857,6 @@ fn HostRecordsSection(
             <div class="flex justify-between items-center">
                 <div>
                     <h3 class="text-lg font-medium text-white">"Host Records"</h3>
-                    <p class="text-sm text-gray-400">"Map hostnames to IP addresses"</p>
                 </div>
                 <button
                     on:click=open_new_modal
@@ -2117,7 +2115,6 @@ fn CnameRecordsSection(
             <div class="flex justify-between items-center">
                 <div>
                     <h3 class="text-lg font-medium text-white">"CNAME Records"</h3>
-                    <p class="text-sm text-gray-400">"Alias one hostname to another"</p>
                 </div>
                 <button
                     on:click=open_new_modal
@@ -2388,7 +2385,6 @@ fn AddressOverridesTab(
             <div class="flex justify-between items-center">
                 <div>
                     <h3 class="text-lg font-medium text-white">"Address Overrides"</h3>
-                    <p class="text-sm text-gray-400">"Block domains or redirect them to specific addresses"</p>
                 </div>
                 <button
                     on:click=open_new_modal

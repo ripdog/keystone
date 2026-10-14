@@ -214,9 +214,6 @@ pub fn PacketTesterTab(token: Signal<String>, on_unauthorized: Callback<()>) -> 
         <div class="space-y-6">
             <div>
                 <h2 class="text-lg font-medium text-gray-200">"Packet Tester"</h2>
-                <p class="text-gray-400 text-sm">
-                    "What happens to this packet? The trace follows the rules in the order the router evaluates them."
-                </p>
                 <p class="text-gray-500 text-xs mt-1">
                     "Simulated from configuration. Established/related replies and kernel behaviour are not modelled beyond the notes shown with each result."
                 </p>

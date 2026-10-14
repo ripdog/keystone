@@ -184,7 +184,7 @@ pub fn LiveLogTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl 
                 <div>
                     <h2 class="text-lg font-medium text-gray-200">"Live Log"</h2>
                     <p class="text-gray-400 text-sm">
-                        "Packets matched by logging rules, newest last. Refreshes every 2 seconds."
+                        "Packets matched by logging rules, newest last."
                     </p>
                 </div>
                 <div class="flex items-center gap-2">

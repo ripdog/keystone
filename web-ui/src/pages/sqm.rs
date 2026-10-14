@@ -624,7 +624,6 @@ fn SqmStatsPanel(token: Signal<String>, on_unauthorized: Callback<()>) -> impl I
             <div class="flex flex-wrap justify-between items-start gap-3">
                 <div>
                     <h2 class="text-xl font-semibold text-blue-300">"Live shaping"</h2>
-                    <p class=HELP>"Counters of the applied configuration. Refreshes every 2 seconds."</p>
                 </div>
                 {move || status.get().map(|s| if s.active {
                     view! {

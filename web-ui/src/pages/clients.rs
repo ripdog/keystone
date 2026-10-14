@@ -401,7 +401,7 @@ fn reserve_form(ctx: PageContext) -> impl IntoView {
                 <span class="font-mono text-sm">{move || reserve.mac.get().unwrap_or_default()}</span>
             </div>
             <p class="text-xs text-gray-400">
-                "DHCP will always give this device the IPv4 address below. It takes effect after Apply all in the pending changes bar."
+                "DHCP will always give this device the IPv4 address below."
             </p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>

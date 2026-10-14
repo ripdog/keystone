@@ -363,7 +363,6 @@ pub fn BridgesPage(
                                             }
                                         />
                                     </div>
-                                    <p class="text-sm text-gray-500 mt-1">"Select interfaces to add to this bridge"</p>
                                 </div>
 
                                 <div class="flex items-center gap-4">

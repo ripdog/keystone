@@ -758,4 +758,44 @@ mod tests {
         assert!(comment.starts_with("ks:input:12 "));
         assert_eq!(rule_comment("forward", None, ""), "ks:forward:0");
     }
+
+    /// Every sample ruleset loads into a real kernel, in a throwaway user and
+    /// network namespace. This catches JSON that nft parses but refuses, which
+    /// the preview's syntax check cannot see. Skipped where unprivileged user
+    /// namespaces or nft are unavailable.
+    #[test]
+    fn sample_rulesets_load_into_the_kernel() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let namespace_works = Command::new("unshare")
+            .args(["-rn", "nft", "list", "ruleset"])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !namespace_works {
+            return;
+        }
+        for (name, config) in crate::firewall::fixtures::sample_configs() {
+            let json = serde_json::to_string(&generate_ruleset(&config).nftables).unwrap();
+            let mut child = Command::new("unshare")
+                .args(["-rn", "nft", "-j", "-f", "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("nft starts");
+            child
+                .stdin
+                .take()
+                .expect("stdin")
+                .write_all(json.as_bytes())
+                .expect("write ruleset");
+            let output = child.wait_with_output().expect("nft finishes");
+            assert!(
+                output.status.success(),
+                "{name} ruleset does not load:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 }

@@ -8,7 +8,7 @@ use crate::firewall::rules::{Addr, Cond, Ports, RuleSpec, Side, Verdict};
 use nftables::{
     expr::{
         CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression, Payload,
-        PayloadField, Range,
+        PayloadField, Prefix, Range, SetItem,
     },
     schema::Rule,
     stmt::{Counter, Limit, Log, Match, NAT, Operator, Statement},
@@ -124,13 +124,28 @@ fn address_match(side: Side, addr: &Addr) -> Statement<'static> {
                 Ok(IpAddr::V6(_)) => "ip6",
                 _ => "ip",
             };
-            compare(payload(family, field), string(text), Operator::EQ)
+            compare(payload(family, field), address_literal(text), Operator::EQ)
         }
         Addr::Group { name, family } => compare(
             payload(family.payload(), field),
             string(&format!("@{}", address_set_name(name, *family))),
             Operator::EQ,
         ),
+    }
+}
+
+/// A host address as a string, a network as a prefix. nft reads a string
+/// holding `/` as a host name to resolve, and refuses the batch.
+fn address_literal(text: &str) -> Expression<'static> {
+    match text.split_once('/') {
+        Some((addr, len)) => match len.parse::<u32>() {
+            Ok(len) => Expression::Named(NamedExpression::Prefix(Prefix {
+                addr: Box::new(string(addr)),
+                len,
+            })),
+            Err(_) => string(text),
+        },
+        None => string(text),
     }
 }
 
@@ -158,14 +173,21 @@ fn port_match(side: Side, protocol: &'static str, ports: &Ports) -> Statement<'s
 }
 
 /// `iifname "eth1"`, or `iifname { "eth1", "eth2" }` for several interfaces.
+/// Several interfaces are an anonymous set: nft reads a bare JSON list as a
+/// bitmask, which interface names are not, and refuses the whole batch.
 fn interface_match(key: MetaKey, interfaces: &[String]) -> Statement<'static> {
     if let [interface] = interfaces {
         compare(meta(key), string(interface), Operator::EQ)
     } else {
         compare(
             meta(key),
-            Expression::List(interfaces.iter().map(|name| string(name)).collect()),
-            Operator::IN,
+            Expression::Named(NamedExpression::Set(
+                interfaces
+                    .iter()
+                    .map(|name| SetItem::Element(string(name)))
+                    .collect(),
+            )),
+            Operator::EQ,
         )
     }
 }
@@ -249,5 +271,34 @@ mod tests {
         let rule = rule_object(&spec(vec![Cond::FibNotOnIngress], Verdict::Drop), "t", "c");
         let text = serde_json::to_string(&rule).unwrap();
         assert!(text.contains("\"op\":\"!=\""), "{text}");
+    }
+
+    #[test]
+    fn several_interfaces_are_an_anonymous_set() {
+        let rule = rule_object(
+            &spec(
+                vec![Cond::Iif(vec!["eth1".into(), "eth2".into()])],
+                Verdict::Accept,
+            ),
+            "t",
+            "c",
+        );
+        let json = serde_json::to_value(&rule).unwrap();
+        let matched = &json["expr"][0]["match"];
+        assert_eq!(matched["op"], "==");
+        assert_eq!(matched["right"]["set"], serde_json::json!(["eth1", "eth2"]));
+    }
+
+    #[test]
+    fn a_literal_network_is_a_prefix_and_a_host_a_string() {
+        let network = address_literal("198.51.100.0/24");
+        assert_eq!(
+            serde_json::to_value(&network).unwrap(),
+            serde_json::json!({"prefix": {"addr": "198.51.100.0", "len": 24}})
+        );
+        assert_eq!(
+            serde_json::to_value(address_literal("2001:db8::1")).unwrap(),
+            serde_json::json!("2001:db8::1")
+        );
     }
 }

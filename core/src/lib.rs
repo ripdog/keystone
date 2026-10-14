@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod api;
+pub mod blocky;
 pub mod changes;
 pub mod sqm;
 pub mod upnp;
@@ -2865,6 +2866,8 @@ pub struct ApplyComponentResults {
     pub sqm: ComponentResult,
     #[serde(default)]
     pub upnp: ComponentResult,
+    #[serde(default)]
+    pub blocky: ComponentResult,
     pub dnsmasq: ComponentResult,
     pub caddy: ComponentResult,
 }

@@ -6,6 +6,7 @@
 //! `E::Request` and parse `E::Response`. A client therefore cannot post the
 //! wrong body shape to a route without a compile error.
 
+use crate::blocky::*;
 use crate::changes::*;
 use crate::sqm::*;
 use crate::upnp::*;
@@ -118,6 +119,8 @@ endpoints! {
     SaveSqmConfig: Put "/sqm/config", SaveSqmConfigRequest => SaveSqmConfigResponse;
 
     SaveUpnpConfig: Put "/upnp/config", SaveUpnpConfigRequest => SaveUpnpConfigResponse;
+
+    SaveBlockyConfig: Put "/blocky/config", SaveBlockyConfigRequest => SaveBlockyConfigResponse;
 
     ApplySsh: Post "/ssh/apply", SshConfig => SshApplyResponse;
 

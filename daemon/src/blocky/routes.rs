@@ -1,5 +1,5 @@
 //! Blocky API routes:
-//! - `GET /blocky`: saved configuration and the binary check
+//! - `GET /blocky/config`: saved configuration and the binary check
 //! - `PUT /blocky/config`: save the configuration (nothing is applied)
 //! - `POST /blocky/apply`: apply the saved configuration
 //! - `GET /blocky/status`: service state and Blocky's blocking state
@@ -20,7 +20,7 @@ use axum::{
     Json, Router,
     extract::{Extension, Query, State},
     http::StatusCode,
-    routing::{get, post, put},
+    routing::{get, post},
 };
 use keystone_core::api::{Endpoint, Req, Res, SaveBlockyConfig};
 use keystone_core::blocky::{
@@ -59,8 +59,10 @@ pub struct BlockyState {
 
 pub fn blocky_routes(state: BlockyState) -> Router<Arc<crate::AppState>> {
     Router::new()
-        .route("/blocky", get(get_blocky))
-        .route(SaveBlockyConfig::PATH, put(save_blocky_config_route))
+        .route(
+            SaveBlockyConfig::PATH,
+            get(get_blocky_config).put(save_blocky_config_route),
+        )
         .route("/blocky/apply", post(apply_blocky))
         .route("/blocky/status", get(get_blocky_status))
         .route("/blocky/pause", post(pause_blocky))
@@ -74,8 +76,8 @@ async fn changes_disabled(db: &Database) -> Result<bool, AppError> {
     Ok(db.get_global_settings().await?.config_changes_disabled)
 }
 
-/// GET /blocky - the saved configuration and the binary check.
-async fn get_blocky(
+/// GET /blocky/config - the saved configuration and the binary check.
+async fn get_blocky_config(
     State(state): State<BlockyState>,
 ) -> Result<Json<BlockyStateResponse>, AppError> {
     let config = load_blocky_config(state.db.pool()).await?;

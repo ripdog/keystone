@@ -10,7 +10,7 @@ use super::client::{call, get, post_empty};
 
 /// Fetch the saved DNS filtering configuration and the binary check.
 pub async fn fetch_blocky_state(token: &str) -> Result<BlockyStateResponse, String> {
-    get("/api/blocky", token).await
+    get("/api/blocky/config", token).await
 }
 
 /// Save the configuration. Nothing is applied until configuration is applied.

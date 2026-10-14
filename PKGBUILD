@@ -42,6 +42,7 @@ package() {
   install -Dm644 "${startdir}/packaging/arch/keystone-web-ui.service" "${pkgdir}/usr/lib/systemd/system/keystone-web-ui.service"
   install -Dm644 "${startdir}/packaging/arch/keystone-blocky.service" "${pkgdir}/usr/lib/systemd/system/keystone-blocky.service"
   install -Dm644 "${startdir}/packaging/arch/miniupnpd.service.d/keystone.conf" "${pkgdir}/usr/lib/systemd/system/miniupnpd.service.d/keystone.conf"
+  install -Dm644 "${startdir}/packaging/arch/systemd-networkd.service.d/keystone.conf" "${pkgdir}/usr/lib/systemd/system/systemd-networkd.service.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/sysusers.conf" "${pkgdir}/usr/lib/sysusers.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/tmpfiles.conf" "${pkgdir}/usr/lib/tmpfiles.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/keystone-modules.conf" "${pkgdir}/usr/lib/modules-load.d/keystone.conf"

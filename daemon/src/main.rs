@@ -8,6 +8,7 @@ mod auth;
 mod blocky;
 mod caddy;
 mod changes;
+mod client_traffic;
 mod clients;
 mod config;
 mod config_validation;
@@ -75,6 +76,7 @@ struct AppState {
     firewall_manager: Arc<firewall::FirewallApplyManager>,
     gateways: gateway::GatewaySnapshot,
     traffic: traffic::TrafficSnapshot,
+    client_traffic: client_traffic::ClientTrafficSnapshot,
     login_slots: Arc<tokio::sync::Semaphore>,
     login_attempts:
         Arc<tokio::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, u32)>>>,
@@ -90,6 +92,7 @@ impl AppState {
             auth,
             gateways: gateway::start(db.clone()),
             traffic: traffic::start(),
+            client_traffic: client_traffic::start(db.clone()),
             db,
             firewall_manager,
             login_slots: Arc::new(tokio::sync::Semaphore::new(3)),

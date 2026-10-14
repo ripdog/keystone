@@ -2190,6 +2190,30 @@ pub struct ClientsResponse {
     pub clients: Vec<Client>,
 }
 
+/// One per-client internet transfer-rate sample, from the client's point of view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientTrafficSample {
+    pub timestamp_ms: u64,
+    /// Bytes per second the client received from the WAN.
+    pub download_bytes_per_sec: u64,
+    /// Bytes per second the client sent to the WAN.
+    pub upload_bytes_per_sec: u64,
+}
+
+/// A device's rolling 60-second WAN traffic history, summed over its addresses.
+/// Every device's samples share the same timestamps.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClientTraffic {
+    /// Lowercase colon-separated MAC address of the device.
+    pub mac: String,
+    pub samples: Vec<ClientTrafficSample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ClientTrafficResponse {
+    pub clients: Vec<ClientTraffic>,
+}
+
 /// One logical WAN exposure. Both families may belong to the same forward.
 /// The underlying firewall rule IDs remain the source of truth.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

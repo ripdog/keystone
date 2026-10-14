@@ -10,11 +10,16 @@
 use crate::AppError;
 use crate::db::Database;
 use anyhow::{Result, anyhow};
-use axum::{Json, Router, extract::State, routing::get};
-use keystone_core::{
-    Client, ClientsResponse, DhcpLease, DnsmasqStaticLease, FirewallZone, InterfaceRole,
-    SimplePortForward,
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    routing::get,
 };
+use keystone_core::{
+    Client, ClientTraffic, ClientTrafficResponse, ClientsResponse, DhcpLease, DnsmasqStaticLease,
+    FirewallZone, InterfaceRole, SimplePortForward,
+};
+use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     net::IpAddr,
@@ -421,11 +426,15 @@ pub fn clients_routes(db: Database) -> Router<Arc<crate::AppState>> {
     Router::new()
         .route("/clients", get(get_clients))
         .with_state(db)
+        .merge(Router::new().route("/clients/traffic", get(get_client_traffic)))
 }
 
-/// GET /clients - every device seen on the LAN, one record per MAC address.
-async fn get_clients(State(db): State<Database>) -> Result<Json<ClientsResponse>, AppError> {
-    let neighbours = lan_neighbours(&db).await?;
+/// Most devices whose history one request may ask for.
+const MAX_TRAFFIC_MACS: usize = 64;
+
+/// Every source merged into the client list.
+async fn load_clients(db: &Database) -> Result<Vec<Client>, AppError> {
+    let neighbours = lan_neighbours(db).await?;
     let leases = match crate::dnsmasq::get_active_leases() {
         Ok(leases) => leases,
         Err(e) => {
@@ -435,16 +444,80 @@ async fn get_clients(State(db): State<Database>) -> Result<Json<ClientsResponse>
     };
     let static_leases = crate::dnsmasq::load_static_leases(db.pool()).await?;
     let zones = db.get_firewall_zones().await?;
-    let (_, forwards) = crate::firewall::simple::load_forwards(&db).await?;
-    let clients = merge_clients(&ClientSources {
+    let (_, forwards) = crate::firewall::simple::load_forwards(db).await?;
+    Ok(merge_clients(&ClientSources {
         neighbours: &neighbours,
         leases: &leases,
         static_leases: &static_leases,
         zones: &zones,
         forwards: &forwards,
         oui: oui_table(),
-    });
-    Ok(Json(ClientsResponse { clients }))
+    }))
+}
+
+/// GET /clients - every device seen on the LAN, one record per MAC address.
+async fn get_clients(State(db): State<Database>) -> Result<Json<ClientsResponse>, AppError> {
+    Ok(Json(ClientsResponse {
+        clients: load_clients(&db).await?,
+    }))
+}
+
+#[derive(Deserialize)]
+struct TrafficQuery {
+    /// Comma-separated MAC addresses. Malformed entries are ignored.
+    macs: Option<String>,
+}
+
+/// MACs named in a `macs` query value, canonicalised, deduplicated and capped.
+fn requested_macs(value: Option<&str>) -> Vec<String> {
+    let mut macs: Vec<String> = Vec::new();
+    for mac in value
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|text| parse_mac(text.trim()))
+        .map(|octets| format_mac(&octets))
+    {
+        if !macs.contains(&mac) {
+            macs.push(mac);
+        }
+        if macs.len() == MAX_TRAFFIC_MACS {
+            break;
+        }
+    }
+    macs
+}
+
+/// Every address a device is known by, as parsed IPs.
+fn client_addresses(client: &Client) -> Vec<IpAddr> {
+    client
+        .ipv4
+        .iter()
+        .chain(&client.ipv6)
+        .filter_map(|address| address.parse().ok())
+        .collect()
+}
+
+/// GET /clients/traffic?macs=... - one minute of WAN throughput for each
+/// requested device that is in the client list.
+async fn get_client_traffic(
+    State(state): State<Arc<crate::AppState>>,
+    Query(query): Query<TrafficQuery>,
+) -> Result<Json<ClientTrafficResponse>, AppError> {
+    let wanted = requested_macs(query.macs.as_deref());
+    if wanted.is_empty() {
+        return Ok(Json(ClientTrafficResponse::default()));
+    }
+    let clients = load_clients(&state.db).await?;
+    let sampler = state.client_traffic.read().await;
+    let clients = clients
+        .iter()
+        .filter(|client| wanted.contains(&client.mac))
+        .map(|client| ClientTraffic {
+            mac: client.mac.clone(),
+            samples: sampler.series_for(&client_addresses(client)),
+        })
+        .collect();
+    Ok(Json(ClientTrafficResponse { clients }))
 }
 
 #[cfg(test)]
@@ -793,6 +866,32 @@ mod tests {
             vendor_of("02:00:00:00:00:02").as_deref(),
             Some(RANDOMIZED_VENDOR)
         );
+    }
+
+    #[test]
+    fn traffic_query_keeps_valid_unique_macs_only() {
+        assert!(requested_macs(None).is_empty());
+        assert_eq!(
+            requested_macs(Some(
+                "AA:BB:CC:00:00:01, aa:bb:cc:00:00:01,nope,aa:bb:cc:00:00:02,;rm"
+            )),
+            vec!["aa:bb:cc:00:00:01", "aa:bb:cc:00:00:02"]
+        );
+        let many: Vec<String> = (0..200)
+            .map(|i| format!("aa:bb:cc:00:{:02x}:01", i))
+            .collect();
+        assert_eq!(
+            requested_macs(Some(&many.join(","))).len(),
+            MAX_TRAFFIC_MACS
+        );
+    }
+
+    #[test]
+    fn client_addresses_skip_unparseable_entries() {
+        let mut client = blank_client("aa:bb:cc:00:00:01".into());
+        client.ipv4 = vec!["192.168.1.2".into(), "junk".into()];
+        client.ipv6 = vec!["2001:db8::2".into()];
+        assert_eq!(client_addresses(&client).len(), 2);
     }
 
     #[test]

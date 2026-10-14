@@ -131,11 +131,10 @@ pub fn DashboardPage(
                 </div>
             </Show>
 
-            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
-                <div class="xl:col-span-2 space-y-6 min-w-0">
-                    <div class="bg-gray-800 rounded-lg p-5 shadow-lg space-y-3">
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                    <div class="bg-gray-800 rounded-lg p-5 shadow-lg space-y-3 min-w-0">
                         <h2 class="text-blue-300 font-medium">"WAN Gateway Health"</h2>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-1 gap-4">
                             {move || [GatewayFamily::Ipv4, GatewayFamily::Ipv6].into_iter().map(|family| {
                                 let relevant: Vec<_> = gateways.get().into_iter().filter(|g| g.family == family).collect();
                                 let label = if family == GatewayFamily::Ipv4 { "IPv4" } else { "IPv6" };
@@ -205,10 +204,11 @@ pub fn DashboardPage(
                         </div>
                     </div>
 
+                    <div class="flex flex-col gap-4 min-w-0">
                     <Show when=move || renew_message.get().is_some()>
                         <div class="text-sm text-gray-200 bg-gray-800 rounded p-3">{move || renew_message.get().unwrap_or_default()}</div>
                     </Show>
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-1 xl:grid-rows-2 xl:flex-1 gap-4">
                         {move || {
                             [InterfaceRole::WAN, InterfaceRole::LAN].into_iter().map(|role| {
                                 let relevant = state.get().interfaces.into_iter()
@@ -273,13 +273,11 @@ pub fn DashboardPage(
                             }).collect_view()
                         }}
                     </div>
-
-                </div>
-                <div class="space-y-6 min-w-0">
+                    </div>
                     <SystemInfoCard auth_token=auth_token on_unauthorized=on_unauthorized />
-                    <ServicesCard auth_token=auth_token on_unauthorized=on_unauthorized />
-                </div>
             </div>
+
+            <ServicesCard auth_token=auth_token on_unauthorized=on_unauthorized />
 
             <div class="bg-gray-800 rounded-xl p-5 sm:p-6 shadow-lg space-y-4">
                 <div class="flex flex-wrap justify-between items-baseline gap-2">

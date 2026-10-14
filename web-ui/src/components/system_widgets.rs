@@ -105,7 +105,7 @@ pub fn SystemInfoCard(
     });
 
     view! {
-        <div class="bg-gray-800 rounded-lg p-5 shadow-lg space-y-4 min-w-0">
+        <div class="bg-gray-800 rounded-lg p-5 shadow-lg space-y-4 min-w-0 h-full flex flex-col">
             <h2 class="text-blue-300 font-medium">"System"</h2>
             <Show when=move || error.get().is_some()>
                 <div class="text-xs text-red-300">{move || error.get().unwrap_or_default()}</div>
@@ -121,7 +121,7 @@ pub fn SystemInfoCard(
                     let mem_pct = percent(i.memory_used_bytes, i.memory_total_bytes);
                     let swap_pct = percent(i.swap_used_bytes, i.swap_total_bytes);
                     view! {
-                        <div class="space-y-3">
+                        <div class="flex flex-col justify-between gap-3 flex-1">
                             <div class="text-xs text-gray-400 space-y-0.5">
                                 <div class="flex justify-between gap-3">
                                     <span class="text-gray-200 font-medium truncate">{i.hostname.clone()}</span>
@@ -274,7 +274,7 @@ pub fn ServicesCard(
             <Show when=move || units.get().is_empty() && error.get().is_none()>
                 <div class="text-sm text-gray-500">"Loading..."</div>
             </Show>
-            <ul class="divide-y divide-gray-700/70">
+            <ul class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-x-8">
                 <For
                     each=move || units.get()
                     key=|u| (u.name.clone(), u.active_state)
@@ -288,7 +288,7 @@ pub fn ServicesCard(
                         let (n_restart, n_toggle) = (name.clone(), name.clone());
                         let toggle_action = if running { ServiceAction::Stop } else { ServiceAction::Start };
                         view! {
-                            <li class="flex items-center justify-between gap-3 py-1.5">
+                            <li class="flex items-center justify-between gap-3 py-1.5 border-b border-gray-700/70">
                                 <div class="flex items-center gap-2 min-w-0">
                                     <span
                                         class=format!("w-2 h-2 rounded-full shrink-0 {}", state_dot_class(state))

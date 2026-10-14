@@ -251,12 +251,20 @@ mod tests {
         assert!(!config.enabled);
         assert!(config.upstreams.iter().any(|u| u.starts_with("https://")));
         assert!(config.upstreams.iter().any(|u| u.starts_with("tcp-tls:")));
-        assert!(config.groups.iter().all(|group| group.allowlists.is_empty()));
+        assert!(
+            config
+                .groups
+                .iter()
+                .all(|group| group.allowlists.is_empty())
+        );
         // Every client assignment refers to a group that exists, and unmatched
         // clients are covered by the default selector.
-        assert!(config.client_groups.iter().any(|assignment| {
-            assignment.selector == BLOCKY_DEFAULT_SELECTOR
-        }));
+        assert!(
+            config
+                .client_groups
+                .iter()
+                .any(|assignment| { assignment.selector == BLOCKY_DEFAULT_SELECTOR })
+        );
         for assignment in &config.client_groups {
             for name in &assignment.groups {
                 assert!(config.groups.iter().any(|group| &group.name == name));

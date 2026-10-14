@@ -1,14 +1,14 @@
 //! Interface configuration API functions
 
-use keystone_core::api::{SaveInterfaceConfig, SaveManagedInterfaces};
+use keystone_core::api::{RenameInterface, SaveInterfaceConfig, SaveManagedInterfaces};
 use keystone_core::{
     InterfaceConfig, InterfaceConfigResponse, ManagedInterface, ManagedInterfacesResponse,
-    NetworkdPreviewResponse, RenewInterfaceResponse, SaveInterfaceConfigRequest,
-    SaveInterfaceConfigResponse, SaveManagedInterfacesRequest, SaveManagedInterfacesResponse,
-    SystemState,
+    NetworkdPreviewResponse, RenameInterfaceRequest, RenameInterfaceResponse,
+    RenewInterfaceResponse, SaveInterfaceConfigRequest, SaveInterfaceConfigResponse,
+    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SystemState,
 };
 
-use super::client::{call, get, post_empty};
+use super::client::{call, call_with, get, post_empty};
 
 // ============================================================================
 // Runtime interface discovery
@@ -81,4 +81,16 @@ pub async fn reconfigure_interface(
 /// Get networkd configuration preview without writing to disk
 pub async fn get_networkd_preview(token: &str) -> Result<NetworkdPreviewResponse, String> {
     get("/api/networkd-preview", token).await
+}
+
+/// Give a physical interface a persistent custom name and apply the result.
+pub async fn rename_interface(
+    token: &str,
+    name: &str,
+    new_name: &str,
+) -> Result<RenameInterfaceResponse, String> {
+    let request = RenameInterfaceRequest {
+        new_name: new_name.to_string(),
+    };
+    call_with::<RenameInterface>(token, &[("name", name)], &request).await
 }

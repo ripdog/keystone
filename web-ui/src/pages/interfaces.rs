@@ -1,6 +1,6 @@
 //! Interfaces management page
 
-use crate::components::use_toasts;
+use crate::components::{PendingActions, use_toasts};
 use keystone_core::{Interface, InterfaceRole, ManagedInterface, SystemState};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -27,6 +27,10 @@ pub fn InterfacesPage(
     let (loading, set_loading) = signal(true);
     let (saving, set_saving) = signal(false);
     let (renewing, set_renewing) = signal::<Option<String>>(None);
+    let (rename_busy, set_rename_busy) = signal(false);
+    // Bumped to reload the interface list after a rename.
+    let (reload, set_reload) = signal(0u32);
+    let locked = expect_context::<PendingActions>().locked;
     let config_changed = use_config_changed();
     let (error, set_error) = signal::<Option<String>>(None);
 
@@ -34,6 +38,7 @@ pub fn InterfacesPage(
     // The separate /state endpoint supplies physical interfaces that are not
     // yet managed; /managed-interfaces contains only configured interfaces.
     Effect::new(move || {
+        reload.track();
         let Some(token) = auth_token.get() else {
             set_loading.set(false);
             return;
@@ -180,6 +185,42 @@ pub fn InterfacesPage(
         });
     };
 
+    let rename_link = Callback::new(move |(name, new_name): (String, String)| {
+        if has_changes() {
+            set_error.set(Some(
+                "Save or discard your changes to the interface list before renaming an interface"
+                    .to_string(),
+            ));
+            return;
+        }
+        let Some(token) = auth_token.get_untracked() else {
+            return;
+        };
+        set_rename_busy.set(true);
+        set_error.set(None);
+        spawn_local(async move {
+            match api::rename_interface(&token, &name, &new_name).await {
+                Ok(response) => {
+                    let renamed = response.apply.is_some();
+                    if response.success {
+                        toasts.success(response.message);
+                    } else {
+                        set_error.set(Some(response.message));
+                    }
+                    if renamed {
+                        // The interface now has its new name; show it, and let
+                        // the pending-changes bar pick up a confirmation.
+                        set_reload.update(|count| *count = count.wrapping_add(1));
+                        config_changed.run(());
+                    }
+                }
+                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
+                Err(e) => set_error.set(Some(format!("Failed to rename {name}: {e}"))),
+            }
+            set_rename_busy.set(false);
+        });
+    });
+
     view! {
         <div class="space-y-6">
             <div>
@@ -249,6 +290,12 @@ pub fn InterfacesPage(
                                             <div>
                                                 <div class="font-medium text-white">{name4.clone()}</div>
                                                 <div class="text-sm text-gray-400">{address}</div>
+                                                <RenameControl
+                                                    name=iface.name.clone()
+                                                    disabled=Signal::derive(move || locked.get() || rename_busy.get())
+                                                    busy=rename_busy
+                                                    on_rename=rename_link
+                                                />
                                             </div>
                                         </div>
 
@@ -329,6 +376,73 @@ pub fn InterfacesPage(
                 </Show>
             </Show>
         </div>
+    }
+}
+
+/// A "Rename" link that opens an inline editor for the interface's new name.
+#[component]
+fn RenameControl(
+    name: String,
+    disabled: Signal<bool>,
+    busy: ReadSignal<bool>,
+    on_rename: Callback<(String, String)>,
+) -> impl IntoView {
+    let (editing, set_editing) = signal(false);
+    let (input, set_input) = signal(name.clone());
+    let open_name = name.clone();
+
+    move || {
+        if !editing.get() {
+            let open_name = open_name.clone();
+            return view! {
+                <button
+                    class="text-xs text-blue-300 hover:text-blue-200 disabled:opacity-50 underline"
+                    disabled=move || disabled.get()
+                    title="Give this network card a persistent name such as wan0 or lan0"
+                    on:click=move |_| {
+                        set_input.set(open_name.clone());
+                        set_editing.set(true);
+                    }
+                >
+                    "Rename"
+                </button>
+            }
+            .into_any();
+        }
+        let submit_name = name.clone();
+        view! {
+            <div class="mt-1 space-y-1">
+                <div class="flex items-center gap-2">
+                    <input
+                        type="text"
+                        maxlength="15"
+                        class="bg-gray-600 text-white rounded px-2 py-1 text-sm border border-gray-500 focus:border-blue-500 focus:outline-none w-32"
+                        prop:value=move || input.get()
+                        on:input=move |ev| set_input.set(event_target_value(&ev))
+                    />
+                    <button
+                        class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-2 py-1 rounded text-sm"
+                        disabled=move || disabled.get()
+                        on:click=move |_| {
+                            on_rename.run((submit_name.clone(), input.get_untracked().trim().to_string()))
+                        }
+                    >
+                        {move || if busy.get() { "Renaming..." } else { "Rename" }}
+                    </button>
+                    <button
+                        class="bg-gray-600 hover:bg-gray-500 text-white px-2 py-1 rounded text-sm"
+                        disabled=move || busy.get()
+                        on:click=move |_| set_editing.set(false)
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+                <p class="text-xs text-yellow-200">
+                    "The interface briefly goes down and its configuration is re-applied; confirm the change afterwards. Letters, digits, '-' and '_' only, up to 15 characters; not eth0, wlan0, enp3s0 style names."
+                </p>
+            </div>
+        }
+        .into_any()
     }
 }
 

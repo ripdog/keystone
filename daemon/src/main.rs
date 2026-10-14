@@ -100,7 +100,9 @@ impl AppState {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing
+    // Colour codes are for terminals; in the journal they are noise.
     tracing_subscriber::fmt()
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "keystone_daemon=debug,tower_http=debug".into()),
@@ -316,7 +318,6 @@ async fn main() -> anyhow::Result<()> {
         .merge(changes::changes_routes(changes_state))
         // Merge systemd routes
         .merge(systemd::routes::systemd_routes())
-        .merge(logs::logs_routes())
         .merge(ssh::routes())
         // Merge wizard routes
         .merge(wizard::wizard_routes())
@@ -324,6 +325,16 @@ async fn main() -> anyhow::Result<()> {
             state.clone(),
             auth_middleware,
         ));
+
+    // The log viewer polls the journal this daemon writes to. Tracing its own
+    // requests would add new lines to every poll's answer, so it sits outside
+    // the TraceLayer below, behind the same authentication.
+    let logs_app = logs::logs_routes()
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
+        .with_state(state.clone());
 
     let app = Router::new()
         .route("/health", get(health_check))
@@ -334,7 +345,8 @@ async fn main() -> anyhow::Result<()> {
         // State must be applied before TraceLayer so middleware/handlers can
         // reliably extract State<Arc<AppState>>.
         .with_state(state)
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        .merge(logs_app);
 
     // Check for development mode (HTTP listener instead of Unix socket)
     let dev_mode = std::env::var("KEYSTONE_DEV").is_ok();

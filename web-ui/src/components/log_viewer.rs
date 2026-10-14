@@ -243,7 +243,7 @@ pub fn LogViewer(
         if token.get().is_empty() {
             None
         } else {
-            Some(Interval::new(POLL_MS, move || poll()))
+            Some(Interval::new(POLL_MS, poll))
         }
     });
 

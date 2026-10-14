@@ -116,6 +116,36 @@ fn truncate_message(mut text: String, max: usize) -> String {
     text
 }
 
+/// `text` without ANSI escape sequences. Programs such as tracing-based ones
+/// colour their output, and the journal keeps the raw codes.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\u{1b}' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            // CSI: parameters, then one final byte in 0x40..=0x7e.
+            Some('[') => {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            // Two-character escape such as `ESC c`.
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
+        }
+    }
+    out
+}
+
 /// The unit a record belongs to. Messages systemd writes about a unit come from
 /// PID 1 and name the unit in `UNIT`, so that wins over `init.scope`.
 fn unit_of(record: &Value) -> String {
@@ -143,7 +173,7 @@ pub fn entry_from_journal(record: &Value) -> Option<JournalEntry> {
         pid: field_text(record, "_PID").and_then(|text| text.parse().ok()),
         priority,
         message: truncate_message(
-            field_text(record, "MESSAGE").unwrap_or_default(),
+            strip_ansi(&field_text(record, "MESSAGE").unwrap_or_default()),
             JOURNAL_MESSAGE_MAX_BYTES,
         ),
     })
@@ -386,6 +416,17 @@ mod tests {
         assert_eq!(entry.priority, 6);
 
         assert!(entry_from_journal(&json!({ "MESSAGE": "no cursor" })).is_none());
+    }
+
+    #[test]
+    fn colour_codes_are_removed_from_messages() {
+        let coloured = "\u{1b}[2m2026-10-14T08:33:53Z\u{1b}[0m \u{1b}[34mDEBUG\u{1b}[0m \u{1b}[1mrequest\u{1b}[0m ok";
+        assert_eq!(
+            strip_ansi(coloured),
+            "2026-10-14T08:33:53Z DEBUG request ok"
+        );
+        assert_eq!(strip_ansi("plain [text] é"), "plain [text] é");
+        assert_eq!(strip_ansi("cut\u{1b}"), "cut");
     }
 
     #[test]

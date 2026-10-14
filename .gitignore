@@ -23,6 +23,7 @@ web-ui/pkg/
 
 /logs
 session-*
+/pcaps
 
 # Local release automation (contains machine-specific deployment target)
 /scripts/release.sh

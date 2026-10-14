@@ -413,6 +413,8 @@ struct RenderedBlocking {
     client_groups_block: BTreeMap<String, Vec<String>>,
     #[serde(rename = "blockType")]
     block_type: &'static str,
+    #[serde(rename = "blockTTL")]
+    block_ttl: &'static str,
     loading: RenderedLoading,
 }
 
@@ -450,6 +452,11 @@ struct RenderedQueryLog {
 }
 
 /// The `config.yml` text for `config`, as pretty-printed JSON.
+/// How long clients may cache a blocked answer. Blocky's default is six
+/// hours, which keeps domains blocked on every device long after blocking is
+/// paused or a domain is allowed.
+const BLOCK_TTL: &str = "1m";
+
 pub fn render_config(config: &BlockyConfig) -> Result<String, String> {
     let rendered = render_structure(config);
     let mut text = serde_json::to_string_pretty(&rendered).map_err(|error| error.to_string())?;
@@ -515,6 +522,7 @@ fn render_structure(config: &BlockyConfig) -> RenderedConfig {
             allowlists,
             client_groups_block,
             block_type: config.block_type.blocky_value(),
+            block_ttl: BLOCK_TTL,
             loading: RenderedLoading {
                 refresh_period: format!("{}h", config.refresh_hours),
                 strategy: "fast",
@@ -779,6 +787,8 @@ mod tests {
         assert_eq!(value["ports"]["http"][0], "127.0.0.1:5336");
         assert_eq!(value["ecs"]["useAsClient"], true);
         assert_eq!(value["ecs"]["forward"], false);
+        // Short, so that pausing or allowing a domain takes effect on clients.
+        assert_eq!(value["blocking"]["blockTTL"], "1m");
         assert_eq!(value["bootstrapDns"][0], "tcp+udp:9.9.9.9");
         assert_eq!(
             value["upstreams"]["groups"]["default"][0],

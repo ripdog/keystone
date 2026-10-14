@@ -220,7 +220,6 @@ pub fn BridgesPage(
             <div class="flex items-center justify-between">
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"Bridges"</h1>
-                    <p class="text-gray-400">"Configure network bridges to combine interfaces"</p>
                 </div>
                 <button
                     on:click=open_new_bridge_modal

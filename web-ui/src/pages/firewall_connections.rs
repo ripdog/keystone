@@ -83,7 +83,6 @@ pub fn ConnectionsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> i
             <div class="flex flex-wrap items-center justify-between gap-3">
                 <div>
                     <h2 class="text-lg font-medium text-gray-200">"Connections"</h2>
-                    <p class="text-gray-400 text-sm">"Connections tracked by the router, as the kernel holds them."</p>
                 </div>
                 <div class="flex flex-wrap items-center gap-3">
                     <FilterBox query=filter placeholder="Filter connections" />

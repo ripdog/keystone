@@ -46,17 +46,12 @@ pub fn AppLayout(
                     </div>
                     <div>
                         <div class="text-lg font-bold tracking-tight text-white">"Keystone"</div>
-                        <div class="text-[11px] tracking-widest uppercase text-slate-500">"Router management"</div>
                     </div>
                 </div>
                 <div class="flex-1 min-h-0 overflow-y-auto px-4 py-6">
                     <SidebarNavigation on_navigate=on_navigate />
                 </div>
                 <div class="p-4 border-t border-white/5 shrink-0">
-                    <div class="mb-3 flex items-center gap-2 px-3 text-xs text-slate-500">
-                        <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-                        "Local administration"
-                    </div>
                     <button type="button"
                         class="w-full text-left px-3 py-2.5 rounded-xl text-sm text-slate-400 hover:text-rose-300 hover:bg-rose-400/10 transition-colors"
                         on:click=logout_click
@@ -106,7 +101,6 @@ pub fn AppLayout(
                     <div class="border-b border-slate-800/80 bg-[#101b2b]/80">
                         <div class="px-5 sm:px-7 xl:px-10 2xl:px-12 py-5 flex flex-wrap items-center justify-between gap-4">
                             <div class="min-w-0">
-                                <div class="text-[10px] uppercase tracking-[0.24em] text-slate-500 font-semibold mb-1">"Network control"</div>
                                 <div class="text-sm font-medium text-slate-200">{move || crate::components::breadcrumb(&location.pathname.get())}</div>
                             </div>
                             <button type="button"

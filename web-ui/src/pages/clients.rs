@@ -178,9 +178,7 @@ pub fn ClientsPage(
             <div class="flex flex-wrap justify-between items-start gap-3">
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"Clients"</h1>
-                    <p class="text-gray-400">"Every device seen on the LAN, from the neighbour table, DHCP leases and reservations"</p>
                 </div>
-                <span class="text-xs text-gray-500 pt-2">"Refreshes every 5 seconds"</span>
             </div>
 
             {move || load_error.get().map(|text| view! {

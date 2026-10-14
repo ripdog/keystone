@@ -311,7 +311,6 @@ pub fn SqmPage(
         <div class="space-y-6">
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"Traffic Shaping (SQM)"</h1>
-                <p class="text-gray-400">"CAKE shaping on the WAN link keeps latency low under load, in both directions"</p>
             </div>
 
             <Show when=move || error_msg.get().is_some()>

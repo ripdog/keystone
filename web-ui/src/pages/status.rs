@@ -82,9 +82,6 @@ pub fn StatusPage(
             <div class="max-w-4xl mx-auto">
                 <div class="text-center mb-8">
                     <h1 class="text-3xl font-bold text-blue-300 mb-2">"Keystone System Status"</h1>
-                    <p class="text-gray-400">
-                        "Checking system requirements before initial setup"
-                    </p>
                 </div>
 
                 <Show when=move || loading.get()>

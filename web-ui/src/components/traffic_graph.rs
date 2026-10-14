@@ -81,7 +81,6 @@ pub fn TrafficGraph(
             <div class="flex flex-wrap justify-between items-start gap-3">
                 <div class="min-w-0">
                     <h3 class="text-sm font-semibold text-slate-100">{role.to_string()}</h3>
-                    <p class="text-xs text-slate-500">"Last 60 seconds · sampled by daemon"</p>
                 </div>
                 <div class="flex items-center gap-4 text-xs font-medium">
                     <span class="text-sky-300 flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-sky-400"></span>"Download"</span>

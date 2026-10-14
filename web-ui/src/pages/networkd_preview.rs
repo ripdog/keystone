@@ -79,7 +79,6 @@ pub fn NetworkdPreviewPage(
             <div class="flex justify-between items-start">
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"Networkd Configuration Preview"</h1>
-                    <p class="text-gray-400">"Preview of generated .network files without writing to disk"</p>
                 </div>
                 <button
                     class="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white px-4 py-2 rounded"

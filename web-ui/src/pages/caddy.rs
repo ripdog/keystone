@@ -105,7 +105,6 @@ pub fn CaddyPage(
             <div>
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"Caddy Web Server"</h1>
-                    <p class="text-gray-400">"Reverse proxy configuration for Keystone web UI"</p>
                 </div>
             </div>
 
@@ -547,18 +546,6 @@ fn StatusTab(
                         }
                     }}
                 </Show>
-            </div>
-
-            // Info box
-            <div class="bg-gray-700/50 rounded-lg p-4 text-gray-400 text-sm">
-                <h4 class="font-medium text-gray-300 mb-2">"About Caddy Configuration"</h4>
-                <ul class="list-disc list-inside space-y-1">
-                    <li>"Caddy acts as a reverse proxy, forwarding requests to the Keystone web UI"</li>
-                    <li>"When HTTPS is enabled, Caddy handles TLS termination"</li>
-                    <li>"Self-signed mode generates a certificate trusted by Caddy's internal CA"</li>
-                    <li>"Custom ACME mode allows DNS challenges for proper certificates on private networks"</li>
-                    <li>"Configuration is written to /etc/caddy/Caddyfile.d/keystone.conf"</li>
-                </ul>
             </div>
         </div>
     }

@@ -213,7 +213,6 @@ pub fn VlansPage(
             <div class="flex items-center justify-between">
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"VLANs"</h1>
-                    <p class="text-gray-400">"Configure 802.1Q VLAN interfaces"</p>
                 </div>
                 <button
                     on:click=open_new_vlan_modal

@@ -78,7 +78,7 @@ pub fn SshPage(
         <div class="space-y-6">
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"SSH Server"</h1>
-                <p class="text-gray-400">"Secure shell access to the router. Keystone manages only its own OpenSSH settings."</p>
+                <p class="text-gray-400">"Keystone manages only its own OpenSSH settings."</p>
             </div>
             <Show when=move || error.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">

@@ -139,7 +139,6 @@ pub fn GroupsTab(
             <div class="flex justify-between items-center">
                 <div>
                     <h2 class="text-lg font-medium text-gray-200">"Groups"</h2>
-                    <p class="text-sm text-gray-400">"Named addresses and ports that rules can use as a source, destination or port list"</p>
                 </div>
                 <div class="flex gap-2">
                     <button

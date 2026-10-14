@@ -271,7 +271,6 @@ pub fn UpnpPage(
         <div class="space-y-6">
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"UPnP / NAT-PMP"</h1>
-                <p class="text-gray-400">"Let devices on the LAN open ports on the WAN, without manual port forwards"</p>
             </div>
 
             <Show when=binary_unsupported>

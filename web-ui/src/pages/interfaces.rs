@@ -184,7 +184,6 @@ pub fn InterfacesPage(
         <div class="space-y-6">
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"Interface Management"</h1>
-                <p class="text-gray-400">"Select which interfaces Keystone should manage and assign them a role."</p>
             </div>
 
             // Unsaved changes indicator

@@ -190,7 +190,6 @@ pub fn DnsmasqPage(
             <div>
                 <div>
                     <h1 class="text-2xl font-semibold text-blue-300">"DNS & DHCP"</h1>
-                    <p class="text-gray-400">"Dnsmasq configuration for DNS and DHCP services"</p>
                 </div>
             </div>
 

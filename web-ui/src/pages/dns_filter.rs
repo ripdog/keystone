@@ -431,7 +431,6 @@ pub fn DnsFilterPage(
         <div class="space-y-6">
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"DNS filtering"</h1>
-                <p class="text-gray-400">"Block ads and trackers for every client, and send lookups to encrypted upstream resolvers"</p>
             </div>
 
             <Show when=binary_missing>

@@ -188,7 +188,6 @@ pub fn SettingsPage(
         <div class="space-y-6">
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"System Settings"</h1>
-                <p class="text-gray-400">"Configure system-wide router settings"</p>
             </div>
 
             <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
@@ -244,7 +243,6 @@ pub fn SettingsPage(
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <h2 class="text-lg font-medium text-white">"Configuration history"</h2>
-                        <p class="text-sm text-gray-400">"Saved copies of the configuration. Compare, restore, export or import them."</p>
                     </div>
                     <A
                         href="/settings/history"

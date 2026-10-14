@@ -145,7 +145,6 @@ pub fn FirewallPage(
         <div class="space-y-6">
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"Firewall"</h1>
-                <p class="text-gray-400">"Zone-based firewall configuration"</p>
             </div>
 
             // Tab content
@@ -562,7 +561,6 @@ fn ZoneForwardsTab(
             <div class="flex justify-between items-center">
                 <div>
                     <h2 class="text-lg font-medium text-gray-200">"Zone-to-Zone Forwarding Policies"</h2>
-                    <p class="text-sm text-gray-400">"Define default forwarding behavior between zones"</p>
                 </div>
                 <button
                     class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"

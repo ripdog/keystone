@@ -117,7 +117,6 @@ pub fn DashboardPage(
             "#}</style>
             <div>
                 <h1 class="text-2xl font-semibold text-blue-300">"Dashboard"</h1>
-                <p class="text-gray-400">"Live network status"</p>
             </div>
 
             <Show when=move || status_error.get().is_some()>
@@ -146,7 +145,6 @@ pub fn DashboardPage(
 
             <div class="bg-gray-800 rounded-lg p-5 shadow-lg space-y-3">
                 <h2 class="text-blue-300 font-medium">"WAN Gateway Health"</h2>
-                <p class="text-xs text-gray-400">"ICMP samples every 5 seconds · 5-minute rolling window · monitored by daemon"</p>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {move || [GatewayFamily::Ipv4, GatewayFamily::Ipv6].into_iter().map(|family| {
                         let relevant: Vec<_> = gateways.get().into_iter().filter(|g| g.family == family).collect();
@@ -289,7 +287,6 @@ pub fn DashboardPage(
             <div class="bg-gray-800 rounded-xl p-5 sm:p-6 shadow-lg space-y-4">
                 <div class="flex flex-wrap justify-between items-baseline gap-2">
                     <h2 class="text-xl font-semibold text-blue-300">"Network Activity"</h2>
-                    <span class="text-xs text-gray-400">"Live · one-minute rolling history · bits per second"</span>
                 </div>
                 <div class="grid grid-cols-1 2xl:grid-cols-2 gap-4">
                     <For

@@ -187,6 +187,17 @@ pub fn App() -> impl IntoView {
                                     />
                                 }
                             />
+                            // Routes match in declaration order, so this must come
+                            // before "/dnsmasq/:tab", which would also match it.
+                            <Route
+                                path=path!("/dnsmasq/filtering")
+                                view=move || view! {
+                                    <DnsFilterPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
                             <Route
                                 path=path!("/dnsmasq/:tab")
                                 view=move || view! {
@@ -254,15 +265,6 @@ pub fn App() -> impl IntoView {
                                 path=path!("/sqm")
                                 view=move || view! {
                                     <SqmPage
-                                        auth_token=auth_token
-                                        on_unauthorized=on_unauthorized
-                                    />
-                                }
-                            />
-                            <Route
-                                path=path!("/dnsmasq/filtering")
-                                view=move || view! {
-                                    <DnsFilterPage
                                         auth_token=auth_token
                                         on_unauthorized=on_unauthorized
                                     />

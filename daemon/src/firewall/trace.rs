@@ -17,7 +17,7 @@ use keystone_core::{
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::IpAddr;
 use std::str::FromStr;
 
 /// Layer-4 protocol of a traced packet.
@@ -98,6 +98,26 @@ impl RouterView {
             .any(|net| net.addr() == address)
     }
 
+    /// The address a `redirect` on one of `interfaces` rewrites the destination
+    /// to: an address of the packet's family on the first of those interfaces
+    /// that has one, preferring a non-link-local address.
+    fn redirect_target(&self, interfaces: &[String], v4: bool) -> Option<IpAddr> {
+        interfaces.iter().find_map(|interface| {
+            let candidates: Vec<IpAddr> = self
+                .addresses
+                .get(interface)?
+                .iter()
+                .map(IpNet::addr)
+                .filter(|address| address.is_ipv4() == v4)
+                .collect();
+            candidates
+                .iter()
+                .copied()
+                .find(|address| !is_link_local(*address))
+                .or_else(|| candidates.first().copied())
+        })
+    }
+
     /// Whether `address` is assigned to one of `interfaces`.
     fn assigned_to(&self, address: IpAddr, interfaces: &[String]) -> bool {
         interfaces.iter().any(|interface| {
@@ -132,6 +152,13 @@ impl RouterView {
             parse_default_interface(default_v4_json)?,
             parse_default_interface(default_v6_json)?,
         ))
+    }
+}
+
+fn is_link_local(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(v4) => v4.is_link_local(),
+        IpAddr::V6(v6) => v6.is_unicast_link_local(),
     }
 }
 
@@ -225,7 +252,8 @@ pub(crate) async fn live_view() -> anyhow::Result<RouterView> {
 struct Flow {
     destination: IpAddr,
     destination_port: Option<u16>,
-    dnat: Option<(Ipv4Addr, Option<u16>)>,
+    /// Destination and port after DNAT or redirect.
+    dnat: Option<(IpAddr, Option<u16>)>,
     /// Outgoing interface, known once the destination is (after DNAT).
     egress: Option<String>,
 }
@@ -258,16 +286,54 @@ pub(crate) fn trace(
     };
     let mut steps = Vec::new();
 
-    if let Some(Verdict::Dnat { addr, port }) = run_chain(
+    match run_chain(
         &ruleset.prerouting,
         TraceStage::Prerouting,
         &ctx,
         &flow,
         &mut steps,
     ) {
-        flow.destination = IpAddr::V4(addr);
-        flow.destination_port = port.or(flow.destination_port);
-        flow.dnat = Some((addr, port));
+        Some(Verdict::Dnat { addr, port }) => {
+            flow.destination = IpAddr::V4(addr);
+            flow.destination_port = port.or(flow.destination_port);
+            flow.dnat = Some((IpAddr::V4(addr), port));
+        }
+        Some(Verdict::Redirect { port }) => {
+            match view.redirect_target(&packet.ingress, packet.source.is_ipv4()) {
+                Some(addr) => {
+                    flow.destination = addr;
+                    flow.destination_port = Some(port);
+                    flow.dnat = Some((addr, Some(port)));
+                }
+                // The kernel drops a packet it cannot redirect.
+                None => {
+                    steps.push(TraceStep {
+                        stage: TraceStage::Prerouting,
+                        origin: TraceOrigin::Routing,
+                        label: "Redirect".to_string(),
+                        matched: true,
+                        decisive: true,
+                        reason: format!(
+                            "{} has no address to redirect to, so the packet is dropped",
+                            packet.ingress.join("/")
+                        ),
+                    });
+                    return TestPacketResponse {
+                        baseline: "saved".to_string(),
+                        applied_snapshot_id: None,
+                        ingress: packet.ingress.clone(),
+                        egress: None,
+                        path: TraceStage::Input,
+                        dnat: None,
+                        masquerade: false,
+                        steps,
+                        verdict: TraceVerdict::Drop,
+                        notes: notes(config, None, TraceStage::Input),
+                    };
+                }
+            }
+        }
+        _ => {}
     }
 
     // Routing sees the destination after DNAT, so the egress is chosen here.
@@ -439,27 +505,19 @@ fn evaluate_cond(cond: &Cond, ctx: &Context, flow: &Flow) -> Result<String, Stri
             }
         }
         Cond::Addr { side, addr } => {
-            let (field, address) = match side {
-                Side::Source => ("source", packet.source),
-                Side::Destination => ("destination", flow.destination),
-            };
-            match addr {
-                Addr::Literal(text) => {
-                    let network = parse_network(text)?;
-                    if network.contains(&address) {
-                        Ok(format!("{field} {address} is in {text}"))
-                    } else {
-                        Err(format!("{field} {address} is not in {text}"))
-                    }
-                }
-                Addr::Group { name, family } => {
-                    let networks = group_networks(ctx.config, name, *family);
-                    if networks.iter().any(|net| net.contains(&address)) {
-                        Ok(format!("{field} {address} is in group {name}"))
-                    } else {
-                        Err(format!("{field} {address} is not in group {name}"))
-                    }
-                }
+            let (inside, text) = address_test(*side, addr, ctx, flow)?;
+            if inside {
+                Ok(format!("{text} is in {}", addr_name(addr)))
+            } else {
+                Err(format!("{text} is not in {}", addr_name(addr)))
+            }
+        }
+        Cond::NotAddr { side, addr } => {
+            let (inside, text) = address_test(*side, addr, ctx, flow)?;
+            if inside {
+                Err(format!("{text} is in {}", addr_name(addr)))
+            } else {
+                Ok(format!("{text} is not in {}", addr_name(addr)))
             }
         }
         Cond::L4(protocol) => match packet.protocol.l4() {
@@ -529,14 +587,21 @@ fn evaluate_cond(cond: &Cond, ctx: &Context, flow: &Flow) -> Result<String, Stri
             "packet starts a new connection, not {state} (conntrack state not modelled)"
         )),
         Cond::CtDnat => match flow.dnat {
-            Some(_) => Ok("translated by a port forward".to_string()),
-            None => Err("not translated by a port forward".to_string()),
+            Some(_) => Ok("destination translated by DNAT or redirect".to_string()),
+            None => Err("destination not translated".to_string()),
         },
         Cond::FibLocal => {
             if ctx.view.is_local(flow.destination) {
                 Ok(format!("{} is a router address", flow.destination))
             } else {
                 Err(format!("{} is not a router address", flow.destination))
+            }
+        }
+        Cond::FibNotLocal => {
+            if ctx.view.is_local(flow.destination) {
+                Err(format!("{} is a router address", flow.destination))
+            } else {
+                Ok(format!("{} is not a router address", flow.destination))
             }
         }
         Cond::FibNotOnIngress => {
@@ -582,6 +647,36 @@ fn verdict_word(verdict: Verdict) -> &'static str {
         Verdict::Reject => "reject",
         Verdict::Dnat { .. } => "dnat",
         Verdict::Masquerade => "masquerade",
+        Verdict::Redirect { .. } => "redirect",
+    }
+}
+
+/// Whether the packet's address on `side` is in `addr`, and that address as
+/// text (`source 10.0.0.5`).
+fn address_test(
+    side: Side,
+    addr: &Addr,
+    ctx: &Context,
+    flow: &Flow,
+) -> Result<(bool, String), String> {
+    let (field, address) = match side {
+        Side::Source => ("source", ctx.packet.source),
+        Side::Destination => ("destination", flow.destination),
+    };
+    let inside = match addr {
+        Addr::Literal(text) => parse_network(text)?.contains(&address),
+        Addr::Group { name, family } => group_networks(ctx.config, name, *family)
+            .iter()
+            .any(|net| net.contains(&address)),
+    };
+    Ok((inside, format!("{field} {address}")))
+}
+
+/// How an address constraint reads in a step: the literal, or `group <name>`.
+fn addr_name(addr: &Addr) -> String {
+    match addr {
+        Addr::Literal(text) => text.clone(),
+        Addr::Group { name, .. } => format!("group {name}"),
     }
 }
 
@@ -1181,7 +1276,7 @@ mod tests {
             .expect("the UPnP accept is evaluated");
         assert!(!upnp.matched);
         assert!(
-            upnp.reason.contains("not translated by a port forward"),
+            upnp.reason.contains("destination not translated"),
             "{}",
             upnp.reason
         );
@@ -1477,5 +1572,90 @@ mod tests {
         assert_eq!(view.egress_for(ip("192.168.1.99")).as_deref(), Some("eth1"));
         assert_eq!(view.egress_for(ip("1.1.1.1")).as_deref(), Some("eth0"));
         assert_eq!(view.egress_for(ip("2001:db8:5::1")), None);
+    }
+
+    #[test]
+    fn forced_dns_redirects_outside_dns_to_the_ingress_address() {
+        let mut config = rich();
+        config.global_settings.force_local_dns = true;
+        let response = trace(
+            &config,
+            &view(),
+            &udp("eth1", "192.168.1.50", "8.8.8.8", 53),
+        );
+        assert_eq!(response.path, TraceStage::Input);
+        assert_eq!(
+            response.dnat,
+            Some(TraceDnat {
+                address: "192.168.1.1".to_string(),
+                port: Some(53),
+            })
+        );
+
+        // DNS to the router itself is not touched, and neither is other traffic.
+        let local = trace(
+            &config,
+            &view(),
+            &udp("eth1", "192.168.1.50", "192.168.1.1", 53),
+        );
+        assert_eq!(local.dnat, None);
+        let web = trace(
+            &config,
+            &view(),
+            &tcp("eth1", "192.168.1.50", "8.8.8.8", 443),
+        );
+        assert_eq!(web.dnat, None);
+
+        // Without the setting the query is forwarded unchanged.
+        let off = trace(
+            &rich(),
+            &view(),
+            &udp("eth1", "192.168.1.50", "8.8.8.8", 53),
+        );
+        assert_eq!(off.dnat, None);
+        assert_eq!(off.path, TraceStage::Forward);
+    }
+
+    #[test]
+    fn forced_dns_spares_the_exempt_group_as_client_and_as_server() {
+        let mut config = rich();
+        config.global_settings.force_local_dns = true;
+        config.global_settings.dns_exempt_group = Some("iot_hosts".into());
+        let exempt_client = trace(
+            &config,
+            &view(),
+            &udp("eth4", "192.168.50.7", "8.8.8.8", 53),
+        );
+        assert_eq!(exempt_client.dnat, None);
+        let exempt_server = trace(
+            &config,
+            &view(),
+            &udp("eth1", "192.168.1.50", "192.168.50.7", 53),
+        );
+        assert_eq!(exempt_server.dnat, None);
+        let other = trace(
+            &config,
+            &view(),
+            &udp("eth1", "192.168.1.50", "8.8.8.8", 53),
+        );
+        assert!(other.dnat.is_some());
+    }
+
+    #[test]
+    fn blocked_dns_over_tls_is_rejected_before_user_forward_rules() {
+        let mut config = rich();
+        config.global_settings.block_dns_over_tls = true;
+        let response = trace(
+            &config,
+            &view(),
+            &tcp("eth1", "192.168.1.50", "9.9.9.9", 853),
+        );
+        assert_eq!(response.verdict, TraceVerdict::Reject);
+        let off = trace(
+            &rich(),
+            &view(),
+            &tcp("eth1", "192.168.1.50", "9.9.9.9", 853),
+        );
+        assert_eq!(off.verdict, TraceVerdict::Accept);
     }
 }

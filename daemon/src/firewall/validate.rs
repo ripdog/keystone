@@ -449,6 +449,13 @@ fn check_firewall(cfg: &FirewallConfig, require_interfaces: bool) -> Vec<String>
     for policy in &cfg.zone_forwards {
         errors.extend(validate_zone_forward(policy));
     }
+    check_address_group_ref(
+        "Firewall settings",
+        "DNS exempt group",
+        cfg.global_settings.dns_exempt_group.as_deref(),
+        &groups,
+        &mut errors,
+    );
     for (i, zone) in cfg.zones.iter().enumerate() {
         errors.extend(crate::config_validation::zone_interface_conflicts(
             zone,

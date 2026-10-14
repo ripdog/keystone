@@ -57,7 +57,8 @@ fn cond_statement(cond: &Cond) -> Statement<'static> {
             };
             compare(meta(MetaKey::Nfproto), string(version), Operator::EQ)
         }
-        Cond::Addr { side, addr } => address_match(*side, addr),
+        Cond::Addr { side, addr } => address_match(*side, addr, Operator::EQ),
+        Cond::NotAddr { side, addr } => address_match(*side, addr, Operator::NEQ),
         Cond::L4(protocol) => compare(meta(MetaKey::L4proto), string(protocol), Operator::EQ),
         Cond::Port {
             side,
@@ -80,6 +81,7 @@ fn cond_statement(cond: &Cond) -> Statement<'static> {
         Cond::CtStateIs(state) => compare(ct("state"), string(state), Operator::EQ),
         Cond::CtDnat => compare(ct("status"), string("dnat"), Operator::IN),
         Cond::FibLocal => compare(fib(&[FibFlag::Daddr]), string("local"), Operator::EQ),
+        Cond::FibNotLocal => compare(fib(&[FibFlag::Daddr]), string("local"), Operator::NEQ),
         Cond::FibNotOnIngress => compare(
             fib(&[FibFlag::Daddr, FibFlag::Iif]),
             string("local"),
@@ -108,12 +110,19 @@ fn verdict_statement(verdict: Verdict) -> Statement<'static> {
             flags: None,
         })),
         Verdict::Masquerade => Statement::Masquerade(None),
+        Verdict::Redirect { port } => Statement::Redirect(Some(NAT {
+            addr: None,
+            family: None,
+            port: Some(number(u32::from(port))),
+            flags: None,
+        })),
     }
 }
 
 /// Address match: a literal (`ip saddr 10.0.0.1`, `ip6 daddr 2001:db8::/32`)
-/// or a membership test on a group's set (`ip saddr @lan_hosts_v4`).
-fn address_match(side: Side, addr: &Addr) -> Statement<'static> {
+/// or a membership test on a group's set (`ip saddr @lan_hosts_v4`), negated
+/// with `Operator::NEQ` (`ip saddr != @lan_hosts_v4`).
+fn address_match(side: Side, addr: &Addr, op: Operator) -> Statement<'static> {
     let field = match side {
         Side::Source => "saddr",
         Side::Destination => "daddr",
@@ -124,12 +133,12 @@ fn address_match(side: Side, addr: &Addr) -> Statement<'static> {
                 Ok(IpAddr::V6(_)) => "ip6",
                 _ => "ip",
             };
-            compare(payload(family, field), address_literal(text), Operator::EQ)
+            compare(payload(family, field), address_literal(text), op)
         }
         Addr::Group { name, family } => compare(
             payload(family.payload(), field),
             string(&format!("@{}", address_set_name(name, *family))),
-            Operator::EQ,
+            op,
         ),
     }
 }
@@ -299,6 +308,17 @@ mod tests {
         assert_eq!(
             serde_json::to_value(address_literal("2001:db8::1")).unwrap(),
             serde_json::json!("2001:db8::1")
+        );
+    }
+
+    #[test]
+    fn redirect_names_only_the_port() {
+        let rule = rule_object(&spec(vec![], Verdict::Redirect { port: 53 }), "t", "c");
+        let json = serde_json::to_value(&rule).unwrap();
+        let expr = json["expr"].as_array().unwrap();
+        assert_eq!(
+            expr.last().unwrap()["redirect"],
+            serde_json::json!({"port": 53})
         );
     }
 }

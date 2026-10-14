@@ -50,7 +50,18 @@ pub(crate) fn sample_configs() -> Vec<(&'static str, FirewallConfig)> {
         ("rich", rich()),
         ("rich_quiet", rich_quiet()),
         ("rich_upnp", rich_upnp()),
+        ("rich_dns", rich_dns()),
     ]
+}
+
+/// `rich` with LAN DNS forced to the router and DNS-over-TLS rejected. The
+/// exempt group has IPv4 and IPv6 entries, so both families carry exemptions.
+pub(crate) fn rich_dns() -> FirewallConfig {
+    let mut config = rich();
+    config.global_settings.force_local_dns = true;
+    config.global_settings.block_dns_over_tls = true;
+    config.global_settings.dns_exempt_group = Some("mixed".to_string());
+    config
 }
 
 /// `rich` with UPnP / NAT-PMP enabled: miniupnpd's mappings are accepted from
@@ -380,6 +391,7 @@ pub(crate) fn rich() -> FirewallConfig {
             ping_wan_enabled: true,
             ping_lan_enabled: true,
             hairpin_nat_enabled: true,
+            ..FirewallGlobalSettings::default()
         },
         upnp_forward: None,
     }
@@ -392,6 +404,7 @@ pub(crate) fn rich_quiet() -> FirewallConfig {
         ping_wan_enabled: false,
         ping_lan_enabled: false,
         hairpin_nat_enabled: false,
+        ..FirewallGlobalSettings::default()
     };
     config
 }

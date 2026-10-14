@@ -482,6 +482,11 @@ impl<'a> FirewallDb<'a> {
                     "SELECT name FROM firewall_port_forwards WHERE source_group_id = ? ORDER BY id",
                     1,
                 ),
+                (
+                    "firewall setting",
+                    "SELECT 'DNS enforcement exemption' FROM firewall_global_settings WHERE dns_exempt_group_id = ?",
+                    1,
+                ),
             ],
             GroupKind::Port => &[
                 (
@@ -1248,8 +1253,9 @@ impl<'a> FirewallDb<'a> {
 
     /// Get global firewall settings
     pub async fn get_firewall_global_settings(&self) -> Result<FirewallGlobalSettings> {
-        let row = sqlx::query_as::<_, (bool, bool, bool)>(
-            "SELECT ping_wan_enabled, ping_lan_enabled, hairpin_nat_enabled 
+        let row = sqlx::query_as::<_, (bool, bool, bool, bool, bool, Option<i64>)>(
+            "SELECT ping_wan_enabled, ping_lan_enabled, hairpin_nat_enabled,
+                    force_local_dns, block_dns_over_tls, dns_exempt_group_id
              FROM firewall_global_settings WHERE id = 1",
         )
         .fetch_optional(self.pool)
@@ -1257,11 +1263,20 @@ impl<'a> FirewallDb<'a> {
         .context("Failed to fetch firewall global settings")?;
 
         match row {
-            Some((ping_wan, ping_lan, hairpin)) => Ok(FirewallGlobalSettings {
-                ping_wan_enabled: ping_wan,
-                ping_lan_enabled: ping_lan,
-                hairpin_nat_enabled: hairpin,
-            }),
+            Some((ping_wan, ping_lan, hairpin, force_dns, block_dot, exempt_id)) => {
+                let exempt_group = match exempt_id {
+                    Some(id) => self.group_names(GroupKind::Address).await?.remove(&id),
+                    None => None,
+                };
+                Ok(FirewallGlobalSettings {
+                    ping_wan_enabled: ping_wan,
+                    ping_lan_enabled: ping_lan,
+                    hairpin_nat_enabled: hairpin,
+                    force_local_dns: force_dns,
+                    block_dns_over_tls: block_dot,
+                    dns_exempt_group: exempt_group,
+                })
+            }
             None => {
                 // Return defaults if no row exists (shouldn't happen after migration)
                 Ok(FirewallGlobalSettings::default())
@@ -1269,26 +1284,38 @@ impl<'a> FirewallDb<'a> {
         }
     }
 
-    /// Save global firewall settings
+    /// Save global firewall settings. The DNS exempt group must exist.
     pub async fn save_firewall_global_settings(
         &self,
         settings: &FirewallGlobalSettings,
     ) -> Result<()> {
+        let exempt_group_id = self
+            .resolve_group(GroupKind::Address, settings.dns_exempt_group.as_deref())
+            .await?;
         sqlx::query(
-            r#"INSERT OR REPLACE INTO firewall_global_settings 
-               (id, ping_wan_enabled, ping_lan_enabled, hairpin_nat_enabled, updated_at)
-               VALUES (1, ?, ?, ?, strftime('%s', 'now'))"#,
+            r#"INSERT OR REPLACE INTO firewall_global_settings
+               (id, ping_wan_enabled, ping_lan_enabled, hairpin_nat_enabled,
+                force_local_dns, block_dns_over_tls, dns_exempt_group_id, updated_at)
+               VALUES (1, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))"#,
         )
         .bind(settings.ping_wan_enabled)
         .bind(settings.ping_lan_enabled)
         .bind(settings.hairpin_nat_enabled)
+        .bind(settings.force_local_dns)
+        .bind(settings.block_dns_over_tls)
+        .bind(exempt_group_id)
         .execute(self.pool)
         .await
         .context("Failed to save firewall global settings")?;
 
         info!(
-            "Saved firewall global settings: ping_wan={}, ping_lan={}, hairpin={}",
-            settings.ping_wan_enabled, settings.ping_lan_enabled, settings.hairpin_nat_enabled
+            "Saved firewall global settings: ping_wan={}, ping_lan={}, hairpin={}, force_local_dns={}, block_dot={}, dns_exempt={:?}",
+            settings.ping_wan_enabled,
+            settings.ping_lan_enabled,
+            settings.hairpin_nat_enabled,
+            settings.force_local_dns,
+            settings.block_dns_over_tls,
+            settings.dns_exempt_group
         );
         Ok(())
     }
@@ -1688,5 +1715,32 @@ mod group_tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("already used"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn dns_settings_round_trip_and_hold_their_exempt_group() {
+        let db = db().await;
+        let id = db.save_address_group(&lan_hosts()).await.unwrap();
+        let settings = keystone_core::FirewallGlobalSettings {
+            force_local_dns: true,
+            block_dns_over_tls: true,
+            dns_exempt_group: Some("lan_hosts".into()),
+            ..Default::default()
+        };
+        db.save_firewall_global_settings(&settings).await.unwrap();
+        assert_eq!(db.get_firewall_global_settings().await.unwrap(), settings);
+
+        let err = db.delete_address_group(id).await.unwrap_err().to_string();
+        assert!(err.contains("DNS enforcement exemption"), "{err}");
+
+        let err = db
+            .save_firewall_global_settings(&keystone_core::FirewallGlobalSettings {
+                dns_exempt_group: Some("nobody".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Address group 'nobody' not found"), "{err}");
     }
 }

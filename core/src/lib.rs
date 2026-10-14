@@ -1988,6 +1988,17 @@ pub struct FirewallGlobalSettings {
     /// Enable hairpin NAT (NAT reflection) - allows LAN clients to access
     /// port-forwarded services using the external/WAN IP address
     pub hairpin_nat_enabled: bool,
+    /// Redirect DNS queries (port 53) that LAN clients send to outside
+    /// servers to the router's own DNS server.
+    #[serde(default)]
+    pub force_local_dns: bool,
+    /// Reject DNS-over-TLS and DNS-over-QUIC (port 853) from LAN clients to
+    /// outside servers, so they fall back to plain DNS, which is redirected.
+    #[serde(default)]
+    pub block_dns_over_tls: bool,
+    /// Address group whose members are exempt from both DNS settings above.
+    #[serde(default)]
+    pub dns_exempt_group: Option<String>,
 }
 
 impl Default for FirewallGlobalSettings {
@@ -1996,6 +2007,9 @@ impl Default for FirewallGlobalSettings {
             ping_wan_enabled: false,   // Don't respond to WAN pings by default (stealth)
             ping_lan_enabled: true,    // Respond to LAN pings (useful for diagnostics)
             hairpin_nat_enabled: true, // Enable hairpin NAT by default (common expectation)
+            force_local_dns: false,
+            block_dns_over_tls: false,
+            dns_exempt_group: None,
         }
     }
 }

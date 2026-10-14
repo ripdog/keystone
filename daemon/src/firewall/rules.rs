@@ -72,6 +72,8 @@ pub(crate) enum Cond {
     Nfproto(Family),
     /// The packet's source or destination address.
     Addr { side: Side, addr: Addr },
+    /// The packet's source or destination address is outside `addr`.
+    NotAddr { side: Side, addr: Addr },
     /// Layer-4 protocol (`meta l4proto`): `tcp`, `udp`, `icmp` or `ipv6-icmp`.
     L4(&'static str),
     /// Transport port, read through `payload` (`th` for either protocol).
@@ -90,6 +92,8 @@ pub(crate) enum Cond {
     CtDnat,
     /// The packet's destination is an address of this router.
     FibLocal,
+    /// The packet's destination is not an address of this router.
+    FibNotLocal,
     /// The packet's destination is not an address of the ingress interface.
     FibNotOnIngress,
     /// Rate limit. Matches while the limit is not exceeded.
@@ -109,6 +113,11 @@ pub(crate) enum Verdict {
     },
     /// Rewrite the source to the router's address on the egress interface.
     Masquerade,
+    /// Rewrite the destination to the router's own address on the ingress
+    /// interface, and the port to `port`. Terminal in NAT chains.
+    Redirect {
+        port: u16,
+    },
 }
 
 impl From<FirewallAction> for Verdict {
@@ -188,6 +197,8 @@ pub(crate) const SECTION_PORTFWD_ACCEPT: &str = "Priority 3: Accept port-forward
 pub(crate) const SECTION_UPNP: &str = "Priority 3: Accept UPnP / NAT-PMP mappings";
 pub(crate) const SECTION_USER_FORWARD: &str = "Priority 4: User forward rules";
 pub(crate) const SECTION_ZONE_POLICIES: &str = "Priority 5: Zone-to-zone policies";
+pub(crate) const SECTION_DNS_REDIRECT: &str = "Redirect LAN DNS to the router";
+pub(crate) const SECTION_DOT_BLOCK: &str = "Priority 3: Block DNS-over-TLS from LAN";
 pub(crate) const SECTION_DNAT: &str = "Port forwards and hairpin NAT, in order";
 pub(crate) const SECTION_HAIRPIN_SNAT: &str = "Hairpin NAT masquerade";
 pub(crate) const SECTION_MASQUERADE: &str = "Egress masquerade";
@@ -793,6 +804,10 @@ fn forward(config: &FirewallConfig, zones: &ZoneFacts, groups: &GroupIndex) -> C
         });
     }
 
+    // Encrypted DNS is rejected before user rules, so that a broad user
+    // accept (LAN to WAN) does not let it through.
+    rules.extend(dns_over_tls_rejects(config, zones, groups));
+
     let mut user_rules: Vec<&ForwardRule> =
         config.forward_rules.iter().filter(|r| r.enabled).collect();
     user_rules.sort_by_key(|rule| rule.position);
@@ -1020,7 +1035,9 @@ fn port_forward_source(pf: &PortForward, groups: &GroupIndex) -> Result<Option<C
 
 fn prerouting(config: &FirewallConfig, zones: &ZoneFacts, groups: &GroupIndex) -> ChainSpec {
     let hairpin = config.global_settings.hairpin_nat_enabled && !zones.lan_interfaces.is_empty();
-    let mut rules = Vec::new();
+    // DNS redirects only match traffic to outside addresses, and port
+    // forwards only traffic to the router, so their order does not matter.
+    let mut rules = dns_redirects(config, zones, groups);
     for pf in config.port_forwards.iter().filter(|pf| pf.enabled) {
         let protocols = port_forward_protocols(pf.protocol);
         rules.extend(
@@ -1151,6 +1168,137 @@ fn hairpin_dnat(
             port: dnat_port(pf),
         },
     })
+}
+
+/// Plain DNS port.
+const DNS_PORT: u16 = 53;
+/// DNS-over-TLS (TCP) and DNS-over-QUIC (UDP) port.
+const DNS_OVER_TLS_PORT: u16 = 853;
+
+/// Rules that apply the DNS enforcement settings: one per address family and
+/// protocol, matching packets from LAN interfaces to `port` on a host other
+/// than the router. Members of the exempt group are excluded on both sides,
+/// so an exempt host may use any DNS server and may also serve DNS to LAN
+/// clients (for example a separate resolver on another subnet).
+fn dns_enforcement_rules(
+    config: &FirewallConfig,
+    zones: &ZoneFacts,
+    groups: &GroupIndex,
+    port: u16,
+    protocols: &[&'static str],
+    rule: impl Fn(Vec<Cond>, Family, &'static str) -> RuleSpec,
+) -> Vec<RuleSpec> {
+    if zones.lan_interfaces.is_empty() {
+        return Vec::new();
+    }
+    let exempt = config.global_settings.dns_exempt_group.as_deref();
+    let exempt_families = match exempt {
+        Some(name) => groups.families(name).unwrap_or_else(|| {
+            tracing::warn!("DNS exempt group '{name}' does not exist; no host is exempt");
+            Vec::new()
+        }),
+        None => Vec::new(),
+    };
+    let mut rules = Vec::new();
+    for family in [Family::V4, Family::V6] {
+        for &protocol in protocols {
+            let mut conds = vec![
+                Cond::Nfproto(family),
+                Cond::Iif(zones.lan_interfaces.clone()),
+            ];
+            // A group without entries of this family has no set for it, and
+            // no member that could match.
+            if let Some(name) = exempt
+                && exempt_families.contains(&family)
+            {
+                for side in [Side::Source, Side::Destination] {
+                    conds.push(Cond::NotAddr {
+                        side,
+                        addr: Addr::Group {
+                            name: name.to_string(),
+                            family,
+                        },
+                    });
+                }
+            }
+            conds.extend([
+                Cond::L4(protocol),
+                Cond::Port {
+                    side: Side::Destination,
+                    payload: "th",
+                    ports: Ports::Single(port),
+                },
+                Cond::FibNotLocal,
+            ]);
+            rules.push(rule(conds, family, protocol));
+        }
+    }
+    rules
+}
+
+fn family_name(family: Family) -> &'static str {
+    match family {
+        Family::V4 => "IPv4",
+        Family::V6 => "IPv6",
+    }
+}
+
+/// Redirect plain DNS from LAN clients to outside servers to the router's own
+/// DNS server, when `force_local_dns` is set.
+fn dns_redirects(config: &FirewallConfig, zones: &ZoneFacts, groups: &GroupIndex) -> Vec<RuleSpec> {
+    if !config.global_settings.force_local_dns {
+        return Vec::new();
+    }
+    dns_enforcement_rules(
+        config,
+        zones,
+        groups,
+        DNS_PORT,
+        &["udp", "tcp"],
+        |conds, family, protocol| {
+            builtin(
+                SECTION_DNS_REDIRECT,
+                &format!(
+                    "Redirect LAN DNS to the router ({}, {protocol})",
+                    family_name(family)
+                ),
+                conds,
+                Verdict::Redirect { port: DNS_PORT },
+            )
+        },
+    )
+}
+
+/// Reject DNS-over-TLS (TCP) and DNS-over-QUIC (UDP) from LAN clients to
+/// outside servers, when `block_dns_over_tls` is set. Clients then fall back
+/// to plain DNS. DNS-over-HTTPS shares port 443 with all web traffic and
+/// cannot be told apart here.
+fn dns_over_tls_rejects(
+    config: &FirewallConfig,
+    zones: &ZoneFacts,
+    groups: &GroupIndex,
+) -> Vec<RuleSpec> {
+    if !config.global_settings.block_dns_over_tls {
+        return Vec::new();
+    }
+    dns_enforcement_rules(
+        config,
+        zones,
+        groups,
+        DNS_OVER_TLS_PORT,
+        &["tcp", "udp"],
+        |conds, family, protocol| {
+            builtin(
+                SECTION_DOT_BLOCK,
+                &format!(
+                    "Reject LAN DNS-over-TLS ({}, {protocol})",
+                    family_name(family)
+                ),
+                conds,
+                Verdict::Reject,
+            )
+        },
+    )
 }
 
 fn postrouting(config: &FirewallConfig, zones: &ZoneFacts, groups: &GroupIndex) -> ChainSpec {
@@ -1453,5 +1601,117 @@ mod tests {
         let groups = GroupIndex::new(&address_groups, &[]);
         assert!(hairpin_dnat(&pf, &lan(), &groups, "tcp").is_none());
         assert!(hairpin_snat(&pf, &lan(), &groups, "tcp").is_none());
+    }
+
+    fn dns_config(force: bool, block_dot: bool, exempt: Option<&str>) -> FirewallConfig {
+        let mut config = crate::firewall::fixtures::rich();
+        config.global_settings.force_local_dns = force;
+        config.global_settings.block_dns_over_tls = block_dot;
+        config.global_settings.dns_exempt_group = exempt.map(str::to_string);
+        config
+    }
+
+    fn in_section<'a>(chain: &'a ChainSpec, section: &str) -> Vec<&'a RuleSpec> {
+        chain
+            .rules
+            .iter()
+            .filter(|rule| rule.section == section)
+            .collect()
+    }
+
+    #[test]
+    fn dns_enforcement_is_off_by_default() {
+        let ruleset = build(&dns_config(false, false, None));
+        assert!(in_section(&ruleset.prerouting, SECTION_DNS_REDIRECT).is_empty());
+        assert!(in_section(&ruleset.forward, SECTION_DOT_BLOCK).is_empty());
+    }
+
+    #[test]
+    fn forced_dns_redirects_lan_dns_for_outside_hosts_in_both_families() {
+        let config = dns_config(true, false, None);
+        let zones = ZoneFacts::new(&config.zones);
+        let ruleset = build(&config);
+        let redirects = in_section(&ruleset.prerouting, SECTION_DNS_REDIRECT);
+        for family in [Family::V4, Family::V6] {
+            for protocol in ["udp", "tcp"] {
+                assert!(redirects.iter().any(|rule| {
+                    rule.conds.contains(&Cond::Nfproto(family))
+                        && rule.conds.contains(&Cond::L4(protocol))
+                }));
+            }
+        }
+        for rule in &redirects {
+            assert_eq!(rule.verdict, Verdict::Redirect { port: 53 });
+            assert!(
+                rule.conds
+                    .contains(&Cond::Iif(zones.lan_interfaces.clone()))
+            );
+            assert!(rule.conds.contains(&Cond::FibNotLocal));
+            assert!(rule.conds.contains(&Cond::Port {
+                side: Side::Destination,
+                payload: "th",
+                ports: Ports::Single(53),
+            }));
+            assert!(
+                !rule
+                    .conds
+                    .iter()
+                    .any(|cond| matches!(cond, Cond::NotAddr { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn dns_exemption_covers_both_sides_for_the_families_the_group_has() {
+        let ruleset = build(&dns_config(true, true, Some("iot_hosts")));
+        let exemption = |family| {
+            [Side::Source, Side::Destination].map(|side| Cond::NotAddr {
+                side,
+                addr: Addr::Group {
+                    name: "iot_hosts".into(),
+                    family,
+                },
+            })
+        };
+        let rules = in_section(&ruleset.prerouting, SECTION_DNS_REDIRECT)
+            .into_iter()
+            .chain(in_section(&ruleset.forward, SECTION_DOT_BLOCK));
+        for rule in rules {
+            // iot_hosts only has IPv4 entries, so there is no IPv6 set to test.
+            if rule.conds.contains(&Cond::Nfproto(Family::V4)) {
+                for cond in exemption(Family::V4) {
+                    assert!(rule.conds.contains(&cond));
+                }
+            } else {
+                assert!(
+                    !rule
+                        .conds
+                        .iter()
+                        .any(|cond| matches!(cond, Cond::NotAddr { .. }))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dns_over_tls_is_rejected_before_user_forward_rules() {
+        let ruleset = build(&dns_config(false, true, None));
+        let position = |section: &str| {
+            ruleset
+                .forward
+                .rules
+                .iter()
+                .position(|rule| rule.section == section)
+                .unwrap()
+        };
+        assert!(position(SECTION_DOT_BLOCK) < position(SECTION_USER_FORWARD));
+        for rule in in_section(&ruleset.forward, SECTION_DOT_BLOCK) {
+            assert_eq!(rule.verdict, Verdict::Reject);
+            assert!(rule.conds.contains(&Cond::Port {
+                side: Side::Destination,
+                payload: "th",
+                ports: Ports::Single(853),
+            }));
+        }
     }
 }

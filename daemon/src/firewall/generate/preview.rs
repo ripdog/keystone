@@ -88,7 +88,8 @@ fn cond_text(cond: &Cond) -> String {
         Cond::Oif(interfaces) => format!("oifname {}", interface_set(interfaces)),
         Cond::Nfproto(Family::V4) => "meta nfproto ipv4".to_string(),
         Cond::Nfproto(Family::V6) => "meta nfproto ipv6".to_string(),
-        Cond::Addr { side, addr } => address_text(*side, addr),
+        Cond::Addr { side, addr } => address_text(*side, addr, ""),
+        Cond::NotAddr { side, addr } => address_text(*side, addr, "!= "),
         Cond::L4(protocol) => format!("meta l4proto {protocol}"),
         Cond::Port {
             side,
@@ -103,6 +104,7 @@ fn cond_text(cond: &Cond) -> String {
         Cond::CtStateIs(state) => format!("ct state {state}"),
         Cond::CtDnat => "ct status dnat".to_string(),
         Cond::FibLocal => "fib daddr type local".to_string(),
+        Cond::FibNotLocal => "fib daddr type != local".to_string(),
         Cond::FibNotOnIngress => "fib daddr . iif type != local".to_string(),
         Cond::RateLimit { rate, per } => format!("limit rate {rate}/{per}"),
     }
@@ -119,10 +121,12 @@ fn verdict_text(verdict: Verdict) -> String {
         } => format!("dnat to {addr}:{port}"),
         Verdict::Dnat { addr, port: None } => format!("dnat to {addr}"),
         Verdict::Masquerade => "masquerade".to_string(),
+        Verdict::Redirect { port } => format!("redirect to :{port}"),
     }
 }
 
-fn address_text(side: Side, addr: &Addr) -> String {
+/// `op` is empty for a match, or `"!= "` for a negated one.
+fn address_text(side: Side, addr: &Addr, op: &str) -> String {
     let field = side_field(side, "saddr", "daddr");
     match addr {
         Addr::Literal(text) => {
@@ -130,10 +134,10 @@ fn address_text(side: Side, addr: &Addr) -> String {
                 Ok(IpAddr::V6(_)) => "ip6",
                 _ => "ip",
             };
-            format!("{family} {field} {text}")
+            format!("{family} {field} {op}{text}")
         }
         Addr::Group { name, family } => format!(
-            "{} {} @{}",
+            "{} {} {op}@{}",
             family.payload(),
             field,
             address_set_name(name, *family)

@@ -415,6 +415,19 @@ pub fn firewall_settings(response: &FirewallGlobalSettingsResponse) {
     println!("Ping WAN: {}", response.settings.ping_wan_enabled);
     println!("Ping LAN: {}", response.settings.ping_lan_enabled);
     println!("Hairpin NAT: {}", response.settings.hairpin_nat_enabled);
+    println!("Force local DNS: {}", response.settings.force_local_dns);
+    println!(
+        "Block DNS-over-TLS: {}",
+        response.settings.block_dns_over_tls
+    );
+    println!(
+        "DNS exempt group: {}",
+        response
+            .settings
+            .dns_exempt_group
+            .as_deref()
+            .unwrap_or("none")
+    );
 }
 
 pub fn save_firewall_settings(response: &SaveFirewallGlobalSettingsResponse) {

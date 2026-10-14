@@ -46,6 +46,9 @@ fn chain_policy(policy: Option<Verdict>) -> Option<NfChainPolicy> {
     match policy {
         Some(Verdict::Drop) => Some(NfChainPolicy::Drop),
         Some(Verdict::Accept) => Some(NfChainPolicy::Accept),
-        Some(Verdict::Reject | Verdict::Dnat { .. } | Verdict::Masquerade) | None => None,
+        Some(
+            Verdict::Reject | Verdict::Dnat { .. } | Verdict::Masquerade | Verdict::Redirect { .. },
+        )
+        | None => None,
     }
 }

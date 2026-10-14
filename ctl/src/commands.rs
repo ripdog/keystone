@@ -371,6 +371,18 @@ pub enum SettingsCommands {
         /// Enable/disable hairpin NAT (true/false)
         #[arg(long)]
         hairpin_nat: Option<bool>,
+
+        /// Redirect LAN DNS queries for outside servers to this router (true/false)
+        #[arg(long)]
+        force_local_dns: Option<bool>,
+
+        /// Reject DNS-over-TLS/QUIC (port 853) from LAN to outside servers (true/false)
+        #[arg(long)]
+        block_dns_over_tls: Option<bool>,
+
+        /// Address group exempt from the DNS settings ("none" to clear)
+        #[arg(long)]
+        dns_exempt_group: Option<String>,
     },
 }
 

@@ -343,6 +343,9 @@ pub async fn handle_firewall_command(
                 ping_wan,
                 ping_lan,
                 hairpin_nat,
+                force_local_dns,
+                block_dns_over_tls,
+                dns_exempt_group,
             } => {
                 let authed = client.authed(get_token(token)?);
 
@@ -354,6 +357,14 @@ pub async fn handle_firewall_command(
                     ping_lan_enabled: ping_lan.unwrap_or(current.settings.ping_lan_enabled),
                     hairpin_nat_enabled: hairpin_nat
                         .unwrap_or(current.settings.hairpin_nat_enabled),
+                    force_local_dns: force_local_dns.unwrap_or(current.settings.force_local_dns),
+                    block_dns_over_tls: block_dns_over_tls
+                        .unwrap_or(current.settings.block_dns_over_tls),
+                    dns_exempt_group: match dns_exempt_group.as_deref() {
+                        None => current.settings.dns_exempt_group,
+                        Some("none") => None,
+                        Some(name) => Some(name.to_string()),
+                    },
                 };
 
                 let request = SaveFirewallGlobalSettingsRequest { settings };

@@ -855,11 +855,26 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
         let token = token.get();
         async move { api::fetch_firewall_global_settings(&token).await }
     });
+    // Address group names for the DNS exemption. A failed load leaves the
+    // list empty; the saved choice is still shown and kept.
+    let address_groups = LocalResource::new(move || {
+        let token = token.get();
+        async move {
+            api::fetch_address_groups(&token)
+                .await
+                .map(|groups| groups.into_iter().map(|g| g.name).collect::<Vec<_>>())
+                .unwrap_or_default()
+        }
+    });
 
     // Local state for form
     let ping_wan_enabled = RwSignal::new(false);
     let ping_lan_enabled = RwSignal::new(true);
     let hairpin_nat_enabled = RwSignal::new(true);
+    let force_local_dns = RwSignal::new(false);
+    let block_dns_over_tls = RwSignal::new(false);
+    // Empty means no exempt group.
+    let dns_exempt_group = RwSignal::new(String::new());
 
     let status_message = RwSignal::new(String::new());
     let is_saving = RwSignal::new(false);
@@ -873,6 +888,9 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
             ping_wan_enabled.set(s.ping_wan_enabled);
             ping_lan_enabled.set(s.ping_lan_enabled);
             hairpin_nat_enabled.set(s.hairpin_nat_enabled);
+            force_local_dns.set(s.force_local_dns);
+            block_dns_over_tls.set(s.block_dns_over_tls);
+            dns_exempt_group.set(s.dns_exempt_group.unwrap_or_default());
             initialized.set(true);
         }
     });
@@ -883,6 +901,9 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
             ping_wan_enabled: ping_wan_enabled.get(),
             ping_lan_enabled: ping_lan_enabled.get(),
             hairpin_nat_enabled: hairpin_nat_enabled.get(),
+            force_local_dns: force_local_dns.get(),
+            block_dns_over_tls: block_dns_over_tls.get(),
+            dns_exempt_group: Some(dns_exempt_group.get()).filter(|name| !name.is_empty()),
         };
 
         is_saving.set(true);
@@ -968,6 +989,81 @@ fn SettingsTab(token: Signal<String>, on_unauthorized: Callback<()>) -> impl Int
                                         />
                                         <span class="text-gray-200">"Enable Hairpin NAT"</span>
                                     </label>
+                                </div>
+
+                                // DNS enforcement
+                                <div class="bg-gray-700/50 rounded-lg p-4 space-y-4">
+                                    <h3 class="text-base font-medium text-gray-300">"DNS Enforcement"</h3>
+                                    <p class="text-sm text-gray-400">
+                                        "Make LAN devices use this router's DNS server (and its filtering), "
+                                        "even when they are configured with another one. Applies to every "
+                                        "interface in a non-WAN zone."
+                                    </p>
+
+                                    <div class="space-y-3">
+                                        <label class="flex items-start gap-3 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                class="mt-1 w-4 h-4 rounded bg-gray-600 border-gray-500 text-blue-500 focus:ring-blue-500"
+                                                prop:checked=move || force_local_dns.get()
+                                                on:change=move |ev| force_local_dns.set(event_target_checked(&ev))
+                                            />
+                                            <span>
+                                                <span class="text-gray-200">"Force local DNS"</span>
+                                                <span class="block text-sm text-gray-500">
+                                                    "Plain DNS (port 53) sent to outside servers is redirected to the router."
+                                                </span>
+                                            </span>
+                                        </label>
+
+                                        <label class="flex items-start gap-3 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                class="mt-1 w-4 h-4 rounded bg-gray-600 border-gray-500 text-blue-500 focus:ring-blue-500"
+                                                prop:checked=move || block_dns_over_tls.get()
+                                                on:change=move |ev| block_dns_over_tls.set(event_target_checked(&ev))
+                                            />
+                                            <span>
+                                                <span class="text-gray-200">"Block DNS-over-TLS"</span>
+                                                <span class="block text-sm text-gray-500">
+                                                    "Rejects encrypted DNS on port 853 (DoT and DoQ), so devices fall back to plain DNS. "
+                                                    "DNS-over-HTTPS uses port 443 like all web traffic and cannot be blocked here; "
+                                                    "a blocklist of DoH providers in DNS filtering covers most of it."
+                                                </span>
+                                            </span>
+                                        </label>
+
+                                        <label class="block space-y-1">
+                                            <span class="text-gray-200">"Exempt hosts"</span>
+                                            <select
+                                                class="w-full bg-gray-600 border border-gray-500 rounded px-3 py-2 text-gray-200"
+                                                on:change=move |ev| dns_exempt_group.set(event_target_value(&ev))
+                                                prop:value=move || dns_exempt_group.get()
+                                            >
+                                                <option value="">"None"</option>
+                                                {move || {
+                                                    let mut names = address_groups.get().unwrap_or_default();
+                                                    let saved = dns_exempt_group.get();
+                                                    if !saved.is_empty() && !names.contains(&saved) {
+                                                        names.push(saved);
+                                                    }
+                                                    names
+                                                        .into_iter()
+                                                        .map(|name| {
+                                                            let selected = name == dns_exempt_group.get();
+                                                            view! {
+                                                                <option value=name.clone() selected=selected>{name.clone()}</option>
+                                                            }
+                                                        })
+                                                        .collect_view()
+                                                }}
+                                            </select>
+                                            <span class="block text-sm text-gray-500">
+                                                "An address group whose members may use any DNS server, and may serve DNS "
+                                                "to other devices (for example a separate resolver)."
+                                            </span>
+                                        </label>
+                                    </div>
                                 </div>
 
                                 // Status message

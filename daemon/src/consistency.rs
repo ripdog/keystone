@@ -197,6 +197,7 @@ pub fn analyze(s: &Snapshot) -> Vec<SystemCheck> {
     check_firewall(s, &enabled, &enabled_by_name, &mut out);
     check_ipv6(s, &enabled, &enabled_by_name, &mut out);
     check_dnsmasq(s, &enabled_by_name, &mut out);
+    check_dns_enforcement(s, &mut out);
     check_virtual_devices(s, &enabled_by_name, &mut out);
     check_dangling(s, &enabled_by_name, &mut out);
     out
@@ -688,6 +689,50 @@ fn check_dnsmasq(
     }
 }
 
+/// "Force local DNS" redirects LAN DNS to port 53 on the router, so dnsmasq
+/// must answer there on every interface the redirect applies to.
+fn check_dns_enforcement(s: &Snapshot, out: &mut Vec<SystemCheck>) {
+    if !s.firewall.global_settings.force_local_dns {
+        return;
+    }
+    let d = &s.dnsmasq.config;
+    if !d.enabled || d.dns_port != 53 {
+        out.push(warn(
+            "consistency_dns_redirect_no_server".into(),
+            "Forced DNS has no server",
+            "The firewall redirects LAN DNS to port 53 on the router, but dnsmasq is not answering DNS on port 53. LAN clients will get no DNS answers.".into(),
+            "Enable dnsmasq with DNS on port 53 on the DNS/DHCP page, or turn off 'Force local DNS' in the firewall settings.",
+        ));
+        return;
+    }
+    let wan_zones: Vec<&str> = crate::firewall::generate::find_wan_zones(&s.firewall.zones)
+        .into_iter()
+        .map(|zone| zone.name.as_str())
+        .collect();
+    let mut lan_interfaces: Vec<&str> = s
+        .firewall
+        .zones
+        .iter()
+        .filter(|zone| !wan_zones.contains(&zone.name.as_str()))
+        .flat_map(|zone| zone.interfaces.iter().map(String::as_str))
+        .collect();
+    lan_interfaces.sort_unstable();
+    lan_interfaces.dedup();
+    for iface in lan_interfaces {
+        let listens = (d.listen_interfaces.is_empty()
+            || d.listen_interfaces.iter().any(|name| name == iface))
+            && !d.except_interfaces.iter().any(|name| name == iface);
+        if !listens {
+            out.push(warn(
+                format!("consistency_dns_redirect_not_listening_{iface}"),
+                "Forced DNS on an interface without DNS",
+                format!("The firewall redirects DNS from {iface} to the router, but dnsmasq does not listen on {iface}. Clients there will get no DNS answers."),
+                &format!("Add {iface} to 'Listen interfaces' on the DNS/DHCP page, or move it to a zone the redirect should not cover."),
+            ));
+        }
+    }
+}
+
 fn check_virtual_devices(
     s: &Snapshot,
     enabled_by_name: &HashMap<&str, &InterfaceConfig>,
@@ -1043,6 +1088,30 @@ mod tests {
         assert!(has(&s, "consistency_double_ra_eth1"));
         s.dnsmasq.config.enabled = false;
         assert!(!has(&s, "consistency_double_ra"));
+    }
+
+    #[test]
+    fn forced_dns_needs_dnsmasq_on_port_53_on_lan_interfaces() {
+        let mut s = healthy();
+        s.firewall.global_settings.force_local_dns = true;
+        assert!(!has(&s, "consistency_dns_redirect"));
+
+        s.dnsmasq.config.listen_interfaces = vec!["eth0".into()];
+        assert!(has(&s, "consistency_dns_redirect_not_listening_eth1"));
+        s.dnsmasq.config.listen_interfaces = vec!["eth1".into()];
+        assert!(!has(&s, "consistency_dns_redirect"));
+        s.dnsmasq.config.except_interfaces = vec!["eth1".into()];
+        assert!(has(&s, "consistency_dns_redirect_not_listening_eth1"));
+
+        let mut s = healthy();
+        s.firewall.global_settings.force_local_dns = true;
+        s.dnsmasq.config.dns_port = 5353;
+        assert!(has(&s, "consistency_dns_redirect_no_server"));
+        s.dnsmasq.config.dns_port = 53;
+        s.dnsmasq.config.enabled = false;
+        assert!(has(&s, "consistency_dns_redirect_no_server"));
+        s.firewall.global_settings.force_local_dns = false;
+        assert!(!has(&s, "consistency_dns_redirect"));
     }
 
     #[test]

@@ -6,9 +6,10 @@
 use crate::api;
 use crate::components::{AppLayout, LoginPage, clear_stored_token, get_stored_token};
 use crate::pages::{
-    BridgesPage, CaddyPage, ClientsPage, DashboardPage, DnsFilterPage, DnsmasqPage, FirewallPage,
-    HistoryPage, InterfaceEditPage, InterfacesPage, NetworkdPreviewPage, ServiceDetailPage,
-    ServicesPage, SettingsPage, SqmPage, SshPage, StatusPage, UpnpPage, VlansPage, WizardPage,
+    BridgesPage, CaddyPage, ClientsPage, DashboardPage, DiagnosticsLogsPage, DnsFilterPage,
+    DnsmasqPage, FirewallPage, HistoryPage, InterfaceEditPage, InterfacesPage, NetworkdPreviewPage,
+    ServiceDetailPage, ServicesPage, SettingsPage, SqmPage, SshPage, StatusPage, UpnpPage,
+    VlansPage, WizardPage,
 };
 use keystone_core::SystemState;
 use leptos::prelude::*;
@@ -298,6 +299,24 @@ pub fn App() -> impl IntoView {
                                 path=path!("/services/:name")
                                 view=move || view! {
                                     <ServiceDetailPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
+                                path=path!("/diagnostics")
+                                view=move || view! {
+                                    <DiagnosticsLogsPage
+                                        auth_token=auth_token
+                                        on_unauthorized=on_unauthorized
+                                    />
+                                }
+                            />
+                            <Route
+                                path=path!("/diagnostics/logs")
+                                view=move || view! {
+                                    <DiagnosticsLogsPage
                                         auth_token=auth_token
                                         on_unauthorized=on_unauthorized
                                     />

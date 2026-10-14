@@ -1,6 +1,6 @@
 //! Service detail page - view details and logs for a specific systemd unit
 
-use crate::components::use_toasts;
+use crate::components::{LogViewer, use_toasts};
 use keystone_core::{SystemdActiveState, SystemdUnitDetail};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -324,14 +324,11 @@ pub fn ServiceDetailPage(
                     let detail = unit_detail.get().unwrap();
                     let unit = detail.unit.clone();
                     let is_active = matches!(unit.active_state, SystemdActiveState::Active);
-                    let logs = detail.recent_logs.clone();
                     let unit_enabled = unit.enabled;
 
                     // Clone values that will be used in nested closures
                     let result_for_class = detail.result.clone();
                     let result_for_display = detail.result.clone();
-                    let logs_for_check = logs.clone();
-                    let logs_for_iter = logs.clone();
 
                     view! {
                         // Status and Actions
@@ -460,38 +457,21 @@ pub fn ServiceDetailPage(
                                 </Show>
                             </div>
                         </div>
-
-                        // Logs
-                        <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
-                            <h2 class="text-lg font-medium text-white mb-4">"Recent Logs"</h2>
-                            <Show
-                                when=move || !logs_for_check.is_empty()
-                                fallback=|| view! {
-                                    <p class="text-gray-400">"No recent log entries"</p>
-                                }
-                            >
-                                {
-                                    let logs_inner = logs_for_iter.clone();
-                                    view! {
-                                        <div class="bg-gray-900 rounded p-4 font-mono text-sm overflow-x-auto max-h-96 overflow-y-auto">
-                                            <For
-                                                each=move || logs_inner.clone().into_iter().enumerate()
-                                                key=|(idx, _)| *idx
-                                                children=|(_, line)| {
-                                                    view! {
-                                                        <div class="text-gray-300 whitespace-pre-wrap border-b border-gray-800 py-1">
-                                                            {line}
-                                                        </div>
-                                                    }
-                                                }
-                                            />
-                                        </div>
-                                    }
-                                }
-                            </Show>
-                        </div>
                     }
                 }}
+            </Show>
+
+            // Logs. Outside the details above so a refresh does not reload them.
+            <Show when=move || unit_detail.get().is_some()>
+                <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
+                    <h2 class="text-lg font-medium text-white mb-4">"Logs"</h2>
+                    <LogViewer
+                        token=Signal::derive(move || auth_token.get().unwrap_or_default())
+                        on_unauthorized=on_unauthorized
+                        units=Signal::derive(move || vec![unit_name()])
+                        show_unit=false
+                    />
+                </div>
             </Show>
         </div>
     }

@@ -17,6 +17,7 @@ const SECURITY: &str = "Security & System";
 const DNSMASQ: &str = "DNS & DHCP";
 const CADDY: &str = "Web Server";
 const FIREWALL: &str = "Firewall";
+const DIAGNOSTICS: &str = "Diagnostics";
 const SETTINGS: &str = "Settings";
 
 /// A navigable page.
@@ -335,6 +336,14 @@ pub const NAV_ITEMS: &[NavItem] = &[
         "systemd-networkd preview generated config",
     ),
     page(
+        "Logs",
+        "/diagnostics/logs",
+        SECURITY,
+        DIAGNOSTICS,
+        "log",
+        "journal journalctl logs log viewer services systemd dnsmasq networkd errors troubleshoot",
+    ),
+    page(
         "General",
         "/settings/general",
         SECURITY,
@@ -435,6 +444,7 @@ pub fn icon_path(kind: &str) -> &'static str {
         }
         "undo" => "M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11",
         "camera" => "M4 7h3l2-3h6l2 3h3v12H4zM12 10.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z",
+        "log" => "M5 3h14v18H5zM9 8h6M9 12h6M9 16h4",
         "power" => "M12 3v8M6.4 6.4a8 8 0 1 0 11.2 0",
         _ => "M4 12h16",
     }

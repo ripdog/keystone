@@ -27,6 +27,10 @@ pub fn AppLayout(
     let logout_click = move |_| on_logout.run(());
 
     let location = leptos_router::hooks::use_location();
+
+    // Keep the browser tab title in step with the current page.
+    Effect::new(move || set_document_title(&document_title(&location.pathname.get())));
+    on_cleanup(|| set_document_title(DEFAULT_TITLE));
     let on_navigate = Callback::new(move |()| set_sidebar_open.set(false));
 
     view! {
@@ -133,5 +137,36 @@ pub fn AppLayout(
             </div>
             <ToastHost />
         </div>
+    }
+}
+
+const DEFAULT_TITLE: &str = "Keystone Router Manager";
+
+/// Tab title for a path, e.g. `Firewall / Rules - Keystone`.
+fn document_title(path: &str) -> String {
+    match crate::components::breadcrumb(path).as_str() {
+        "Keystone" => DEFAULT_TITLE.to_string(),
+        crumb => format!("{crumb} - Keystone"),
+    }
+}
+
+fn set_document_title(title: &str) {
+    if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+        document.set_title(title);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn titles_follow_the_breadcrumb() {
+        assert_eq!(document_title("/unknown"), DEFAULT_TITLE);
+        assert_eq!(
+            document_title("/interfaces/eth0"),
+            "Interfaces / Edit - Keystone"
+        );
+        assert!(document_title("/").ends_with(" - Keystone"));
     }
 }

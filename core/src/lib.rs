@@ -2887,6 +2887,22 @@ pub struct ApplyConfigResponse {
 // Unified Apply Types
 // ============================================================================
 
+/// Request to rename a physical network interface (the interface is named in the path)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameInterfaceRequest {
+    pub new_name: String,
+}
+
+/// Result of renaming a physical network interface
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameInterfaceResponse {
+    pub success: bool,
+    pub message: String,
+    /// The apply that followed the rename, which may await confirmation.
+    #[serde(default)]
+    pub apply: Option<ApplyAllResponse>,
+}
+
 /// Result of applying all configuration via /apply-all
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyAllResponse {

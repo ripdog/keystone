@@ -65,6 +65,52 @@ pub fn interface_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the kernel or udev assigns names like `name` on its own: `eth0`,
+/// `wlan0`, the predictable `enp3s0`, `eno1`, `ens1`, `enx<mac>`, `end0` and
+/// `wlp2s0` styles, and the `ifb4<wan>` devices Keystone creates for shaping.
+fn is_system_assigned_name(name: &str) -> bool {
+    const NUMBERED: &[&str] = &["eth", "wlan", "wwan", "usb", "veth", "ifb"];
+    const PREDICTABLE: &[&str] = &["en", "wl", "ww"];
+    if name == "lo" {
+        return true;
+    }
+    if NUMBERED.iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    }) {
+        return true;
+    }
+    if name.starts_with("end") && name[3..].starts_with(|c: char| c.is_ascii_digit()) {
+        return true;
+    }
+    PREDICTABLE.iter().any(|prefix| {
+        name.strip_prefix(prefix).is_some_and(|rest| {
+            rest.len() > 1
+                && rest.starts_with(['o', 'p', 's', 'x'])
+                && rest[1..].starts_with(|c: char| c.is_ascii_digit() || c.is_ascii_hexdigit())
+        })
+    })
+}
+
+/// A name an administrator may give a physical interface, such as `wan0`.
+/// Stricter than [`interface_name`]: dots are left for VLANs, and the names the
+/// kernel and udev assign themselves are reserved, because a NIC renamed to a
+/// name another device holds while it probes keeps its original name.
+pub fn custom_interface_name(name: &str) -> Result<(), String> {
+    interface_name(name)?;
+    if name.contains('.') {
+        return Err(format!(
+            "Interface name {name:?} must not contain '.', which is reserved for VLANs"
+        ));
+    }
+    if is_system_assigned_name(name) {
+        return Err(format!(
+            "Interface name {name:?} looks like a name the kernel or udev assigns itself; choose another name such as wan0 or lan0"
+        ));
+    }
+    Ok(())
+}
+
 /// Group names are shared by address and port groups: a lowercase letter, then
 /// lowercase letters, digits or underscores, at most 31 characters in total.
 pub fn group_name(name: &str) -> Result<(), String> {
@@ -189,6 +235,44 @@ pub fn custom_tls_config(value: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_interface_names_avoid_system_assigned_names() {
+        for good in [
+            "wan0",
+            "lan0",
+            "lan-guest",
+            "uplink",
+            "entry",
+            "wifi0",
+            "dmz",
+        ] {
+            assert!(custom_interface_name(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "eth0",
+            "eth12",
+            "wlan0",
+            "enp3s0",
+            "eno1",
+            "ens1",
+            "enx2cf05d3b621a",
+            "end0",
+            "wlp2s0",
+            "wwan0",
+            "usb0",
+            "ifb4wan0",
+            "veth1",
+            "lo",
+            "wan.10",
+            "",
+            "wan 0",
+            "a_very_long_name_x",
+            "-wan",
+        ] {
+            assert!(custom_interface_name(bad).is_err(), "{bad}");
+        }
+    }
     #[test]
     fn cannot_inject_dnsmasq_directive() {
         assert!(

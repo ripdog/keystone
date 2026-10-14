@@ -82,6 +82,8 @@ endpoints! {
 
     SaveManagedInterfaces: Post "/managed-interfaces", SaveManagedInterfacesRequest => SaveManagedInterfacesResponse;
     SaveInterfaceConfig: Post "/interface-config", SaveInterfaceConfigRequest => SaveInterfaceConfigResponse;
+    /// Path parameter: `{name}` (the interface's current name); see [`render_path`].
+    RenameInterface: Post "/interfaces/{name}/rename", RenameInterfaceRequest => RenameInterfaceResponse;
     SaveVlan: Post "/vlans", SaveVlanConfigRequest => SaveVlanConfigResponse;
     SaveBridge: Post "/bridges", SaveBridgeConfigRequest => SaveBridgeConfigResponse;
     SaveUser: Post "/users", SaveUserRequest => SaveUserResponse;

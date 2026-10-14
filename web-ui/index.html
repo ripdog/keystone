@@ -3,12 +3,17 @@
 <head>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <title>Keystone Router Manager - Error</title>
+    <title>Keystone Router Manager</title>
+    <style>html,body{background:#020617}</style>
     <link data-trunk rel="tailwind-css" href="tailwind.css"/>
     <link data-trunk rel="rust" data-wasm-opt="z" data-cargo-no-default-features/>
 </head>
-<body class="bg-gray-900 text-white flex items-center justify-center min-h-screen p-4">
-    <div class="max-w-2xl w-full bg-red-900/20 border-2 border-red-500 rounded-lg p-8">
+<body class="bg-slate-950 text-white flex items-center justify-center min-h-screen p-4">
+    <!-- Neutral placeholder; the WASM app clears the body when it mounts. -->
+    <div id="wasm-loading" style="width:2rem;height:2rem;border:3px solid #334155;border-top-color:#94a3b8;border-radius:50%;animation:ks-spin 1s linear infinite"></div>
+    <style>@keyframes ks-spin{to{transform:rotate(360deg)}}</style>
+    <!-- The failure notice stays hidden unless the bundle errors or is very slow. -->
+    <div id="wasm-error" style="display:none" class="max-w-2xl w-full bg-red-900/20 border-2 border-red-500 rounded-lg p-8">
         <div class="flex items-center gap-4 mb-6">
             <svg class="w-12 h-12 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
@@ -43,5 +48,21 @@
             </div>
         </div>
     </div>
+    <script>
+        (function () {
+            function showError() {
+                var err = document.getElementById("wasm-error");
+                var spin = document.getElementById("wasm-loading");
+                if (err) err.style.display = "";
+                if (spin) spin.style.display = "none";
+            }
+            window.addEventListener("TrunkApplicationStarted", function () { clearTimeout(timer); });
+            var timer = setTimeout(showError, 15000);
+            window.addEventListener("error", function (e) {
+                // Resource load failures (script/wasm) don't bubble; capture phase catches them.
+                if (e.target && e.target !== window) showError();
+            }, true);
+        })();
+    </script>
 </body>
 </html>

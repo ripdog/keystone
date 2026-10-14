@@ -1,0 +1,56 @@
+[Unit]
+Description=Keystone DNS filtering (Blocky)
+Documentation=https://github.com/0xERR0R/blocky
+# Blocky downloads its block lists and resolves its upstreams' host names, so
+# it needs the network. dnsmasq does not wait for it: queries that arrive
+# before Blocky is up are answered with a failure and retried by the client.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# Keystone owns this unit so that it does not depend on the packaging of the
+# blocky-bin AUR package. Keystone writes the configuration; Blocky only reads it.
+ExecStart=/usr/bin/blocky --config /etc/keystone-blocky/config.yml
+Restart=on-failure
+RestartSec=5
+
+# Run as a transient unprivileged user. The state directory holds Blocky's
+# daily query log under /var/lib/keystone-blocky/querylog. It is created with
+# mode 0755 and its files with 0644 (UMask), so the root-run daemon can read
+# the log without needing DAC_OVERRIDE.
+DynamicUser=yes
+StateDirectory=keystone-blocky keystone-blocky/querylog
+StateDirectoryMode=0755
+UMask=0022
+
+# Blocky serves DNS and its API on loopback ports above 1024, so no
+# capability is needed.
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# Filesystem and device restrictions. The configuration is read-only here, and
+# the only writable location is the state directory above.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# Sockets: IPv4 and IPv6 for DNS, DNS-over-TLS, DNS-over-HTTPS and list downloads.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=keystone-blocky
+
+[Install]
+WantedBy=multi-user.target

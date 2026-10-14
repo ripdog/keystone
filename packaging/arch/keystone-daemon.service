@@ -25,9 +25,10 @@ StateDirectoryMode=0700
 
 # Ensure managed configuration directories exist before the read-only
 # filesystem sandbox is constructed (Caddy itself remains optional).
-# miniupnpd is created here too, so /etc/miniupnpd exists before the sandbox is
-# built; the write access it needs is granted below.
-ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d miniupnpd
+# miniupnpd and keystone-blocky are created here too, so /etc/miniupnpd and
+# /etc/keystone-blocky exist before the sandbox is built; the write access they
+# need is granted below.
+ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d miniupnpd keystone-blocky
 ConfigurationDirectoryMode=0755
 
 # Restrict capabilities
@@ -57,6 +58,13 @@ ReadWritePaths=/etc/caddy -/var/log/caddy -/var/lib/caddy -/run/caddy
 # writable for it here. Mapping rules live in the nftables table keystone_upnp,
 # which needs CAP_NET_ADMIN like the rest of the firewall.
 ReadWritePaths=/etc/miniupnpd
+# DNS filtering: Keystone writes /etc/keystone-blocky/config.yml the same way
+# (atomically, via a temp file in the same directory). Blocky's query log under
+# /var/lib/keystone-blocky is only read, to show queries. It is owned by the
+# dynamic user of keystone-blocky.service and is world-readable (0755 directory,
+# 0644 files), so this daemon, which lacks CAP_DAC_OVERRIDE, reads it as an
+# ordinary user would; /var/lib itself is read-only here, not hidden.
+ReadWritePaths=/etc/keystone-blocky
 PrivateTmp=yes
 
 # Additional hardening

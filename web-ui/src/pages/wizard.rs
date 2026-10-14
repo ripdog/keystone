@@ -29,6 +29,8 @@ pub fn WizardPage(
     on_wizard_complete: Callback<()>,
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
+    crate::components::set_document_title("Setup - Keystone");
+
     // Wizard state from server
     let (wizard_state, set_wizard_state) = signal(Option::<WizardState>::None);
     let (loading, set_loading) = signal(true);

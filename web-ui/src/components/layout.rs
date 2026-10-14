@@ -150,7 +150,7 @@ fn document_title(path: &str) -> String {
     }
 }
 
-fn set_document_title(title: &str) {
+pub fn set_document_title(title: &str) {
     if let Some(document) = web_sys::window().and_then(|w| w.document()) {
         document.set_title(title);
     }

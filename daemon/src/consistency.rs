@@ -644,7 +644,7 @@ fn check_dnsmasq(
             "The local AdGuard upstream uses port 5353, which is normally mDNS. Verify that AdGuard Home really listens on 127.0.0.1:5353.".into(),
             "Check AdGuard Home's DNS listen port, or use Custom upstream servers on the DNS/DHCP page.",
         )),
-        DnsmasqUpstreamMode::Custom => {}
+        DnsmasqUpstreamMode::Custom | DnsmasqUpstreamMode::Blocky => {}
     }
     for r in &ranges {
         match enabled_by_name.get(r.interface.as_str()) {

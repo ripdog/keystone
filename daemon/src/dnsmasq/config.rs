@@ -1,5 +1,6 @@
 //! Dnsmasq configuration file generation
 
+use crate::blocky::config::BLOCKY_DNS_PORT;
 use keystone_core::{
     DnsmasqAddressAction, DnsmasqAddressOverride, DnsmasqCnameRecord, DnsmasqConfig,
     DnsmasqDhcpOption, DnsmasqDhcpRange, DnsmasqHostRecord, DnsmasqIpv6Mode, DnsmasqStateResponse,
@@ -91,8 +92,13 @@ fn generate_global_settings(lines: &mut Vec<String>, config: &DnsmasqConfig) {
         lines.push(format!("port={}", config.dns_port));
     }
 
-    // Cache size
-    lines.push(format!("cache-size={}", config.cache_size));
+    // Cache size. Blocky mode turns dnsmasq's cache off, so that every query
+    // reaches Blocky (its log is then complete) and Blocky does the caching.
+    let cache_size = match config.upstream_mode {
+        DnsmasqUpstreamMode::Blocky => 0,
+        _ => config.cache_size,
+    };
+    lines.push(format!("cache-size={cache_size}"));
 
     // Security settings
     if config.domain_needed {
@@ -157,6 +163,14 @@ fn generate_upstream_dns(lines: &mut Vec<String>, config: &DnsmasqConfig) {
             lines.push("no-resolv".to_string());
             lines.push(format!("server=127.0.0.1#{}", ADGUARD_DEFAULT_PORT));
             lines.push("# Chaining to local AdGuard Home".to_string());
+        }
+        DnsmasqUpstreamMode::Blocky => {
+            lines.push("no-resolv".to_string());
+            lines.push(format!("server=127.0.0.1#{}", BLOCKY_DNS_PORT));
+            // Send the client address upstream as EDNS client subnet, so that
+            // Blocky can apply per-client groups. Blocky does not forward it.
+            lines.push("add-subnet=32,128".to_string());
+            lines.push("# Chaining to Blocky (ad-blocking and encrypted upstreams)".to_string());
         }
     }
 
@@ -450,6 +464,31 @@ mod tests {
         assert!(config.contains("local=/lan/"));
         assert!(config.contains("domain=lan"));
         assert!(config.contains("expand-hosts"));
+    }
+
+    #[test]
+    fn test_blocky_mode_forwards_to_blocky_without_a_cache() {
+        let state = DnsmasqStateResponse {
+            config: DnsmasqConfig {
+                upstream_mode: DnsmasqUpstreamMode::Blocky,
+                ..Default::default()
+            },
+            dhcp_ranges: vec![],
+            static_leases: vec![],
+            dhcp_options: vec![],
+            host_records: vec![],
+            cname_records: vec![],
+            address_overrides: vec![],
+        };
+        let config = generate_dnsmasq_config(&state);
+        assert!(config.contains("\nno-resolv\n"));
+        assert!(config.contains("\nserver=127.0.0.1#5335\n"));
+        assert!(config.contains("\nadd-subnet=32,128\n"));
+        // Blocky caches, so dnsmasq's configured cache size is replaced by zero.
+        assert!(config.contains("\ncache-size=0\n"));
+        assert!(!config.contains("cache-size=1000"));
+        // No other upstream is written: queries go to Blocky only.
+        assert!(!config.contains("server=127.0.0.1#5353"));
     }
 
     #[test]

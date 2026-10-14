@@ -59,7 +59,7 @@ pub enum Commands {
         token: Option<String>,
     },
 
-    /// Apply all saved configuration (networkd, firewall, sqm, upnp, dnsmasq, caddy)
+    /// Apply all saved configuration (networkd, firewall, sqm, upnp, blocky, dnsmasq, caddy)
     Apply {
         /// JWT token for authentication (reads from file if not provided)
         #[arg(short, long, env = "KEYSTONE_TOKEN")]
@@ -117,7 +117,7 @@ pub enum ChangesAction {
     /// Nothing is applied to the system. Omit --component to discard every
     /// changed component.
     Discard {
-        /// Component to discard: networkd, firewall, sqm, upnp, dnsmasq or caddy (repeatable)
+        /// Component to discard: networkd, firewall, sqm, upnp, blocky, dnsmasq or caddy (repeatable)
         #[arg(long = "component", value_parser = parse_component)]
         components: Vec<Component>,
     },
@@ -158,7 +158,7 @@ pub enum SnapshotsCommands {
         /// Snapshot id
         id: i64,
 
-        /// Restore only this component: networkd, firewall, sqm, upnp, dnsmasq or caddy (repeatable)
+        /// Restore only this component: networkd, firewall, sqm, upnp, blocky, dnsmasq or caddy (repeatable)
         #[arg(long = "component", value_parser = parse_component)]
         components: Vec<Component>,
 
@@ -797,7 +797,7 @@ pub enum DnsmasqConfigCommands {
         #[arg(long)]
         local_domain: Option<String>,
 
-        /// Upstream DNS mode: system, custom, localadguard
+        /// Upstream DNS mode: system, custom, localadguard, blocky
         #[arg(long)]
         upstream_mode: Option<String>,
 

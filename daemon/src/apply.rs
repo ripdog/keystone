@@ -10,6 +10,7 @@ use keystone_core::changes::Component;
 use keystone_core::{ApplyComponentResults, ComponentResult};
 use tracing::{error, info, warn};
 
+use crate::blocky;
 use crate::caddy;
 use crate::db::Database;
 use crate::dnsmasq;
@@ -68,8 +69,10 @@ fn component_skipped(message: impl Into<String>) -> ComponentResult {
 /// 3. Apply firewall configuration (with rollback protection)
 /// 4. Apply traffic shaping (SQM / CAKE)
 /// 5. Apply UPnP / NAT-PMP (miniupnpd)
-/// 6. Apply dnsmasq configuration (DNS/DHCP)
-/// 7. Apply Caddy configuration (web server)
+/// 6. Apply DNS filtering and encrypted upstream DNS (Blocky), before dnsmasq
+///    so that dnsmasq never forwards to a Blocky that is not running
+/// 7. Apply dnsmasq configuration (DNS/DHCP)
+/// 8. Apply Caddy configuration (web server)
 ///
 /// If any component fails, subsequent components are still attempted to avoid
 /// leaving the system in an inconsistent state. A configuration snapshot is
@@ -221,6 +224,20 @@ pub async fn apply_all(
         }
     };
 
+    // Apply DNS filtering (Blocky), which dnsmasq may forward queries to
+    info!("Applying Blocky configuration...");
+    components.blocky = match blocky::apply_saved(db).await {
+        Ok(()) => {
+            info!("Blocky: applied successfully");
+            component_success("Applied successfully")
+        }
+        Err(e) => {
+            error!("Blocky failed: {e:#}");
+            all_success = false;
+            component_failure(format!("{e:#}"))
+        }
+    };
+
     // 5. Apply dnsmasq configuration
     info!("Applying dnsmasq configuration...");
     components.dnsmasq = match dnsmasq::apply_dnsmasq_config(db.pool()).await {
@@ -275,6 +292,7 @@ pub async fn apply_all(
             Component::Networkd,
             Component::Sqm,
             Component::Upnp,
+            Component::Blocky,
             Component::Dnsmasq,
             Component::Caddy,
         ];
@@ -303,6 +321,7 @@ fn format_failed_components(components: &ApplyComponentResults) -> String {
         ("firewall", &components.firewall),
         ("sqm", &components.sqm),
         ("upnp", &components.upnp),
+        ("blocky", &components.blocky),
         ("dnsmasq", &components.dnsmasq),
         ("caddy", &components.caddy),
     ]
@@ -372,6 +391,7 @@ mod tests {
             firewall: component_success("applied"),
             sqm: component_success("applied"),
             upnp: component_success("applied"),
+            blocky: component_success("applied"),
             dnsmasq: component_failure("address already in use"),
             caddy: component_skipped("not configured"),
         };

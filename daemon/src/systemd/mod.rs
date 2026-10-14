@@ -90,6 +90,7 @@ fn is_keystone_related(name: &str) -> bool {
             | "dnsmasq.service"
             | "caddy.service"
             | "miniupnpd.service"
+            | "keystone-blocky.service"
             | "sshd.service"
     )
 }

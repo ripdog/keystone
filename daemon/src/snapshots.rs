@@ -87,6 +87,12 @@ pub const CONFIG_TABLES: &[&str] = &[
     "upnp_config",
     "upnp_lan_interfaces",
     "upnp_allowed_subnets",
+    "blocky_config",
+    "blocky_upstreams",
+    "blocky_bootstrap",
+    "blocky_groups",
+    "blocky_group_sources",
+    "blocky_client_groups",
 ];
 
 /// Tables that are never captured into or restored from a snapshot: accounts
@@ -135,7 +141,7 @@ pub const RETIRED_TABLES: &[&str] = &[
 /// Every table in [`CONFIG_TABLES`] maps to exactly one component, so a
 /// component's rows can be restored without touching the others.
 pub fn component_of(table: &str) -> Option<Component> {
-    use Component::{Caddy, Dnsmasq, Firewall, Networkd, Sqm, Upnp};
+    use Component::{Blocky, Caddy, Dnsmasq, Firewall, Networkd, Sqm, Upnp};
     Some(match table {
         "managed_interfaces"
         | "interface_config"
@@ -175,6 +181,12 @@ pub fn component_of(table: &str) -> Option<Component> {
         | "dnsmasq_address_overrides" => Dnsmasq,
         "sqm_config" => Sqm,
         "upnp_config" | "upnp_lan_interfaces" | "upnp_allowed_subnets" => Upnp,
+        "blocky_config"
+        | "blocky_upstreams"
+        | "blocky_bootstrap"
+        | "blocky_groups"
+        | "blocky_group_sources"
+        | "blocky_client_groups" => Blocky,
         "caddy_config" => Caddy,
         _ => return None,
     })

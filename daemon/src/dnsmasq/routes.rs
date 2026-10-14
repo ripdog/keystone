@@ -112,14 +112,20 @@ async fn save_config(
     Json(request): Json<Req<SaveDnsmasqConfig>>,
 ) -> Result<Json<Res<SaveDnsmasqConfig>>, AppError> {
     info!("Saving dnsmasq config");
-    let errors = crate::config_validation::validate_dnsmasq_config(&request.config);
+    let mut errors = crate::config_validation::validate_dnsmasq_config(&request.config);
+    let pool = state.db.pool();
+    // Blocky mode needs DNS filtering enabled, and it cannot use DNSSEC.
+    let blocky = crate::blocky::load_blocky_config(pool).await?;
+    errors.extend(crate::blocky::config::dnsmasq_link_errors(
+        &request.config,
+        blocky.enabled,
+    ));
     if !errors.is_empty() {
         return Ok(Json(SaveDnsmasqConfigResponse {
             success: false,
             message: errors.join("; "),
         }));
     }
-    let pool = state.db.pool();
     dnsmasq::save_dnsmasq_config(pool, &request.config).await?;
     Ok(Json(SaveDnsmasqConfigResponse {
         success: true,

@@ -581,6 +581,9 @@ pub enum DnsmasqUpstreamMode {
     Custom,
     /// Chain to local AdGuard Home (localhost:5353 or similar)
     LocalAdGuard,
+    /// Send every query to the local Blocky service, which filters ads and
+    /// forwards to encrypted upstreams. dnsmasq's cache is then disabled.
+    Blocky,
 }
 
 impl std::fmt::Display for DnsmasqUpstreamMode {
@@ -589,6 +592,7 @@ impl std::fmt::Display for DnsmasqUpstreamMode {
             DnsmasqUpstreamMode::System => write!(f, "system"),
             DnsmasqUpstreamMode::Custom => write!(f, "custom"),
             DnsmasqUpstreamMode::LocalAdGuard => write!(f, "localadguard"),
+            DnsmasqUpstreamMode::Blocky => write!(f, "blocky"),
         }
     }
 }
@@ -600,6 +604,7 @@ impl std::str::FromStr for DnsmasqUpstreamMode {
             "system" => Ok(DnsmasqUpstreamMode::System),
             "custom" => Ok(DnsmasqUpstreamMode::Custom),
             "localadguard" | "adguard" => Ok(DnsmasqUpstreamMode::LocalAdGuard),
+            "blocky" => Ok(DnsmasqUpstreamMode::Blocky),
             _ => Err(format!("Unknown upstream mode: {}", s)),
         }
     }
@@ -3875,6 +3880,11 @@ mod tests {
             DnsmasqUpstreamMode::LocalAdGuard.to_string(),
             "localadguard"
         );
+        assert_eq!(
+            "blocky".parse::<DnsmasqUpstreamMode>().unwrap(),
+            DnsmasqUpstreamMode::Blocky
+        );
+        assert_eq!(DnsmasqUpstreamMode::Blocky.to_string(), "blocky");
     }
 
     #[test]

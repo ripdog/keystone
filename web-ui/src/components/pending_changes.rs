@@ -54,6 +54,7 @@ pub fn component_display_name(component: Component) -> &'static str {
         Component::Caddy => "Web Server",
         Component::Sqm => "Traffic Shaping",
         Component::Upnp => "UPnP / NAT-PMP",
+        Component::Blocky => "DNS filtering",
     }
 }
 
@@ -186,6 +187,7 @@ pub fn apply_outcome_rows(results: &ApplyComponentResults) -> Vec<(Component, Co
         (Component::Firewall, results.firewall.clone()),
         (Component::Sqm, results.sqm.clone()),
         (Component::Upnp, results.upnp.clone()),
+        (Component::Blocky, results.blocky.clone()),
         (Component::Dnsmasq, results.dnsmasq.clone()),
         (Component::Caddy, results.caddy.clone()),
     ]
@@ -1135,7 +1137,8 @@ mod tests {
             components: ApplyComponentResults {
                 firewall: failed,
                 dnsmasq: not_run,
-                upnp: skipped,
+                upnp: skipped.clone(),
+                blocky: skipped,
                 ..Default::default()
             },
             firewall_pending_confirmation: true,

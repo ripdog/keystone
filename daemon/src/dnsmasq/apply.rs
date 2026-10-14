@@ -1,6 +1,7 @@
 //! Dnsmasq service management and configuration application
 
 use anyhow::{Context, Result};
+use keystone_core::DnsmasqUpstreamMode;
 use sqlx::SqlitePool;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -275,6 +276,16 @@ pub async fn apply_dnsmasq_config(pool: &SqlitePool) -> Result<()> {
         remove_dnsmasq_config()?;
         disable_dnsmasq()?;
         return Ok(());
+    }
+
+    // Blocky mode sends every query to Blocky. Without a running Blocky, DNS
+    // for the whole network would fail, so keep the previous configuration.
+    if state.config.upstream_mode == DnsmasqUpstreamMode::Blocky
+        && !crate::blocky::is_serving().await
+    {
+        anyhow::bail!(
+            "DNS upstream is set to Blocky, but Blocky is not running; apply DNS filtering with Blocky enabled first (install blocky-bin if it is missing)"
+        );
     }
 
     // Re-check ranges and leases against current interface configuration.

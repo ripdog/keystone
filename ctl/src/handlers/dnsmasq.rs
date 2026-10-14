@@ -51,9 +51,10 @@ pub async fn handle_dnsmasq_command(
                     Some("system") => Some(DnsmasqUpstreamMode::System),
                     Some("custom") => Some(DnsmasqUpstreamMode::Custom),
                     Some("localadguard") => Some(DnsmasqUpstreamMode::LocalAdGuard),
+                    Some("blocky") => Some(DnsmasqUpstreamMode::Blocky),
                     Some(other) => {
                         anyhow::bail!(
-                            "Invalid upstream mode '{}'. Valid options: system, custom, localadguard",
+                            "Invalid upstream mode '{}'. Valid options: system, custom, localadguard, blocky",
                             other
                         );
                     }

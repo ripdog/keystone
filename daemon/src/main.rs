@@ -5,6 +5,7 @@
 
 mod apply;
 mod auth;
+mod blocky;
 mod caddy;
 mod changes;
 mod clients;
@@ -252,6 +253,12 @@ async fn main() -> anyhow::Result<()> {
     // Create UPnP state for port-mapping routes
     let upnp_state = upnp::routes::UpnpState {
         db: db.clone(),
+        firewall: applies_firewall.clone(),
+    };
+
+    // Create Blocky state for DNS filtering routes
+    let blocky_state = blocky::routes::BlockyState {
+        db: db.clone(),
         firewall: applies_firewall,
     };
 
@@ -302,6 +309,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(sqm::routes::sqm_routes(sqm_state))
         // Merge UPnP / NAT-PMP routes
         .merge(upnp::routes::upnp_routes(upnp_state))
+        // Merge DNS filtering (Blocky) routes
+        .merge(blocky::routes::blocky_routes(blocky_state))
         // Merge pending-change and snapshot routes
         .merge(changes::changes_routes(changes_state))
         // Merge systemd routes
@@ -1571,7 +1580,7 @@ async fn networkd_status(
     Ok(Json(state.firewall_manager.status().await))
 }
 
-/// POST /apply-all - Apply all configuration (networkd, firewall, sqm, upnp, dnsmasq, caddy)
+/// POST /apply-all - Apply all configuration (networkd, firewall, sqm, upnp, blocky, dnsmasq, caddy)
 async fn apply_all(
     State(state): State<Arc<AppState>>,
     actor: Option<Extension<Actor>>,

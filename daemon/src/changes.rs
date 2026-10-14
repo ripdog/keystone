@@ -88,6 +88,18 @@ async fn generate(component: Component, db: &Database) -> Result<Generated> {
                 BTreeMap::from([(crate::upnp::config::MINIUPNPD_CONF_PATH.to_string(), config)])
             }
         }
+        // The Blocky configuration, or nothing while DNS filtering is disabled.
+        Component::Blocky => {
+            let config = crate::blocky::preview_blocky_config(db).await?;
+            if config.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(
+                    crate::blocky::config::BLOCKY_CONFIG_PATH.to_string(),
+                    config,
+                )])
+            }
+        }
         Component::Dnsmasq => BTreeMap::from([(
             crate::dnsmasq::DNSMASQ_CONFIG_PATH.to_string(),
             crate::dnsmasq::preview_dnsmasq_config(db.pool()).await?,
@@ -873,6 +885,46 @@ mod tests {
         let after = pending_changes(&db, &[]).await.unwrap();
         assert!(!changed(&after, Component::Upnp));
         assert!(!changed(&after, Component::Firewall));
+    }
+
+    #[tokio::test]
+    async fn a_blocky_edit_is_pending_only_for_blocky_until_discarded() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+
+        sqlx::query("UPDATE blocky_config SET enabled = 1 WHERE id = 1")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let pending = pending_changes(&db, &[]).await.unwrap();
+        assert!(changed(&pending, Component::Blocky));
+        assert!(!changed(&pending, Component::Dnsmasq));
+        assert!(!changed(&pending, Component::Upnp));
+
+        let blocky = pending
+            .components
+            .iter()
+            .find(|diff| diff.component == Component::Blocky)
+            .unwrap();
+        assert_eq!(blocky.files.len(), 1);
+        assert_eq!(
+            blocky.files[0].path,
+            crate::blocky::config::BLOCKY_CONFIG_PATH
+        );
+        assert_eq!(blocky.files[0].status, FileChangeStatus::Added);
+        assert!(
+            blocky.files[0]
+                .unified_diff
+                .contains("\"clientGroupsBlock\"")
+        );
+
+        let outcome = discard_changes(&db, &[], Some(vec![Component::Blocky]), Some("admin"))
+            .await
+            .unwrap();
+        assert_eq!(outcome.components, vec![Component::Blocky]);
+        let after = pending_changes(&db, &[]).await.unwrap();
+        assert!(!changed(&after, Component::Blocky));
     }
 
     #[tokio::test]

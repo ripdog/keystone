@@ -17,6 +17,7 @@ use keystone_core::changes::Component;
 use keystone_core::validation::interface_name;
 use sqlx::{Row, SqlitePool};
 
+use crate::blocky;
 use crate::caddy;
 use crate::config_validation;
 use crate::db::Database;
@@ -40,6 +41,7 @@ pub async fn validate_configuration(db: &Database) -> Vec<String> {
     errors.extend(networkd_errors(db).await);
     errors.extend(firewall_errors(db).await);
     errors.extend(upnp_errors(db).await);
+    errors.extend(blocky_errors(db).await);
     errors.extend(dnsmasq_errors(db).await);
     errors.extend(caddy_errors(db).await);
     errors
@@ -121,6 +123,28 @@ async fn upnp_errors(db: &Database) -> Vec<String> {
         Ok(()) => Vec::new(),
         Err(error) => prefixed(C, vec![error]),
     }
+}
+
+async fn blocky_errors(db: &Database) -> Vec<String> {
+    const C: Component = Component::Blocky;
+    let config = match blocky::load_blocky_config(db.pool()).await {
+        Ok(config) => config,
+        Err(error) => return load_failure(C, "DNS filtering configuration", error),
+    };
+    let mut errors = match blocky::config::validate_config(&config) {
+        Ok(()) => Vec::new(),
+        Err(error) => prefixed(C, vec![error]),
+    };
+    // A restored snapshot must not leave dnsmasq pointing at a disabled Blocky.
+    let dnsmasq = match dnsmasq::load_dnsmasq_state(db.pool()).await {
+        Ok(state) => state,
+        Err(error) => return load_failure(C, "DNS and DHCP configuration", error),
+    };
+    errors.extend(prefixed(
+        C,
+        blocky::config::dnsmasq_link_errors(&dnsmasq.config, config.enabled),
+    ));
+    errors
 }
 
 async fn dnsmasq_errors(db: &Database) -> Vec<String> {

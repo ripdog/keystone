@@ -19,7 +19,7 @@
 mod apply;
 mod config;
 mod db;
-mod leases;
+pub mod leases;
 pub mod routes;
 
 pub use apply::*;

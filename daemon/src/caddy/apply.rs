@@ -834,6 +834,13 @@ mod tests {
                 .any(|line| line.starts_with("d /var/log/caddy ")),
             "tmpfiles must create /var/log/caddy"
         );
+        let caddy_dropin = include_str!("../../../packaging/arch/caddy.service.d/keystone.conf");
+        assert!(
+            caddy_dropin
+                .lines()
+                .any(|line| line == "LogsDirectory=caddy"),
+            "caddy.service must get a writable /var/log/caddy"
+        );
         assert!(unit.lines().any(|line| {
             line.strip_prefix("ConfigurationDirectory=")
                 .is_some_and(|dirs| {

@@ -825,6 +825,15 @@ mod tests {
                 "missing {path} sandbox access"
             );
         }
+        // Optional (-) paths are skipped when missing, so the log directory
+        // must be provisioned by tmpfiles before the sandbox is built.
+        let tmpfiles = include_str!("../../../packaging/arch/tmpfiles.conf");
+        assert!(
+            tmpfiles
+                .lines()
+                .any(|line| line.starts_with("d /var/log/caddy ")),
+            "tmpfiles must create /var/log/caddy"
+        );
         assert!(unit.lines().any(|line| {
             line.strip_prefix("ConfigurationDirectory=")
                 .is_some_and(|dirs| {

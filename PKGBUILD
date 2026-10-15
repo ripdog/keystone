@@ -49,6 +49,7 @@ package() {
   install -Dm644 "${startdir}/packaging/arch/keystone.toml" "${pkgdir}/etc/keystone/keystone.toml"
 
   install -Dm644 "${startdir}/packaging/arch/keystone-banner.sh" "${pkgdir}/etc/profile.d/keystone-banner.sh"
+  install -Dm644 "${startdir}/packaging/arch/keystone-banner.fish" "${pkgdir}/usr/share/fish/vendor_conf.d/keystone-banner.fish"
 
   install -Dm644 "${startdir}/README.md" "${pkgdir}/usr/share/doc/keystone/README.md"
 

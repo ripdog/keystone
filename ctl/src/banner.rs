@@ -5,8 +5,18 @@
 use nix::ifaddrs::getifaddrs;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::IsTerminal;
 use std::net::IpAddr;
 use std::process::{Command, Stdio};
+
+const LOGO: [&str; 6] = [
+    "██╗  ██╗███████╗██╗   ██╗███████╗████████╗ ██████╗ ███╗   ██╗███████╗",
+    "██║ ██╔╝██╔════╝╚██╗ ██╔╝██╔════╝╚══██╔══╝██╔═══██╗████╗  ██║██╔════╝",
+    "█████╔╝ █████╗   ╚████╔╝ ███████╗   ██║   ██║   ██║██╔██╗ ██║█████╗",
+    "██╔═██╗ ██╔══╝    ╚██╔╝  ╚════██║   ██║   ██║   ██║██║╚██╗██║██╔══╝",
+    "██║  ██╗███████╗   ██║   ███████║   ██║   ╚██████╔╝██║ ╚████║███████╗",
+    "╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝   ╚═╝    ╚═════╝ ╚═╝  ╚═══╝╚══════╝",
+];
 
 const SERVICES: &[&str] = &["keystone-daemon", "keystone-web-ui"];
 
@@ -22,7 +32,8 @@ pub struct Facts {
 }
 
 pub fn run() {
-    print!("{}", render(&collect()));
+    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    print!("{}", render(&collect(), color));
 }
 
 fn collect() -> Facts {
@@ -114,13 +125,20 @@ fn format_uptime(secs: u64) -> String {
     }
 }
 
-pub fn render(f: &Facts) -> String {
-    let mut out = String::new();
+pub fn render(f: &Facts, color: bool) -> String {
+    let mut out = String::from("\n");
+    for row in LOGO {
+        if color {
+            out.push_str(&format!("  \x1b[36m{row}\x1b[0m\n"));
+        } else {
+            out.push_str(&format!("  {row}\n"));
+        }
+    }
     out.push_str(&format!(
-        "\n  Keystone {} — {}\n  {}\n\n",
+        "\n  Router manager v{} — {}\n  {}\n\n",
         env!("CARGO_PKG_VERSION"),
         f.hostname,
-        "─".repeat(46)
+        "─".repeat(69)
     ));
     let mem = f.mem_used_pct.map_or("n/a".into(), |p| format!("{p}%"));
     out.push_str(&format!(
@@ -171,8 +189,11 @@ mod tests {
 
     #[test]
     fn renders_host_facts_interfaces_and_service_state() {
-        let out = render(&facts());
+        let out = render(&facts(), false);
         assert!(out.contains("gw"));
+        assert!(out.contains("╚═╝"));
+        assert!(!out.contains('\x1b'));
+        assert!(render(&facts(), true).contains("\x1b[36m"));
         assert!(out.contains("1d 1h"));
         assert!(out.contains("42%"));
         assert!(out.contains("eth0") && out.contains("192.0.2.1"));

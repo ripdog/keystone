@@ -127,14 +127,22 @@ async fn lan_bind_ip(pool: &SqlitePool, selected: &str) -> Result<String> {
     let name = lan_interface_name(pool, selected).await?;
     // networkd configures the address asynchronously, so right after a unified
     // apply it may not be assigned yet.
-    for _ in 0..LAN_IP_WAIT_ATTEMPTS {
-        if let Some(ip) = get_interface_ip(&name) {
-            return Ok(ip);
+    let mut v4 = get_interface_ip(&name);
+    for _ in 1..LAN_IP_WAIT_ATTEMPTS {
+        if v4.is_some() {
+            break;
         }
         tokio::time::sleep(LAN_IP_WAIT_INTERVAL).await;
+        v4 = get_interface_ip(&name);
     }
-    get_interface_ip(&name)
-        .ok_or_else(|| anyhow::anyhow!("No assigned IPv4 address on LAN interface {name}"))
+    let v4 =
+        v4.ok_or_else(|| anyhow::anyhow!("No assigned IPv4 address on LAN interface {name}"))?;
+    // IPv6 is bound too, or the AAAA record for the router would be refused.
+    // The result is a space-separated address list, which is what Caddy's
+    // `bind` directive takes and also changes whenever an address does.
+    let mut addresses = vec![v4];
+    addresses.extend(get_interface_global_ipv6(&name));
+    Ok(addresses.join(" "))
 }
 
 const LAN_IP_WAIT_ATTEMPTS: u32 = 20;
@@ -320,6 +328,44 @@ fn parse_interface_global_ipv4(stdout: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Usable global-scope IPv6 addresses from `ip -6 addr show` output. Addresses
+/// that are tentative, deprecated or temporary (privacy) are not stable
+/// listener addresses.
+fn parse_interface_global_ipv6(stdout: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in stdout.lines() {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.first() != Some(&"inet6")
+            || !words.windows(2).any(|w| w == ["scope", "global"])
+            || words
+                .iter()
+                .any(|w| matches!(*w, "tentative" | "deprecated" | "temporary"))
+        {
+            continue;
+        }
+        if let Some(ip) = words
+            .get(1)
+            .and_then(|cidr| cidr.split('/').next())
+            .and_then(|ip| ip.parse::<std::net::Ipv6Addr>().ok())
+            && !found.contains(&ip.to_string())
+        {
+            found.push(ip.to_string());
+        }
+    }
+    found
+}
+
+/// The LAN interface's usable global IPv6 addresses; empty when it has none.
+fn get_interface_global_ipv6(interface: &str) -> Vec<String> {
+    Command::new("ip")
+        .args(["-6", "addr", "show", "dev", interface, "scope", "global"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| parse_interface_global_ipv6(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or_default()
 }
 
 /// Get the LAN interface's assigned global-scope IPv4 address.
@@ -932,6 +978,22 @@ mod tests {
         assert!(validate_ports(&config_with_ports(80, 2222), Some(2222)).is_err());
         assert!(validate_ports(&config_with_ports(53, 443), None).is_err());
         assert!(validate_ports(&config_with_ports(80, 67), None).is_err());
+    }
+
+    #[test]
+    fn ipv6_bind_addresses_skip_unstable_and_link_local() {
+        let output = "2: lan0: <BROADCAST,UP> mtu 1500\n\
+    inet6 2407:8b00:1168:3200::1/64 scope global\n\
+       valid_lft forever preferred_lft forever\n\
+    inet6 2407:8b00:1168:3200:aaaa::5/64 scope global temporary dynamic\n\
+    inet6 2407:8b00:1168:3201::1/64 scope global deprecated\n\
+    inet6 fd00::1/64 scope global\n\
+    inet6 fe80::1/64 scope link\n";
+        assert_eq!(
+            parse_interface_global_ipv6(output),
+            vec!["2407:8b00:1168:3200::1", "fd00::1"]
+        );
+        assert!(parse_interface_global_ipv6("").is_empty());
     }
 
     #[test]

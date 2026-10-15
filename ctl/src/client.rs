@@ -31,6 +31,30 @@ fn error_text(body: &[u8]) -> String {
         .unwrap_or_else(|| text.trim().to_string())
 }
 
+/// Explain the likely fix for a failed socket connection.
+fn connect_error(socket: &str, e: std::io::Error) -> anyhow::Error {
+    let hint = match e.kind() {
+        std::io::ErrorKind::PermissionDenied => {
+            "\nThe socket is restricted; run with sudo or as a user with access to it."
+        }
+        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::NotFound => {
+            "\nIs the daemon running? Try: systemctl status keystone-daemon"
+        }
+        _ => "",
+    };
+    anyhow::anyhow!("Failed to connect to daemon at {socket}: {e}{hint}")
+}
+
+/// A next step for statuses the user can act on.
+fn status_hint(status: hyper::StatusCode) -> &'static str {
+    match status {
+        hyper::StatusCode::UNAUTHORIZED => {
+            "\nYour session is missing or has expired; run 'keystonectl login'."
+        }
+        _ => "",
+    }
+}
+
 impl DaemonClient {
     pub fn new(socket_path: String) -> Self {
         Self { socket_path }
@@ -73,7 +97,7 @@ impl DaemonClient {
         // Connect to Unix socket
         let stream = UnixStream::connect(&self.socket_path)
             .await
-            .with_context(|| format!("Failed to connect to daemon at {}", self.socket_path))?;
+            .map_err(|e| connect_error(&self.socket_path, e))?;
 
         let io = TokioIo::new(stream);
 
@@ -118,7 +142,12 @@ impl DaemonClient {
 
         if !status.is_success() {
             let error_msg = error_text(&body_bytes);
-            anyhow::bail!("Request failed with status {}: {}", status, error_msg);
+            anyhow::bail!(
+                "Request failed with status {}: {}{}",
+                status,
+                error_msg,
+                status_hint(status)
+            );
         }
 
         Ok(body_bytes.to_vec())
@@ -222,5 +251,19 @@ mod tests {
         let client = DaemonClient::new("/nope".to_string());
         let authed = client.authed("abc123".to_string());
         assert_eq!(authed.token, "abc123");
+    }
+
+    #[test]
+    fn connect_errors_point_at_the_fix() {
+        let denied = connect_error("/s", std::io::ErrorKind::PermissionDenied.into());
+        assert!(denied.to_string().contains("sudo"));
+        let refused = connect_error("/s", std::io::ErrorKind::ConnectionRefused.into());
+        assert!(refused.to_string().contains("systemctl status"));
+    }
+
+    #[test]
+    fn unauthorized_suggests_login() {
+        assert!(status_hint(hyper::StatusCode::UNAUTHORIZED).contains("login"));
+        assert!(status_hint(hyper::StatusCode::BAD_REQUEST).is_empty());
     }
 }

@@ -52,6 +52,12 @@ package() {
   install -Dm644 "${startdir}/packaging/arch/keystone-banner.sh" "${pkgdir}/etc/profile.d/keystone-banner.sh"
   install -Dm644 "${startdir}/packaging/arch/keystone-banner.fish" "${pkgdir}/usr/share/fish/vendor_conf.d/keystone-banner.fish"
 
+  # Shell completions come from the CLI definition, so they cannot drift.
+  local ctl="${startdir}/pkg/target/release/keystonectl"
+  "${ctl}" completions fish | install -Dm644 /dev/stdin "${pkgdir}/usr/share/fish/vendor_completions.d/keystonectl.fish"
+  "${ctl}" completions bash | install -Dm644 /dev/stdin "${pkgdir}/usr/share/bash-completion/completions/keystonectl"
+  "${ctl}" completions zsh | install -Dm644 /dev/stdin "${pkgdir}/usr/share/zsh/site-functions/_keystonectl"
+
   install -Dm644 "${startdir}/README.md" "${pkgdir}/usr/share/doc/keystone/README.md"
 
   install -Dm644 "${startdir}/web-ui/dist/index.html" "${pkgdir}/usr/share/keystone/dist/index.html"

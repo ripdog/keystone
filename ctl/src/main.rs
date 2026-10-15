@@ -6,7 +6,7 @@
 #![allow(clippy::large_enum_variant)]
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 use keystone_core::api::{DeleteUser, Login, SaveManagedInterfaces, SaveUser};
 use keystone_core::{
     ApplyAllResponse, CompleteSetupResponse, DashboardResponse, DeleteUserRequest,
@@ -19,6 +19,7 @@ mod banner;
 mod bootstrap;
 mod client;
 mod commands;
+mod completion;
 mod handlers;
 mod io;
 mod pretty;
@@ -142,9 +143,43 @@ pub fn save_interfaces(response: &SaveManagedInterfacesResponse) {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
+fn main() -> Result<()> {
+    // When a shell is asking for completions, answer and exit. This must run
+    // outside the async runtime: completers perform their own blocking lookups.
+    clap_complete::CompleteEnv::with_factory(Cli::command).complete();
+
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("Failed to start async runtime")?
+        .block_on(run())
+}
+
+async fn run() -> Result<()> {
+    let matches = match friendly(Cli::command()).try_get_matches() {
+        Ok(matches) => matches,
+        Err(e) => {
+            let missing = e.kind() == clap::error::ErrorKind::MissingRequiredArgument;
+            if missing {
+                // Show the full option list of the command that was being run,
+                // not just the one-line error.
+                let _ = e.print();
+                let mut help = commands::subcommand_for_args(
+                    friendly(Cli::command()),
+                    std::env::args().skip(1),
+                );
+                eprintln!("{}", help.render_help());
+                std::process::exit(2);
+            }
+            e.exit()
+        }
+    };
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+
+    if let Some(Commands::Completions { shell }) = &cli.command {
+        completion::write_registration(*shell)?;
+        return Ok(());
+    }
 
     // Bootstrapping operates on the local database, not the daemon socket.
     if let Some(Commands::BootstrapAdmin { username }) = &cli.command {
@@ -188,7 +223,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        Some(Commands::BootstrapAdmin { .. } | Commands::Banner) => {
+        Some(Commands::BootstrapAdmin { .. } | Commands::Banner | Commands::Completions { .. }) => {
             unreachable!("handled before socket connection")
         }
 

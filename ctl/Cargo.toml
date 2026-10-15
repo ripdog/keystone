@@ -33,6 +33,7 @@ nix = { version = "0.30.1", features = ["user", "net"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
+clap_complete = { version = "4.5", features = ["unstable-dynamic"] }
 rpassword = "7.3"
 inquire = "0.9"
 console = "0.16"

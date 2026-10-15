@@ -14,7 +14,7 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub json: bool,
 
-    /// Path to Unix socket (default: /run/keystone/keystone.sock)
+    /// Path to the daemon Unix socket
     #[arg(short, long, global = true, default_value = SOCKET_PATH)]
     pub socket: String,
 
@@ -24,6 +24,12 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Print a shell completion script (e.g. `keystonectl completions fish`)
+    Completions {
+        /// Shell to generate completions for
+        shell: clap_complete::Shell,
+    },
+
     /// Check daemon health
     Health,
 
@@ -435,7 +441,7 @@ pub enum ZonesCommands {
         interfaces: Option<String>,
 
         /// Default input policy (accept or drop)
-        #[arg(long, default_value = "drop")]
+        #[arg(long, default_value = "drop", value_parser = ["accept", "drop"])]
         input_policy: String,
 
         /// Mark this as an Internet-facing zone
@@ -475,15 +481,15 @@ pub enum ZoneForwardsCommands {
         token: Option<String>,
 
         /// Source zone name
-        #[arg(long)]
+        #[arg(long, add = crate::completion::zone_names())]
         source: String,
 
         /// Destination zone name
-        #[arg(long)]
+        #[arg(long, add = crate::completion::zone_names())]
         dest: String,
 
         /// Policy (accept, drop, or reject)
-        #[arg(long, default_value = "drop")]
+        #[arg(long, default_value = "drop", value_parser = ["accept", "drop", "reject"])]
         policy: String,
 
         /// Whether the policy is enabled
@@ -527,11 +533,11 @@ pub enum PortForwardsCommands {
         description: Option<String>,
 
         /// Protocol (tcp, udp, or tcp+udp)
-        #[arg(long, default_value = "tcp")]
+        #[arg(long, default_value = "tcp", value_parser = ["tcp", "udp", "tcp+udp"])]
         protocol: String,
 
         /// Source zone (optional)
-        #[arg(long)]
+        #[arg(long, add = crate::completion::zone_names())]
         source_zone: Option<String>,
 
         /// External port (or start of range)
@@ -601,11 +607,11 @@ pub enum InputRulesCommands {
         description: Option<String>,
 
         /// Source zone (optional)
-        #[arg(long)]
+        #[arg(long, add = crate::completion::zone_names())]
         zone: Option<String>,
 
         /// Protocol (any, tcp, udp, icmp, icmpv6)
-        #[arg(long)]
+        #[arg(long, value_parser = ["any", "tcp", "udp", "icmp", "icmpv6"])]
         protocol: Option<String>,
 
         /// Port (or start of range)
@@ -621,7 +627,7 @@ pub enum InputRulesCommands {
         source_ip: Option<String>,
 
         /// Action (accept, drop, or reject)
-        #[arg(long, default_value = "accept")]
+        #[arg(long, default_value = "accept", value_parser = ["accept", "drop", "reject"])]
         action: String,
 
         /// Enable logging
@@ -681,15 +687,15 @@ pub enum ForwardRulesCommands {
         description: Option<String>,
 
         /// Source zone (optional)
-        #[arg(long)]
+        #[arg(long, add = crate::completion::zone_names())]
         source_zone: Option<String>,
 
         /// Destination zone (optional)
-        #[arg(long)]
+        #[arg(long, add = crate::completion::zone_names())]
         dest_zone: Option<String>,
 
         /// Protocol (any, tcp, udp, icmp, icmpv6)
-        #[arg(long)]
+        #[arg(long, value_parser = ["any", "tcp", "udp", "icmp", "icmpv6"])]
         protocol: Option<String>,
 
         /// Destination port (or start of range)
@@ -714,7 +720,7 @@ pub enum ForwardRulesCommands {
         dest_ipv6_suffix: Option<String>,
 
         /// Action (accept, drop, or reject)
-        #[arg(long, default_value = "accept")]
+        #[arg(long, default_value = "accept", value_parser = ["accept", "drop", "reject"])]
         action: String,
 
         /// Enable logging
@@ -1137,6 +1143,115 @@ pub enum AddressOverrideCommands {
 }
 
 #[cfg(test)]
+mod usability_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn bare_commands_that_need_input_show_help() {
+        let cmd = friendly(Cli::command());
+        let err = cmd
+            .clone()
+            .try_get_matches_from(["keystonectl", "firewall"])
+            .unwrap_err();
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+        let err = cmd
+            .try_get_matches_from(["keystonectl", "users", "delete"])
+            .unwrap_err();
+        assert_eq!(
+            err.kind(),
+            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        );
+    }
+
+    #[test]
+    fn bare_root_and_argless_commands_still_run() {
+        let cmd = friendly(Cli::command());
+        assert!(cmd.clone().try_get_matches_from(["keystonectl"]).is_ok());
+        assert!(cmd.try_get_matches_from(["keystonectl", "health"]).is_ok());
+    }
+
+    #[test]
+    fn fixed_choice_arguments_are_validated() {
+        let err = Cli::command()
+            .try_get_matches_from([
+                "keystonectl",
+                "firewall",
+                "port-forwards",
+                "add",
+                "--name",
+                "x",
+                "--external-port",
+                "80",
+                "--dest-ip",
+                "10.0.0.2",
+                "--protocol",
+                "foo",
+            ])
+            .unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::InvalidValue);
+    }
+
+    #[test]
+    fn contextual_help_names_the_full_command() {
+        let mut cmd = subcommand_for_args(
+            friendly(Cli::command()),
+            ["firewall", "zones", "add", "-d", "x"]
+                .map(String::from)
+                .into_iter(),
+        );
+        assert!(
+            cmd.render_usage()
+                .to_string()
+                .contains("keystonectl firewall zones add")
+        );
+    }
+
+    fn complete(args: &[&str]) -> Vec<String> {
+        let mut cmd = Cli::command();
+        let args: Vec<std::ffi::OsString> = args.iter().map(Into::into).collect();
+        let index = args.len() - 1;
+        clap_complete::engine::complete(&mut cmd, args, index, None)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.get_value().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn deeply_nested_commands_complete() {
+        let values = complete(&[
+            "keystonectl",
+            "firewall",
+            "port-forwards",
+            "add",
+            "--protocol",
+            "",
+        ]);
+        assert_eq!(values, ["tcp", "udp", "tcp+udp"]);
+        let flags = complete(&["keystonectl", "firewall", "zones", "add", "--"]);
+        assert!(flags.contains(&"--name".to_string()));
+    }
+
+    #[test]
+    fn registration_scripts_exist_for_common_shells() {
+        for shell in [
+            clap_complete::Shell::Fish,
+            clap_complete::Shell::Bash,
+            clap_complete::Shell::Zsh,
+        ] {
+            let mut out = Vec::new();
+            clap_complete::generate(shell, &mut Cli::command(), "keystonectl", &mut out);
+            let text = String::from_utf8(out).unwrap();
+            assert!(text.contains("port-forwards"), "{shell:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod confirm_tests {
     use super::*;
     use clap::Parser;
@@ -1157,4 +1272,42 @@ mod confirm_tests {
             Cli::try_parse_from(["keystonectl", "firewall", "confirm", "--token", "t"]).is_ok()
         );
     }
+}
+
+/// Make every command that needs arguments or a subcommand print its help
+/// when invoked bare, rather than a terse error. The root is left alone: bare
+/// `keystonectl` shows the dashboard.
+pub fn friendly(cmd: clap::Command) -> clap::Command {
+    fn walk(cmd: clap::Command) -> clap::Command {
+        let needs_input = cmd.has_subcommands()
+            || cmd
+                .get_arguments()
+                .any(|a| a.is_required_set() && !a.is_global_set());
+        let cmd = cmd.mut_subcommands(walk);
+        if needs_input {
+            cmd.arg_required_else_help(true)
+        } else {
+            cmd
+        }
+    }
+    cmd.mut_subcommands(walk)
+}
+
+/// The deepest subcommand named by `args`, for rendering contextual help.
+pub fn subcommand_for_args(
+    mut cmd: clap::Command,
+    args: impl Iterator<Item = String>,
+) -> clap::Command {
+    let mut path = vec!["keystonectl".to_string()];
+    for arg in args {
+        match cmd.find_subcommand(&arg) {
+            Some(sub) => {
+                path.push(sub.get_name().to_string());
+                cmd = sub.clone();
+            }
+            None if arg.starts_with('-') => {}
+            None => break,
+        }
+    }
+    cmd.bin_name(path.join(" "))
 }

@@ -741,7 +741,7 @@ impl<'a> FirewallDb<'a> {
         let rows = sqlx::query(
             r#"SELECT id, name, description, enabled, protocol, source_zone_id,
                       external_port_start, external_port_end, source_ip, source_group_id,
-                      dest_ip, dest_port
+                      dest_ip, dest_port, dest_ipv6_suffix
                FROM firewall_port_forwards
                WHERE (?1 IS NULL OR id = ?1)
                ORDER BY name"#,
@@ -776,6 +776,7 @@ impl<'a> FirewallDb<'a> {
                     dest_port: row
                         .try_get::<Option<i64>, _>("dest_port")?
                         .map(|p| p as u16),
+                    dest_ipv6_suffix: row.try_get("dest_ipv6_suffix")?,
                 })
             })
             .collect()
@@ -786,8 +787,8 @@ impl<'a> FirewallDb<'a> {
         if pf.name.is_empty() {
             anyhow::bail!("Port forward name is required");
         }
-        if pf.dest_ip.is_empty() {
-            anyhow::bail!("Destination IP is required");
+        if pf.dest_ip.is_empty() && pf.dest_ipv6_suffix.is_none() {
+            anyhow::bail!("Destination IP or IPv6 suffix is required");
         }
         if pf.external_port_start == 0 {
             anyhow::bail!("External port is required");
@@ -814,6 +815,7 @@ impl<'a> FirewallDb<'a> {
                    name = ?, description = ?, enabled = ?, protocol = ?,
                    source_zone_id = ?, external_port_start = ?, external_port_end = ?,
                    source_ip = ?, source_group_id = ?, dest_ip = ?, dest_port = ?,
+                   dest_ipv6_suffix = ?,
                    updated_at = strftime('%s', 'now')
                    WHERE id = ?"#,
             )
@@ -828,6 +830,7 @@ impl<'a> FirewallDb<'a> {
             .bind(source_group_id)
             .bind(&pf.dest_ip)
             .bind(pf.dest_port.map(|p| p as i64))
+            .bind(&pf.dest_ipv6_suffix)
             .bind(id)
             .execute(self.pool)
             .await
@@ -839,8 +842,8 @@ impl<'a> FirewallDb<'a> {
                 r#"INSERT INTO firewall_port_forwards
                    (name, description, enabled, protocol, source_zone_id,
                     external_port_start, external_port_end, source_ip, source_group_id,
-                    dest_ip, dest_port, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+                    dest_ip, dest_port, dest_ipv6_suffix, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
             )
             .bind(&pf.name)
             .bind(&pf.description)
@@ -853,6 +856,7 @@ impl<'a> FirewallDb<'a> {
             .bind(source_group_id)
             .bind(&pf.dest_ip)
             .bind(pf.dest_port.map(|p| p as i64))
+            .bind(&pf.dest_ipv6_suffix)
             .execute(self.pool)
             .await
             .context("Failed to insert port forward")?;
@@ -1054,7 +1058,7 @@ impl<'a> FirewallDb<'a> {
         let rows = sqlx::query(
             r#"SELECT id, name, description, enabled, position, source_zone_id, dest_zone_id,
                       protocol, dest_port_start, dest_port_end, source_ip, dest_ip,
-                      source_group_id, dest_group_id, dest_port_group_id,
+                      source_group_id, dest_group_id, dest_port_group_id, dest_ipv6_suffix,
                       action, log_enabled, log_prefix, rate_limit
                FROM firewall_forward_rules
                WHERE (?1 IS NULL OR id = ?1)
@@ -1097,6 +1101,7 @@ impl<'a> FirewallDb<'a> {
                     dest_ip: row.try_get("dest_ip")?,
                     source_group: source_group_id.and_then(|id| address_groups.get(&id).cloned()),
                     dest_group: dest_group_id.and_then(|id| address_groups.get(&id).cloned()),
+                    dest_ipv6_suffix: row.try_get("dest_ipv6_suffix")?,
                     dest_port_group: dest_port_group_id
                         .and_then(|id| port_groups.get(&id).cloned()),
                     action: action.parse().unwrap_or(FirewallAction::Accept),
@@ -1152,6 +1157,7 @@ impl<'a> FirewallDb<'a> {
                    source_zone_id = ?, dest_zone_id = ?, protocol = ?,
                    dest_port_start = ?, dest_port_end = ?, source_ip = ?, dest_ip = ?,
                    source_group_id = ?, dest_group_id = ?, dest_port_group_id = ?,
+                   dest_ipv6_suffix = ?,
                    action = ?, log_enabled = ?, log_prefix = ?, rate_limit = ?,
                    updated_at = strftime('%s', 'now')
                    WHERE id = ?"#,
@@ -1170,6 +1176,7 @@ impl<'a> FirewallDb<'a> {
             .bind(source_group_id)
             .bind(dest_group_id)
             .bind(dest_port_group_id)
+            .bind(&rule.dest_ipv6_suffix)
             .bind(rule.action.to_string())
             .bind(rule.log_enabled)
             .bind(&rule.log_prefix)
@@ -1185,9 +1192,9 @@ impl<'a> FirewallDb<'a> {
                 r#"INSERT INTO firewall_forward_rules
                    (name, description, enabled, position, source_zone_id, dest_zone_id,
                     protocol, dest_port_start, dest_port_end, source_ip, dest_ip,
-                    source_group_id, dest_group_id, dest_port_group_id,
+                    source_group_id, dest_group_id, dest_port_group_id, dest_ipv6_suffix,
                     action, log_enabled, log_prefix, rate_limit, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))"#,
             )
             .bind(&rule.name)
             .bind(&rule.description)
@@ -1203,6 +1210,7 @@ impl<'a> FirewallDb<'a> {
             .bind(source_group_id)
             .bind(dest_group_id)
             .bind(dest_port_group_id)
+            .bind(&rule.dest_ipv6_suffix)
             .bind(rule.action.to_string())
             .bind(rule.log_enabled)
             .bind(&rule.log_prefix)

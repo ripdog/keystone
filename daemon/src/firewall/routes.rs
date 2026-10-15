@@ -625,10 +625,10 @@ async fn save_port_forward(
         }));
     }
 
-    if pf.dest_ip.is_empty() {
+    if pf.dest_ip.is_empty() && pf.dest_ipv6_suffix.is_none() {
         return Ok(Json(SavePortForwardResponse {
             success: false,
-            message: "Destination IP is required".to_string(),
+            message: "Destination IP or IPv6 suffix is required".to_string(),
             port_forward_id: None,
         }));
     }

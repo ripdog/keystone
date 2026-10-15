@@ -8,8 +8,9 @@ use crate::firewall::groups::{
     Family, GroupIndex, family_variants, literal_family, side_families, validate_address_group,
     validate_group_names, validate_port_group,
 };
-use crate::firewall::rules::parse_rate_limit;
+use crate::firewall::rules::{forward_dest_families, parse_rate_limit};
 use ipnet::IpNet;
+use keystone_core::validation::ipv6_suffix;
 use keystone_core::{
     FirewallConfig, FirewallZone, ForwardRule, InputRule, PortForward, RuleProtocol,
     ZoneForwardPolicy,
@@ -232,6 +233,23 @@ pub fn validate_forward_rule(rule: &ForwardRule, groups: &GroupIndex) -> Vec<Str
         ("destination group", rule.dest_group.is_some()),
         &mut errors,
     );
+    if let Some(suffix) = rule.dest_ipv6_suffix.as_deref() {
+        if let Err(error) = ipv6_suffix(suffix) {
+            errors.push(format!("{what}: destination IPv6 suffix: {error}"));
+        }
+        check_one_of(
+            &what,
+            ("destination IPv6 suffix", true),
+            ("destination IP", rule.dest_ip.is_some()),
+            &mut errors,
+        );
+        check_one_of(
+            &what,
+            ("destination IPv6 suffix", true),
+            ("destination group", rule.dest_group.is_some()),
+            &mut errors,
+        );
+    }
     check_one_of(
         &what,
         (
@@ -277,7 +295,7 @@ pub fn validate_forward_rule(rule: &ForwardRule, groups: &GroupIndex) -> Vec<Str
         rule.source_group.as_deref(),
         groups,
     );
-    let dest = side_families(rule.dest_ip.as_deref(), rule.dest_group.as_deref(), groups);
+    let dest = forward_dest_families(rule, groups);
     if let (Ok(source), Ok(dest)) = (source, dest)
         && family_variants(&[source, dest]).is_empty()
     {
@@ -301,13 +319,36 @@ pub fn validate_port_forward(pf: &PortForward, groups: &GroupIndex) -> Vec<Strin
         ("source group", pf.source_group.is_some()),
         &mut errors,
     );
-    // DNAT is IPv4 only, so a source restriction must be able to match IPv4.
-    if let Some(source) = pf.source_ip.as_deref()
-        && literal_family(source) == Some(Family::V6)
-    {
+    let has_v4 = !pf.dest_ip.is_empty();
+    let has_v6 = pf.dest_ipv6_suffix.is_some();
+    if !has_v4 && !has_v6 {
         errors.push(format!(
-            "{what}: source IP {source:?} must be IPv4 (port forwards are IPv4 only)"
+            "{what}: needs a destination IPv4 address or an IPv6 suffix"
         ));
+    }
+    if has_v4 && pf.dest_ip.parse::<Ipv4Addr>().is_err() {
+        errors.push(format!(
+            "{what}: destination IP \"{}\" is not a valid IPv4 address (IPv6 hosts are targeted by suffix)",
+            pf.dest_ip
+        ));
+    }
+    if let Some(suffix) = pf.dest_ipv6_suffix.as_deref()
+        && let Err(error) = ipv6_suffix(suffix)
+    {
+        errors.push(format!("{what}: destination IPv6 suffix: {error}"));
+    }
+    // The source restriction must be able to match each family the forward targets.
+    for (enabled, family, label) in [(has_v4, Family::V4, "IPv4"), (has_v6, Family::V6, "IPv6")] {
+        if !enabled {
+            continue;
+        }
+        if let Some(source) = pf.source_ip.as_deref()
+            && literal_family(source).is_some_and(|actual| actual != family)
+        {
+            errors.push(format!(
+                "{what}: source IP {source:?} must be {label}, matching the destination"
+            ));
+        }
     }
     check_address_group_ref(
         &what,
@@ -317,19 +358,16 @@ pub fn validate_port_forward(pf: &PortForward, groups: &GroupIndex) -> Vec<Strin
         &mut errors,
     );
     if let Some(name) = pf.source_group.as_deref()
-        && groups
-            .families(name)
-            .is_some_and(|families| !families.contains(&Family::V4))
+        && let Some(families) = groups.families(name)
     {
-        errors.push(format!(
-            "{what}: source group '{name}' has no IPv4 entries, and port forwards are IPv4 only"
-        ));
-    }
-    if pf.dest_ip.parse::<Ipv4Addr>().is_err() {
-        errors.push(format!(
-            "{what}: destination IP \"{}\" is not a valid IPv4 address (IPv6 DNAT is not supported)",
-            pf.dest_ip
-        ));
+        for (enabled, family, label) in [(has_v4, Family::V4, "IPv4"), (has_v6, Family::V6, "IPv6")]
+        {
+            if enabled && !families.contains(&family) {
+                errors.push(format!(
+                    "{what}: source group '{name}' has no {label} entries, but the destination is {label}"
+                ));
+            }
+        }
     }
     if !is_port_protocol(Some(&pf.protocol)) {
         errors.push(format!("{what}: protocol must be TCP, UDP or TCP+UDP"));
@@ -974,6 +1012,61 @@ mod group_validation_tests {
         assert!(
             errors.iter().any(|e| e.contains("'gone' does not exist")),
             "{errors:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod suffix_tests {
+    use super::*;
+
+    fn rule(suffix: &str) -> ForwardRule {
+        ForwardRule {
+            name: "v6".into(),
+            dest_ipv6_suffix: Some(suffix.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn forward_rule_suffix_must_be_a_low_64_bit_suffix() {
+        let groups = GroupIndex::default();
+        assert!(validate_forward_rule(&rule("::1234"), &groups).is_empty());
+        assert!(!validate_forward_rule(&rule("2001:db8::1"), &groups).is_empty());
+        assert!(!validate_forward_rule(&rule("not-an-address"), &groups).is_empty());
+    }
+
+    #[test]
+    fn forward_rule_suffix_excludes_other_destinations() {
+        let groups = GroupIndex::default();
+        let mut with_ip = rule("::1234");
+        with_ip.dest_ip = Some("192.168.1.2".into());
+        assert!(!validate_forward_rule(&with_ip, &groups).is_empty());
+        let mut v6_source = rule("::1234");
+        v6_source.source_ip = Some("10.0.0.1".into());
+        assert!(
+            !validate_forward_rule(&v6_source, &groups).is_empty(),
+            "an IPv4 source can never meet an IPv6 suffix"
+        );
+    }
+
+    #[test]
+    fn port_forward_needs_a_target_and_accepts_a_suffix_alone() {
+        let groups = GroupIndex::default();
+        let mut pf = PortForward {
+            name: "pf".into(),
+            external_port_start: 80,
+            ..Default::default()
+        };
+        assert!(!validate_port_forward(&pf, &groups).is_empty());
+        pf.dest_ipv6_suffix = Some("::1234".into());
+        assert!(validate_port_forward(&pf, &groups).is_empty());
+        pf.source_ip = Some("2001:db8::/32".into());
+        assert!(validate_port_forward(&pf, &groups).is_empty());
+        pf.dest_ip = "192.168.1.2".into();
+        assert!(
+            !validate_port_forward(&pf, &groups).is_empty(),
+            "an IPv6 source cannot match the IPv4 target"
         );
     }
 }

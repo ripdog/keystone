@@ -300,13 +300,20 @@ pub fn port_forwards(response: &PortForwardsResponse) {
             RuleProtocol::Any => "any",
         };
         let enabled = if pf.enabled { "yes" } else { "no" };
+        let mut targets = Vec::new();
+        if !pf.dest_ip.is_empty() {
+            targets.push(format!("{}:{}", pf.dest_ip, dest_port));
+        }
+        if let Some(suffix) = &pf.dest_ipv6_suffix {
+            targets.push(format!("[{suffix}]:{ext_port}"));
+        }
         println!(
             "{:<6} {:<20} {:<8} {:<12} {:<18} {:<8}",
             id,
             pf.name,
             proto,
             ext_port,
-            format!("{}:{}", pf.dest_ip, dest_port),
+            targets.join(" "),
             enabled
         );
     }

@@ -51,7 +51,35 @@ pub(crate) fn sample_configs() -> Vec<(&'static str, FirewallConfig)> {
         ("rich_quiet", rich_quiet()),
         ("rich_upnp", rich_upnp()),
         ("rich_dns", rich_dns()),
+        ("rich_ipv6_suffix", rich_ipv6_suffix()),
     ]
+}
+
+/// `rich` plus a forward rule and a port forward that target IPv6 hosts by
+/// interface-identifier suffix instead of by address.
+pub(crate) fn rich_ipv6_suffix() -> FirewallConfig {
+    let mut config = rich();
+    config.forward_rules.push(ForwardRule {
+        id: Some(900),
+        name: "NAS over IPv6".into(),
+        source_zone: Some("wan".into()),
+        protocol: Some(RuleProtocol::Tcp),
+        dest_port_start: Some(443),
+        dest_ipv6_suffix: Some("::1234".into()),
+        ..Default::default()
+    });
+    config.port_forwards.push(PortForward {
+        id: Some(901),
+        name: "Game server v6".into(),
+        source_zone: Some("wan".into()),
+        protocol: RuleProtocol::TcpUdp,
+        external_port_start: 27015,
+        external_port_end: Some(27020),
+        dest_ip: "192.168.1.60".into(),
+        dest_ipv6_suffix: Some("::a:b:c:d".into()),
+        ..Default::default()
+    });
+    config
 }
 
 /// `rich` with LAN DNS forced to the router and DNS-over-TLS rejected. The

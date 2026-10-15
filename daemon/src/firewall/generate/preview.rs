@@ -8,7 +8,9 @@ use crate::firewall::generate::{FILTER_TABLE, NAT_TABLE};
 use crate::firewall::groups::{
     Family, address_set_name, normalized_networks, normalized_ports, port_set_name,
 };
-use crate::firewall::rules::{Addr, ChainSpec, Cond, Ports, RuleSpec, Side, Verdict, build};
+use crate::firewall::rules::{
+    Addr, ChainSpec, Cond, IPV6_SUFFIX_MASK, Ports, RuleSpec, Side, Verdict, build,
+};
 use keystone_core::FirewallConfig;
 use std::net::IpAddr;
 
@@ -90,6 +92,11 @@ fn cond_text(cond: &Cond) -> String {
         Cond::Nfproto(Family::V6) => "meta nfproto ipv6".to_string(),
         Cond::Addr { side, addr } => address_text(*side, addr, ""),
         Cond::NotAddr { side, addr } => address_text(*side, addr, "!= "),
+        Cond::Ipv6Suffix { side, suffix } => format!(
+            "ip6 {} & {} == {suffix}",
+            side_field(*side, "saddr", "daddr"),
+            IPV6_SUFFIX_MASK
+        ),
         Cond::L4(protocol) => format!("meta l4proto {protocol}"),
         Cond::Port {
             side,

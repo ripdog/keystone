@@ -520,6 +520,19 @@ fn evaluate_cond(cond: &Cond, ctx: &Context, flow: &Flow) -> Result<String, Stri
                 Ok(format!("{text} is not in {}", addr_name(addr)))
             }
         }
+        Cond::Ipv6Suffix { side, suffix } => {
+            let (field, address) = match side {
+                Side::Source => ("source", ctx.packet.source),
+                Side::Destination => ("destination", flow.destination),
+            };
+            match address {
+                IpAddr::V6(v6) if v6.to_bits() & u128::from(u64::MAX) == suffix.to_bits() => {
+                    Ok(format!("{field} {address} ends in {suffix}"))
+                }
+                IpAddr::V6(_) => Err(format!("{field} {address} does not end in {suffix}")),
+                IpAddr::V4(_) => Err(format!("{field} {address} is not IPv6")),
+            }
+        }
         Cond::L4(protocol) => match packet.protocol.l4() {
             Some(actual) if actual == *protocol => Ok(format!("protocol {protocol}")),
             Some(actual) => Err(format!("protocol is {actual}, not {protocol}")),

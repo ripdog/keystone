@@ -224,6 +224,7 @@ mod tests {
                 source_group: None,
                 dest_ip: "192.168.1.100".to_string(),
                 dest_port: Some(80),
+                dest_ipv6_suffix: None,
             }],
             input_rules: vec![InputRule {
                 id: Some(1),
@@ -702,6 +703,56 @@ mod tests {
         let rules = rules_commented(&config, "ks:portfwd:3 ");
         assert_eq!(rules.len(), 1);
         assert!(rules[0].to_string().contains("\"@lan_hosts_v4\""));
+    }
+
+    #[test]
+    fn forward_rule_with_suffix_masks_the_ipv6_destination() {
+        let config = crate::firewall::fixtures::rich_ipv6_suffix();
+        let rules = rules_commented(&config, "ks:forward:900");
+        assert_eq!(rules.len(), 1, "{rules:?}");
+        let text = rules[0].to_string();
+        // `ip6 daddr & ::ffff:ffff:ffff:ffff == ::1234`, and nothing IPv4.
+        assert!(text.contains("\"&\""), "{text}");
+        assert!(text.contains("::ffff:ffff:ffff:ffff"), "{text}");
+        assert!(text.contains("::1234"), "{text}");
+        assert!(text.contains("\"ip6\""), "{text}");
+        assert!(!text.contains("\"ip\""), "{text}");
+    }
+
+    #[test]
+    fn port_forward_suffix_adds_an_untranslated_ipv6_accept() {
+        let config = crate::firewall::fixtures::rich_ipv6_suffix();
+        let accepts = rules_commented(&config, "ks:portfwd-accept:901");
+        let v6: Vec<String> = accepts
+            .iter()
+            .map(|rule| rule.to_string())
+            .filter(|text| text.contains("IPv6 accept"))
+            .collect();
+        assert_eq!(v6.len(), 2, "one per protocol: {accepts:?}");
+        for text in &v6 {
+            assert!(text.contains("::a:b:c:d"), "{text}");
+            // The external range, not a translated port.
+            assert!(text.contains("27015") && text.contains("27020"), "{text}");
+        }
+        // The IPv4 DNAT is still generated alongside.
+        assert!(!rules_commented(&config, "ks:portfwd:901").is_empty());
+    }
+
+    #[test]
+    fn ipv6_only_port_forward_has_no_dnat() {
+        let mut config = crate::firewall::fixtures::rich_ipv6_suffix();
+        config.port_forwards.retain(|pf| pf.id == Some(901));
+        config.port_forwards[0].dest_ip.clear();
+        assert!(rules_commented(&config, "ks:portfwd:901").is_empty());
+        assert!(rules_commented(&config, "ks:portfwd-hairpin:901").is_empty());
+        assert!(!rules_commented(&config, "ks:portfwd-accept:901").is_empty());
+    }
+
+    #[test]
+    fn invalid_suffix_is_not_emitted() {
+        let mut config = crate::firewall::fixtures::rich_ipv6_suffix();
+        config.forward_rules.last_mut().unwrap().dest_ipv6_suffix = Some("2001:db8::1".into());
+        assert!(rules_commented(&config, "ks:forward:900").is_empty());
     }
 
     #[test]

@@ -140,6 +140,7 @@ pub async fn handle_firewall_command(
                 external_port_end,
                 source_ip,
                 dest_ip,
+                dest_ipv6_suffix,
                 dest_port,
                 enabled,
             } => {
@@ -158,8 +159,9 @@ pub async fn handle_firewall_command(
                     external_port_end,
                     source_ip,
                     source_group: None,
-                    dest_ip,
+                    dest_ip: dest_ip.unwrap_or_default(),
                     dest_port,
+                    dest_ipv6_suffix,
                 };
 
                 let request = SavePortForwardRequest { port_forward };
@@ -272,6 +274,7 @@ pub async fn handle_firewall_command(
                 dest_port_end,
                 source_ip,
                 dest_ip,
+                dest_ipv6_suffix,
                 action,
                 log,
                 log_prefix,
@@ -302,6 +305,7 @@ pub async fn handle_firewall_command(
                     dest_ip,
                     source_group: None,
                     dest_group: None,
+                    dest_ipv6_suffix,
                     dest_port_group: None,
                     action,
                     log_enabled: log,

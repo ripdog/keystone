@@ -528,9 +528,15 @@ pub enum PortForwardsCommands {
         #[arg(long)]
         source_ip: Option<String>,
 
-        /// Destination IP
+        /// Destination IPv4 address (required unless --dest-ipv6-suffix is given)
+        #[arg(long, required_unless_present = "dest_ipv6_suffix")]
+        dest_ip: Option<String>,
+
+        /// Destination IPv6 interface-identifier suffix such as ::1234. Accepts
+        /// IPv6 traffic for the external ports to any address ending in the
+        /// suffix, so it survives ISP prefix renumbering (IPv6 is not translated)
         #[arg(long)]
-        dest_ip: String,
+        dest_ipv6_suffix: Option<String>,
 
         /// Destination port (optional, defaults to external port)
         #[arg(long)]
@@ -681,8 +687,13 @@ pub enum ForwardRulesCommands {
         source_ip: Option<String>,
 
         /// Destination IP/CIDR (optional)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "dest_ipv6_suffix")]
         dest_ip: Option<String>,
+
+        /// Destination IPv6 interface-identifier suffix such as ::1234, matching
+        /// any prefix (optional)
+        #[arg(long)]
+        dest_ipv6_suffix: Option<String>,
 
         /// Action (accept, drop, or reject)
         #[arg(long, default_value = "accept")]

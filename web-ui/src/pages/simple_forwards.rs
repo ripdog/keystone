@@ -37,6 +37,7 @@ fn raw_fields(pf: &PortForward) -> Vec<String> {
         pf.protocol.to_string(),
         pf.external_port_start.to_string(),
         pf.dest_ip.clone(),
+        pf.dest_ipv6_suffix.clone().unwrap_or_default(),
         pf.source_zone.clone().unwrap_or_default(),
         pf.source_ip.clone().unwrap_or_default(),
         pf.source_group.clone().unwrap_or_default(),
@@ -470,10 +471,17 @@ pub(super) fn SimpleForwardsTab(
                                             Some(end) if end > pf.external_port_start => format!("{}-{}", pf.external_port_start, end),
                                             _ => pf.external_port_start.to_string(),
                                         };
-                                        let destination = match pf.dest_port {
-                                            Some(port) => format!("{}:{}", pf.dest_ip, port),
-                                            None => pf.dest_ip.clone(),
+                                        let mut destination = match (pf.dest_ip.is_empty(), pf.dest_port) {
+                                            (true, _) => String::new(),
+                                            (false, Some(port)) => format!("{}:{}", pf.dest_ip, port),
+                                            (false, None) => pf.dest_ip.clone(),
                                         };
+                                        if let Some(suffix) = &pf.dest_ipv6_suffix {
+                                            if !destination.is_empty() {
+                                                destination.push_str(", ");
+                                            }
+                                            destination.push_str(&format!("*{suffix}"));
+                                        }
                                         view! {
                                             <tr class="border-b border-gray-700 text-gray-200">
                                                 <td class="px-2 py-2">{pf.name.clone()}</td>

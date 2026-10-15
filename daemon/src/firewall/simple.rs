@@ -122,6 +122,7 @@ fn derive_entries(config: &FirewallConfig) -> Vec<EffectiveForward> {
                         }
                         || nat.external_port_end.is_some()
                         || nat.source_group.is_some()
+                        || nat.dest_ipv6_suffix.is_some()
                     {
                         continue;
                     }

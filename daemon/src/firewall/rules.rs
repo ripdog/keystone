@@ -17,11 +17,15 @@ use crate::firewall::generate::{
     find_ipv4_masquerade_zones, find_wan_zones, resolve_zone_interfaces, rule_comment,
 };
 use crate::firewall::groups::{Family, GroupIndex, family_variants, side_families};
+use keystone_core::validation::ipv6_suffix;
 use keystone_core::{
     FirewallAction, FirewallConfig, FirewallZone, ForwardRule, InputRule, PortForward, RuleProtocol,
 };
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
+
+/// Mask selecting the interface identifier (low 64 bits) of an IPv6 address.
+pub(crate) const IPV6_SUFFIX_MASK: &str = "::ffff:ffff:ffff:ffff";
 
 /// Which address or port of a packet a condition examines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +78,9 @@ pub(crate) enum Cond {
     Addr { side: Side, addr: Addr },
     /// The packet's source or destination address is outside `addr`.
     NotAddr { side: Side, addr: Addr },
+    /// The low 64 bits of the packet's IPv6 source or destination address
+    /// equal `suffix`, whatever the prefix (`ip6 daddr & ::ffff:ffff:ffff:ffff == suffix`).
+    Ipv6Suffix { side: Side, suffix: Ipv6Addr },
     /// Layer-4 protocol (`meta l4proto`): `tcp`, `udp`, `icmp` or `ipv6-icmp`.
     L4(&'static str),
     /// Transport port, read through `payload` (`th` for either protocol).
@@ -782,6 +789,7 @@ fn forward(config: &FirewallConfig, zones: &ZoneFacts, groups: &GroupIndex) -> C
     // chain's default policy would drop it.
     for pf in config.port_forwards.iter().filter(|pf| pf.enabled) {
         rules.extend(port_forward_accepts(pf));
+        rules.extend(port_forward_v6_accepts(pf, zones, groups));
     }
 
     // UPnP / NAT-PMP mappings are DNATed by miniupnpd's own table. This accept
@@ -888,13 +896,105 @@ fn port_forward_accepts(pf: &PortForward) -> Vec<RuleSpec> {
         .collect()
 }
 
+/// Accept IPv6 traffic to the port-forwarded service. IPv6 is routed, not
+/// translated: the rule matches the host by its interface-identifier suffix,
+/// so it keeps working when the ISP renumbers the delegated prefix, and the
+/// external ports are the destination ports.
+fn port_forward_v6_accepts(
+    pf: &PortForward,
+    zones: &ZoneFacts,
+    groups: &GroupIndex,
+) -> Vec<RuleSpec> {
+    let Some(suffix) = pf
+        .dest_ipv6_suffix
+        .as_deref()
+        .and_then(|text| ipv6_suffix(text).ok())
+    else {
+        return Vec::new();
+    };
+    let source = match side_families(pf.source_ip.as_deref(), pf.source_group.as_deref(), groups) {
+        Ok(None) => None,
+        Ok(Some(families)) if families.contains(&Family::V6) => address_cond(
+            Side::Source,
+            pf.source_ip.as_deref(),
+            pf.source_group.as_deref(),
+            Some(Family::V6),
+        ),
+        Ok(Some(_)) => {
+            tracing::warn!(
+                "Skipping IPv6 accept for port forward '{}': its source has no IPv6 address",
+                pf.name
+            );
+            return Vec::new();
+        }
+        Err(error) => {
+            tracing::warn!(
+                "Skipping IPv6 accept for port forward '{}': {error}",
+                pf.name
+            );
+            return Vec::new();
+        }
+    };
+    let zone = match resolve_zone_interfaces(pf.source_zone.as_deref(), &zones.interfaces, &pf.name)
+    {
+        Ok(zone) => zone.map(|interfaces| Cond::Iif(interfaces.to_vec())),
+        Err(_) => return Vec::new(),
+    };
+    port_forward_protocols(pf.protocol)
+        .iter()
+        .map(|&proto| {
+            let mut conds = vec![Cond::Nfproto(Family::V6)];
+            conds.extend(zone.clone());
+            conds.extend(source.clone());
+            conds.push(Cond::Ipv6Suffix {
+                side: Side::Destination,
+                suffix,
+            });
+            conds.push(Cond::L4(proto));
+            conds.push(Cond::Port {
+                side: Side::Destination,
+                payload: "th",
+                ports: Ports::literal(pf.external_port_start, pf.external_port_end),
+            });
+            RuleSpec {
+                origin: Origin::User {
+                    kind: "portfwd-accept",
+                    id: pf.id,
+                    name: pf.name.clone(),
+                },
+                comment: rule_comment(
+                    "portfwd-accept",
+                    pf.id,
+                    &format!("{} IPv6 accept ({})", pf.name, proto),
+                ),
+                section: SECTION_PORTFWD_ACCEPT,
+                conds,
+                log: None,
+                verdict: Verdict::Accept,
+            }
+        })
+        .collect()
+}
+
+/// Address families a forward rule's destination can match. A suffix is IPv6.
+pub(crate) fn forward_dest_families(
+    rule: &ForwardRule,
+    groups: &GroupIndex,
+) -> Result<Option<Vec<Family>>, String> {
+    if let Some(suffix) = rule.dest_ipv6_suffix.as_deref() {
+        ipv6_suffix(suffix)?;
+        return Ok(Some(vec![Family::V6]));
+    }
+    side_families(rule.dest_ip.as_deref(), rule.dest_group.as_deref(), groups)
+}
+
 fn forward_rule(rule: &ForwardRule, zones: &ZoneFacts, groups: &GroupIndex) -> Vec<RuleSpec> {
     let source = side_families(
         rule.source_ip.as_deref(),
         rule.source_group.as_deref(),
         groups,
     );
-    let dest = side_families(rule.dest_ip.as_deref(), rule.dest_group.as_deref(), groups);
+    let dest = forward_dest_families(rule, groups);
     let (source, dest) = match (source, dest) {
         (Ok(source), Ok(dest)) => (source, dest),
         (Err(error), _) | (_, Err(error)) => {
@@ -957,6 +1057,12 @@ fn forward_rule_for_protocol(
         rule.dest_group.as_deref(),
         family,
     ));
+    if let Some(suffix) = rule.dest_ipv6_suffix.as_deref() {
+        conds.push(Cond::Ipv6Suffix {
+            side: Side::Destination,
+            suffix: ipv6_suffix(suffix).ok()?,
+        });
+    }
     conds.extend(port_conds(
         protocol,
         rule.dest_port_start,

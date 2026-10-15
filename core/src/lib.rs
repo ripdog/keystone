@@ -1784,10 +1784,16 @@ pub struct PortForward {
     /// Restrict to an IPv4 address group (mutually exclusive with `source_ip`)
     #[serde(default)]
     pub source_group: Option<String>,
-    /// Internal destination IP
+    /// Internal destination IPv4 address. Empty when the forward is IPv6-only.
     pub dest_ip: String,
     /// Internal destination port (None = same as external)
     pub dest_port: Option<u16>,
+    /// IPv6 interface-identifier suffix (e.g. `::1234`) of the internal host.
+    /// Adds an IPv6 accept for the external ports towards any address ending
+    /// in the suffix, so it keeps working when the ISP renumbers the prefix.
+    /// IPv6 is not translated, so `dest_port` does not apply to it.
+    #[serde(default)]
+    pub dest_ipv6_suffix: Option<String>,
 }
 
 impl Default for PortForward {
@@ -1805,6 +1811,7 @@ impl Default for PortForward {
             source_group: None,
             dest_ip: String::new(),
             dest_port: None,
+            dest_ipv6_suffix: None,
         }
     }
 }
@@ -1896,6 +1903,11 @@ pub struct ForwardRule {
     /// Destination address group (mutually exclusive with `dest_ip`)
     #[serde(default)]
     pub dest_group: Option<String>,
+    /// Destination IPv6 interface-identifier suffix (e.g. `::1234`): matches
+    /// any address whose low 64 bits equal it, whatever the prefix. Mutually
+    /// exclusive with `dest_ip` and `dest_group`.
+    #[serde(default)]
+    pub dest_ipv6_suffix: Option<String>,
     /// Destination port group (mutually exclusive with the destination port range)
     #[serde(default)]
     pub dest_port_group: Option<String>,
@@ -1926,6 +1938,7 @@ impl Default for ForwardRule {
             dest_ip: None,
             source_group: None,
             dest_group: None,
+            dest_ipv6_suffix: None,
             dest_port_group: None,
             action: FirewallAction::Accept,
             log_enabled: false,
@@ -3687,6 +3700,7 @@ mod tests {
             source_group: None,
             dest_ip: "192.168.1.100".to_string(),
             dest_port: Some(80),
+            dest_ipv6_suffix: Some("::1234".to_string()),
         };
 
         let json = serde_json::to_string(&pf).unwrap();

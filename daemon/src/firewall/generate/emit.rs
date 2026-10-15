@@ -4,18 +4,18 @@
 //! them. The rule's log, counter and verdict follow the conditions.
 
 use crate::firewall::groups::{Family, address_set_name, port_set_name};
-use crate::firewall::rules::{Addr, Cond, Ports, RuleSpec, Side, Verdict};
+use crate::firewall::rules::{Addr, Cond, IPV6_SUFFIX_MASK, Ports, RuleSpec, Side, Verdict};
 use nftables::{
     expr::{
-        CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression, Payload,
-        PayloadField, Prefix, Range, SetItem,
+        BinaryOperation, CT, Expression, Fib, FibFlag, FibResult, Meta, MetaKey, NamedExpression,
+        Payload, PayloadField, Prefix, Range, SetItem,
     },
     schema::Rule,
     stmt::{Counter, Limit, Log, Match, NAT, Operator, Statement},
     types::NfFamily,
 };
 use std::borrow::Cow;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
 /// The nftables rule for `spec`, in `chain` of `table`.
 pub(crate) fn rule_object(
@@ -59,6 +59,7 @@ fn cond_statement(cond: &Cond) -> Statement<'static> {
         }
         Cond::Addr { side, addr } => address_match(*side, addr, Operator::EQ),
         Cond::NotAddr { side, addr } => address_match(*side, addr, Operator::NEQ),
+        Cond::Ipv6Suffix { side, suffix } => suffix_match(*side, suffix),
         Cond::L4(protocol) => compare(meta(MetaKey::L4proto), string(protocol), Operator::EQ),
         Cond::Port {
             side,
@@ -141,6 +142,20 @@ fn address_match(side: Side, addr: &Addr, op: Operator) -> Statement<'static> {
             op,
         ),
     }
+}
+
+/// `ip6 daddr & ::ffff:ffff:ffff:ffff == ::1234`: the interface identifier
+/// matches whatever the prefix.
+fn suffix_match(side: Side, suffix: &Ipv6Addr) -> Statement<'static> {
+    let field = match side {
+        Side::Source => "saddr",
+        Side::Destination => "daddr",
+    };
+    let masked = Expression::BinaryOperation(Box::new(BinaryOperation::AND(
+        payload("ip6", field),
+        string(IPV6_SUFFIX_MASK),
+    )));
+    compare(masked, string(&suffix.to_string()), Operator::EQ)
 }
 
 /// A host address as a string, a network as a prefix. nft reads a string

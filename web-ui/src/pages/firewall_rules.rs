@@ -37,6 +37,15 @@ fn address_text(literal: Option<&str>, group: Option<&str>) -> String {
     }
 }
 
+/// Human text for a forward rule's destination. A suffix reads as `any prefix`
+/// followed by the suffix, since it matches whatever prefix the ISP delegates.
+fn forward_dest_text(rule: &ForwardRule) -> String {
+    match rule.dest_ipv6_suffix.as_deref() {
+        Some(suffix) => format!("*{suffix}"),
+        None => address_text(rule.dest_ip.as_deref(), rule.dest_group.as_deref()),
+    }
+}
+
 /// Human text for a port constraint: a group, a range, or `any`.
 fn port_text(start: Option<u16>, end: Option<u16>, group: Option<&str>) -> String {
     if let Some(group) = group {
@@ -80,7 +89,7 @@ fn forward_rule_fields(rule: &ForwardRule) -> Vec<String> {
             rule.dest_port_group.as_deref(),
         ),
         address_text(rule.source_ip.as_deref(), rule.source_group.as_deref()),
-        address_text(rule.dest_ip.as_deref(), rule.dest_group.as_deref()),
+        forward_dest_text(rule),
         rule.action.to_string(),
     ]
 }
@@ -815,6 +824,7 @@ pub(super) fn ForwardRulesTab(
         dest_ip: None,
         source_group: None,
         dest_group: None,
+        dest_ipv6_suffix: None,
         dest_port_group: None,
         action: FirewallAction::Accept,
         log_enabled: false,
@@ -890,7 +900,7 @@ pub(super) fn ForwardRulesTab(
                                     let rule_for_delete = rule.clone();
                                     let token_del = token.get_untracked();
                                     let source = address_text(rule.source_ip.as_deref(), rule.source_group.as_deref());
-                                    let dest = address_text(rule.dest_ip.as_deref(), rule.dest_group.as_deref());
+                                    let dest = forward_dest_text(rule);
                                     let ports = port_text(rule.dest_port_start, rule.dest_port_end, rule.dest_port_group.as_deref());
                                     let action = rule.action;
                                     let can_up = index > 0;
@@ -1058,6 +1068,7 @@ fn ForwardRuleEditor(
     let protocol = RwSignal::new(rule.protocol);
     let source = AddressField::new(rule.source_ip.clone(), rule.source_group.clone());
     let dest = AddressField::new(rule.dest_ip.clone(), rule.dest_group.clone());
+    let dest_suffix = RwSignal::new(rule.dest_ipv6_suffix.clone().unwrap_or_default());
     let ports = PortField::new(
         rule.dest_port_start,
         rule.dest_port_end,
@@ -1088,7 +1099,14 @@ fn ForwardRuleEditor(
         let on_save = on_save_clone.clone();
 
         let (source_ip, source_group) = source.values();
-        let (dest_ip, dest_group) = dest.values();
+        // A suffix replaces the destination address or group.
+        let dest_ipv6_suffix =
+            Some(dest_suffix.get().trim().to_string()).filter(|text| !text.is_empty());
+        let (dest_ip, dest_group) = if dest_ipv6_suffix.is_some() {
+            (None, None)
+        } else {
+            dest.values()
+        };
         let (dest_port_start, dest_port_end, dest_port_group) = if ports_allowed() {
             ports.values()
         } else {
@@ -1109,6 +1127,7 @@ fn ForwardRuleEditor(
             dest_ip,
             source_group,
             dest_group,
+            dest_ipv6_suffix,
             dest_port_group,
             action: action.get(),
             log_enabled: log_enabled.get(),
@@ -1232,6 +1251,23 @@ fn ForwardRuleEditor(
                     placeholder="e.g., 192.168.2.0/24"
                     groups=address_groups
                 />
+            </div>
+
+            <div>
+                <label class="block text-sm text-gray-300 mb-1" for="dest-ipv6-suffix">
+                    "Destination IPv6 suffix (optional)"
+                </label>
+                <input
+                    id="dest-ipv6-suffix"
+                    type="text"
+                    class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                    placeholder="e.g., ::1234"
+                    prop:value=move || dest_suffix.get()
+                    on:input=move |ev| dest_suffix.set(event_target_value(&ev))
+                />
+                <p class="text-xs text-gray-400 mt-1">
+                    "Matches the host whatever prefix your ISP delegates. Replaces the destination above."
+                </p>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">

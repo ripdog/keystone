@@ -3,7 +3,7 @@
 use ipnet::IpNet;
 use serde::Serialize;
 use serde_json::Value;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
 /// True when `value` can sit on one line of a generated configuration file:
 /// it has no control characters (newlines, NUL, escapes, and so on) and no
@@ -144,6 +144,26 @@ pub fn address_group_entry(entry: &str) -> Result<IpNet, String> {
     }
 }
 
+/// An IPv6 interface-identifier suffix such as `::1234` or `::a:b:c:d`: the low
+/// 64 bits of an address, with the network half zero. A rule written with a
+/// suffix matches any prefix, so it survives the ISP renumbering a delegated
+/// prefix.
+pub fn ipv6_suffix(text: &str) -> Result<Ipv6Addr, String> {
+    let value = text.trim();
+    let addr: Ipv6Addr = value
+        .parse()
+        .map_err(|_| format!("{value:?} is not an IPv6 suffix such as ::1234"))?;
+    if addr.to_bits() >> 64 != 0 {
+        return Err(format!(
+            "{value} has bits set in the network half; a suffix has only the low 64 bits (e.g. ::1234)"
+        ));
+    }
+    if addr.is_unspecified() {
+        return Err("an IPv6 suffix cannot be all zeros".to_string());
+    }
+    Ok(addr)
+}
+
 /// One port-group entry: a port (`443`) or an inclusive range (`8000-8100`).
 /// Returns the inclusive `(start, end)` pair; a single port has `start == end`.
 pub fn port_group_entry(entry: &str) -> Result<(u16, u16), String> {
@@ -234,6 +254,16 @@ pub fn custom_tls_config(value: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ipv6_suffix_accepts_only_low_64_bits() {
+        assert_eq!(super::ipv6_suffix("::1234").unwrap().to_string(), "::1234");
+        assert!(super::ipv6_suffix("::a:b:c:d").is_ok());
+        assert!(super::ipv6_suffix("::").is_err());
+        assert!(super::ipv6_suffix("2001:db8::1").is_err());
+        assert!(super::ipv6_suffix("192.168.1.1").is_err());
+        assert!(super::ipv6_suffix("::1/64").is_err());
+    }
+
     use super::*;
 
     #[test]

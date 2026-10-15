@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-core"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "ipnet",
  "serde",
@@ -1922,7 +1922,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-daemon"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1955,7 +1955,7 @@ dependencies = [
 
 [[package]]
 name = "keystone-web-ui"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "anyhow",
  "axum",
@@ -1986,7 +1986,7 @@ dependencies = [
 
 [[package]]
 name = "keystonectl"
-version = "0.4.14"
+version = "0.4.15"
 dependencies = [
  "anyhow",
  "argon2",

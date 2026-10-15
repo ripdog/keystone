@@ -12,7 +12,7 @@ use crate::components::rule_table::{
     ReorderButtons, RuleHits, address_group_names, matches_filter, move_by, move_onto,
     port_group_names, use_rule_counters,
 };
-use keystone_core::{FirewallAction, ForwardRule, InputRule, RuleProtocol};
+use keystone_core::{FirewallAction, ForwardRule, InputRule, LanDevice, RuleProtocol};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use web_sys::DragEvent;
@@ -1069,6 +1069,16 @@ fn ForwardRuleEditor(
     let source = AddressField::new(rule.source_ip.clone(), rule.source_group.clone());
     let dest = AddressField::new(rule.dest_ip.clone(), rule.dest_group.clone());
     let dest_suffix = RwSignal::new(rule.dest_ipv6_suffix.clone().unwrap_or_default());
+    // Discovered LAN devices, offered as a shortcut for filling in the suffix.
+    let devices = RwSignal::new(Vec::<LanDevice>::new());
+    {
+        let token = token.clone();
+        spawn_local(async move {
+            if let Ok(found) = api::fetch_lan_devices(&token).await {
+                devices.set(found);
+            }
+        });
+    }
     let ports = PortField::new(
         rule.dest_port_start,
         rule.dest_port_end,
@@ -1257,6 +1267,35 @@ fn ForwardRuleEditor(
                 <label class="block text-sm text-gray-300 mb-1" for="dest-ipv6-suffix">
                     "Destination IPv6 suffix (optional)"
                 </label>
+                <select
+                    class="w-full px-3 py-2 mb-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+                    aria-label="Fill the suffix from a discovered device"
+                    on:change=move |ev| {
+                        let value = event_target_value(&ev);
+                        if !value.is_empty() {
+                            dest_suffix.set(value);
+                        }
+                    }
+                >
+                    <option value="">"Fill from a discovered LAN device"</option>
+                    {move || {
+                        devices
+                            .get()
+                            .into_iter()
+                            .flat_map(|device| {
+                                let name = device.hostname.clone().unwrap_or_else(|| device.mac.clone());
+                                device
+                                    .ipv6_suffixes()
+                                    .into_iter()
+                                    .map(move |suffix| {
+                                        let label = format!("{name}  {suffix}");
+                                        view! { <option value=suffix>{label}</option> }
+                                    })
+                                    .collect::<Vec<_>>()
+                            })
+                            .collect::<Vec<_>>()
+                    }}
+                </select>
                 <input
                     id="dest-ipv6-suffix"
                     type="text"

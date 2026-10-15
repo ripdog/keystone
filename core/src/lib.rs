@@ -2158,6 +2158,24 @@ pub struct LanDevice {
     pub ipv6: Vec<String>,
 }
 
+impl LanDevice {
+    /// The interface-identifier suffixes (low 64 bits, e.g. `::1234`) of the
+    /// device's IPv6 addresses, sorted and without duplicates. Suffixes are what
+    /// firewall rules match to stay valid when the ISP renumbers the prefix.
+    pub fn ipv6_suffixes(&self) -> Vec<String> {
+        let mut suffixes: Vec<std::net::Ipv6Addr> = self
+            .ipv6
+            .iter()
+            .filter_map(|address| address.parse::<std::net::Ipv6Addr>().ok())
+            .map(|address| std::net::Ipv6Addr::from_bits(address.to_bits() & u128::from(u64::MAX)))
+            .filter(|suffix| !suffix.is_unspecified())
+            .collect();
+        suffixes.sort();
+        suffixes.dedup();
+        suffixes.iter().map(ToString::to_string).collect()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LanDevicesResponse {
     pub devices: Vec<LanDevice>,
@@ -3628,6 +3646,22 @@ pub struct WizardSaveInterfacesResponse {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lan_device_suffixes_are_the_deduplicated_low_64_bits() {
+        let device = LanDevice {
+            mac: "aa:bb:cc:00:00:01".into(),
+            hostname: None,
+            ipv4: vec!["192.168.1.5".into()],
+            ipv6: vec![
+                "2001:db8:1:2::1234".into(),
+                "fd00:1::1234".into(),
+                "2001:db8:1:2:a:b:c:d".into(),
+                "not-an-address".into(),
+            ],
+        };
+        assert_eq!(device.ipv6_suffixes(), vec!["::1234", "::a:b:c:d"]);
+    }
+
     use super::*;
 
     #[test]

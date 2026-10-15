@@ -230,10 +230,9 @@ async fn main() -> Result<()> {
             let authed = client.authed(get_token(token)?);
             let response: ApplyAllResponse =
                 authed.post("/apply-all", &serde_json::json!({})).await?;
-            output(cli.json, &response, pretty::apply_all);
-            if !response.success {
-                std::process::exit(1);
-            }
+            output(cli.json, &response, |r| pretty::apply_all(r, !confirm));
+            // Confirm even when a component failed: the user asked to keep the
+            // applied network/firewall state rather than have it roll back.
             if confirm && response.firewall_pending_confirmation {
                 handlers::firewall::confirm_session(
                     &authed,
@@ -241,6 +240,9 @@ async fn main() -> Result<()> {
                     cli.json,
                 )
                 .await?;
+            }
+            if !response.success {
+                std::process::exit(1);
             }
         }
 

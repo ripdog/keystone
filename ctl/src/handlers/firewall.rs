@@ -391,7 +391,7 @@ pub async fn handle_firewall_command(
             let authed = client.authed(get_token(token)?);
             let request = FirewallApplyRequest {};
             let response: FirewallApplyResponse = authed.post("/firewall/apply", &request).await?;
-            output(cli_json, &response, pretty::firewall_apply);
+            output(cli_json, &response, |r| pretty::firewall_apply(r, !confirm));
             if !response.success {
                 std::process::exit(1);
             }

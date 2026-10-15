@@ -78,7 +78,9 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-pub fn apply_all(response: &ApplyAllResponse) {
+/// `show_pending` is false when the caller confirms right away, so the
+/// "pending confirmation" notice would be stale by the time it is read.
+pub fn apply_all(response: &ApplyAllResponse, show_pending: bool) {
     if response.success {
         println!("✓ {}", response.message);
     } else {
@@ -104,7 +106,7 @@ pub fn apply_all(response: &ApplyAllResponse) {
         let suffix = if result.skipped { " (skipped)" } else { "" };
         println!("  {mark} {name}{suffix}: {}", result.message);
     }
-    if response.firewall_pending_confirmation {
+    if show_pending && response.firewall_pending_confirmation {
         println!();
         let what = if response.networkd_pending_confirmation {
             "Network and firewall changes are"
@@ -447,10 +449,10 @@ pub fn firewall_preview(response: &FirewallPreviewResponse) {
     println!("{}", response.ruleset);
 }
 
-pub fn firewall_apply(response: &FirewallApplyResponse) {
+pub fn firewall_apply(response: &FirewallApplyResponse, show_pending: bool) {
     if response.success {
         println!("✓ {}", response.message);
-        if let Some(session_id) = &response.session_id {
+        if let Some(session_id) = response.session_id.as_ref().filter(|_| show_pending) {
             println!("  Session ID: {}", session_id);
             println!("  Run 'keystonectl confirm' (session {})", session_id);
         }

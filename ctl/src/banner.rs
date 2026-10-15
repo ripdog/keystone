@@ -134,12 +134,7 @@ pub fn render(f: &Facts, color: bool) -> String {
             out.push_str(&format!("  {row}\n"));
         }
     }
-    out.push_str(&format!(
-        "\n  Router manager v{} — {}\n  {}\n\n",
-        env!("CARGO_PKG_VERSION"),
-        f.hostname,
-        "─".repeat(69)
-    ));
+    out.push_str(&format!("\n  on {}\n  {}\n\n", f.hostname, "─".repeat(69)));
     let mem = f.mem_used_pct.map_or("n/a".into(), |p| format!("{p}%"));
     out.push_str(&format!(
         "  Uptime   {}\n  Load     {}\n  Memory   {}\n  Kernel   {}\n\n",
@@ -161,7 +156,7 @@ pub fn render(f: &Facts, color: bool) -> String {
         let mark = if state == "active" { "●" } else { "○" };
         out.push_str(&format!("  {mark} {name} ({state})\n"));
     }
-    out.push_str("\n  Manage: keystonectl  ·  Web UI via keystone-web-ui\n\n");
+    out.push('\n');
     out
 }
 

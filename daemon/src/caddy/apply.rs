@@ -421,6 +421,9 @@ pub fn validate_caddyfile(content: &str) -> Result<(bool, String)> {
         .args(["validate", "--config", "-", "--adapter", "caddyfile"])
         .env("XDG_DATA_HOME", "/var/lib")
         .env("XDG_CONFIG_HOME", "/etc")
+        // Caddyfile placeholders such as {env.CF_API_TOKEN} resolve against the
+        // service's environment, which validation must see as well.
+        .envs(caddy_service_env())
         .uid(caddy.uid.as_raw())
         .gid(caddy.gid.as_raw())
         .stdin(Stdio::piped())
@@ -449,6 +452,119 @@ pub fn validate_caddyfile(content: &str) -> Result<(bool, String)> {
     } else {
         Ok((false, combined))
     }
+}
+
+/// The environment the caddy service runs with: its `Environment=` values and
+/// `EnvironmentFile=` contents, as systemd reports them. Values are only handed
+/// to the validator process, never logged. Unreadable pieces are skipped, so a
+/// missing variable surfaces as Caddy's own validation error.
+fn caddy_service_env() -> Vec<(String, String)> {
+    let Ok(output) = Command::new("systemctl")
+        .args([
+            "show",
+            "caddy.service",
+            "--property=Environment",
+            "--property=EnvironmentFiles",
+        ])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let shown = String::from_utf8_lossy(&output.stdout);
+    let mut vars = Vec::new();
+    for line in shown.lines() {
+        if let Some(value) = line.strip_prefix("EnvironmentFiles=") {
+            for path in parse_environment_file_paths(value) {
+                if let Ok(content) = fs::read_to_string(&path) {
+                    vars.extend(parse_env_file(&content));
+                }
+            }
+        }
+    }
+    // Environment= wins over EnvironmentFile=, as it does for the service.
+    for line in shown.lines() {
+        if let Some(value) = line.strip_prefix("Environment=") {
+            vars.extend(parse_environment_assignments(value));
+        }
+    }
+    vars
+}
+
+/// Paths from `systemctl show -p EnvironmentFiles`, whose entries look like
+/// `/etc/caddy/dns.env (ignore_errors=no)`. Glob patterns are skipped.
+fn parse_environment_file_paths(value: &str) -> Vec<String> {
+    value
+        .split(')')
+        .filter_map(|entry| entry.split(" (").next())
+        .map(str::trim)
+        .filter(|path| path.starts_with('/') && !path.contains(['*', '?', '[']))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `KEY=value` lines of an environment file. Comments and blank lines are
+/// ignored and one level of surrounding quotes is removed.
+fn parse_env_file(content: &str) -> Vec<(String, String)> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with(['#', ';']))
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            let key = key.trim();
+            valid_env_name(key).then(|| (key.to_owned(), unquote(value.trim())))
+        })
+        .collect()
+}
+
+/// Space-separated `KEY=value` words from `systemctl show -p Environment`,
+/// where a word containing spaces is double-quoted.
+fn parse_environment_assignments(value: &str) -> Vec<(String, String)> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in value.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    words.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+        .into_iter()
+        .filter_map(|word| {
+            let (key, value) = word.split_once('=')?;
+            valid_env_name(key).then(|| (key.to_owned(), value.to_owned()))
+        })
+        .collect()
+}
+
+fn valid_env_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+fn unquote(value: &str) -> String {
+    for quote in ['"', '\''] {
+        if let Some(inner) = value
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner.to_owned();
+        }
+    }
+    value.to_owned()
 }
 
 /// Write Caddyfile configuration
@@ -776,6 +892,32 @@ mod tests {
         assert_eq!(
             input_accept(&config, "lan0".into()).unwrap().ports,
             vec![80]
+        );
+    }
+
+    #[test]
+    fn service_environment_parsing() {
+        assert_eq!(
+            parse_environment_file_paths(
+                "/etc/caddy/dns.env (ignore_errors=no) /etc/x.env (ignore_errors=yes)"
+            ),
+            vec!["/etc/caddy/dns.env", "/etc/x.env"]
+        );
+        assert!(parse_environment_file_paths("/etc/caddy/*.env (ignore_errors=no)").is_empty());
+        assert_eq!(
+            parse_env_file("# c\nCF_API_TOKEN=abc\nQ=\"x y\"\nbad-name=1\n\n"),
+            vec![
+                ("CF_API_TOKEN".to_string(), "abc".to_string()),
+                ("Q".to_string(), "x y".to_string())
+            ]
+        );
+        assert_eq!(
+            parse_environment_assignments("XDG_DATA_HOME=/var/lib \"A=b c\" T=1"),
+            vec![
+                ("XDG_DATA_HOME".to_string(), "/var/lib".to_string()),
+                ("A".to_string(), "b c".to_string()),
+                ("T".to_string(), "1".to_string())
+            ]
         );
     }
 

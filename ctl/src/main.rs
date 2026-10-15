@@ -15,6 +15,7 @@ use keystone_core::{
     SystemState, UsersResponse,
 };
 
+mod banner;
 mod bootstrap;
 mod client;
 mod commands;
@@ -150,6 +151,12 @@ async fn main() -> Result<()> {
         return bootstrap::run(username).await;
     }
 
+    // The login banner reads local facts only; it must work with the daemon down.
+    if let Some(Commands::Banner) = &cli.command {
+        banner::run();
+        return Ok(());
+    }
+
     // Check socket exists before trying to connect
     if !Path::new(&cli.socket).exists() {
         eprintln!(
@@ -181,7 +188,9 @@ async fn main() -> Result<()> {
             }
         }
 
-        Some(Commands::BootstrapAdmin { .. }) => unreachable!("handled before socket connection"),
+        Some(Commands::BootstrapAdmin { .. } | Commands::Banner) => {
+            unreachable!("handled before socket connection")
+        }
 
         Some(Commands::Health) => {
             let response: serde_json::Value = client.get("/health", None).await?;

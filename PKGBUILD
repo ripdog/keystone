@@ -48,6 +48,8 @@ package() {
   install -Dm644 "${startdir}/packaging/arch/keystone-modules.conf" "${pkgdir}/usr/lib/modules-load.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/keystone.toml" "${pkgdir}/etc/keystone/keystone.toml"
 
+  install -Dm644 "${startdir}/packaging/arch/keystone-banner.sh" "${pkgdir}/etc/profile.d/keystone-banner.sh"
+
   install -Dm644 "${startdir}/README.md" "${pkgdir}/usr/share/doc/keystone/README.md"
 
   install -Dm644 "${startdir}/web-ui/dist/index.html" "${pkgdir}/usr/share/keystone/dist/index.html"

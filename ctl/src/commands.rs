@@ -34,6 +34,9 @@ pub enum Commands {
         username: String,
     },
 
+    /// Print the console login banner (local host facts; no daemon or token needed)
+    Banner,
+
     /// Login to get a JWT token
     Login {
         /// Username

@@ -23,9 +23,11 @@ build() {
   unset CFLAGS_x86_64_unknown_linux_gnu CXXFLAGS_x86_64_unknown_linux_gnu
   unset CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS
 
-  mkdir -p "${startdir}/pkg"
-  chmod u+rwx,go+rx "${startdir}/pkg"
-  export CARGO_TARGET_DIR="${startdir}/pkg/target"
+  # Keep the build cache outside $startdir/pkg: makepkg -f deletes that whole
+  # directory before every build, which forced a from-scratch compile.
+  mkdir -p "${startdir}/target-pkg"
+  chmod u+rwx,go+rx "${startdir}/target-pkg"
+  export CARGO_TARGET_DIR="${startdir}/target-pkg"
 
   cd "${startdir}"
   cargo build --release --locked
@@ -35,9 +37,9 @@ build() {
 }
 
 package() {
-  install -Dm755 "${startdir}/pkg/target/release/keystone-daemon" "${pkgdir}/usr/bin/keystone-daemon"
-  install -Dm755 "${startdir}/pkg/target/release/keystone-web-ui" "${pkgdir}/usr/bin/keystone-web-ui"
-  install -Dm755 "${startdir}/pkg/target/release/keystonectl" "${pkgdir}/usr/bin/keystonectl"
+  install -Dm755 "${startdir}/target-pkg/release/keystone-daemon" "${pkgdir}/usr/bin/keystone-daemon"
+  install -Dm755 "${startdir}/target-pkg/release/keystone-web-ui" "${pkgdir}/usr/bin/keystone-web-ui"
+  install -Dm755 "${startdir}/target-pkg/release/keystonectl" "${pkgdir}/usr/bin/keystonectl"
 
   install -Dm644 "${startdir}/packaging/arch/keystone-daemon.service" "${pkgdir}/usr/lib/systemd/system/keystone-daemon.service"
   install -Dm644 "${startdir}/packaging/arch/keystone-web-ui.service" "${pkgdir}/usr/lib/systemd/system/keystone-web-ui.service"
@@ -54,7 +56,7 @@ package() {
   install -Dm644 "${startdir}/packaging/arch/keystone-banner.fish" "${pkgdir}/usr/share/fish/vendor_conf.d/keystone-banner.fish"
 
   # Shell completions come from the CLI definition, so they cannot drift.
-  local ctl="${startdir}/pkg/target/release/keystonectl"
+  local ctl="${startdir}/target-pkg/release/keystonectl"
   "${ctl}" completions fish | install -Dm644 /dev/stdin "${pkgdir}/usr/share/fish/vendor_completions.d/keystonectl.fish"
   "${ctl}" completions bash | install -Dm644 /dev/stdin "${pkgdir}/usr/share/bash-completion/completions/keystonectl"
   "${ctl}" completions zsh | install -Dm644 /dev/stdin "${pkgdir}/usr/share/zsh/site-functions/_keystonectl"

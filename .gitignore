@@ -33,6 +33,7 @@ session-*
 
 # Arch package build artifacts
 /pkg/
+/target-pkg/
 /*.pkg.tar.*
 /*.src.tar.*
 /*.log

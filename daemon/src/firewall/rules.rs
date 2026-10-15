@@ -197,6 +197,7 @@ pub(crate) const SECTION_DHCPV6: &str = "Priority 1: DHCPv6 replies on WAN";
 pub(crate) const SECTION_INVALID: &str = "Priority 2: Invalid packets";
 pub(crate) const SECTION_LOOPBACK: &str = "Priority 3: Loopback";
 pub(crate) const SECTION_ICMP_SAFETY: &str = "Priority 3.5: Dangerous ICMP (always dropped)";
+pub(crate) const SECTION_CADDY: &str = "Priority 3.7: Caddy web server (generated)";
 pub(crate) const SECTION_USER_INPUT: &str = "Priority 4: User input rules";
 pub(crate) const SECTION_BUILTIN_ICMP: &str = "Priority 4.5: Built-in ICMP accepts";
 pub(crate) const SECTION_ZONE_DEFAULTS: &str = "Priority 5: Zone default policies";
@@ -510,6 +511,10 @@ fn input(config: &FirewallConfig, zones: &ZoneFacts, groups: &GroupIndex) -> Cha
     ));
     rules.extend(dangerous_icmp_drops());
 
+    // Caddy fronts the web UI, so its LAN listeners are always reachable. This
+    // runs before user rules so that no rule edit can lock the UI out.
+    rules.extend(caddy_input_accepts(config));
+
     // User rules run before the built-in ICMP accepts, so a user rule can drop
     // or limit ping. The dangerous-ICMP drops above can never be overridden.
     let mut user_rules: Vec<&InputRule> = config.input_rules.iter().filter(|r| r.enabled).collect();
@@ -526,6 +531,33 @@ fn input(config: &FirewallConfig, zones: &ZoneFacts, groups: &GroupIndex) -> Cha
         policy: Some(Verdict::Drop),
         rules,
     }
+}
+
+/// Accepts for the ports Caddy listens on, present only while Caddy is enabled.
+fn caddy_input_accepts(config: &FirewallConfig) -> Vec<RuleSpec> {
+    let Some(caddy) = &config.caddy_input else {
+        return Vec::new();
+    };
+    caddy
+        .ports
+        .iter()
+        .map(|&port| {
+            builtin(
+                SECTION_CADDY,
+                &format!("Allow Caddy on {} tcp/{port}", caddy.interface),
+                vec![
+                    Cond::Iif(vec![caddy.interface.clone()]),
+                    Cond::L4("tcp"),
+                    Cond::Port {
+                        side: Side::Destination,
+                        payload: "th",
+                        ports: Ports::Single(port),
+                    },
+                ],
+                Verdict::Accept,
+            )
+        })
+        .collect()
 }
 
 /// ICMP types that leak information or enable redirects. Always dropped.

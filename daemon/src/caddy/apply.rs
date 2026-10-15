@@ -1,7 +1,7 @@
 //! Caddy service management and configuration application
 
 use anyhow::{Context, Result};
-use keystone_core::{CaddyConfig, CaddyHttpsMode};
+use keystone_core::{CaddyConfig, CaddyHttpsMode, CaddyInputAccept};
 use sqlx::SqlitePool;
 use std::fs;
 use std::io::Write;
@@ -96,6 +96,29 @@ async fn lan_interface_name(pool: &SqlitePool, selected: &str) -> Result<String>
     }
     .ok_or_else(|| anyhow::anyhow!("Select an enabled LAN interface before enabling Caddy"))?;
     Ok(name.to_string())
+}
+
+/// The input accepts Keystone must generate for Caddy: its LAN interface and
+/// listening ports. `None` while Caddy is disabled or has no LAN interface.
+pub async fn load_input_accept(pool: &SqlitePool) -> Result<Option<CaddyInputAccept>> {
+    let config = super::db::load_caddy_config(pool).await?;
+    let Ok(interface) = lan_interface_name(pool, &config.bind_interface).await else {
+        return Ok(None);
+    };
+    Ok(input_accept(&config, interface))
+}
+
+fn input_accept(config: &CaddyConfig, interface: String) -> Option<CaddyInputAccept> {
+    if !config.enabled || config.server_address.is_empty() {
+        return None;
+    }
+    // The HTTP port serves the redirect and ACME HTTP challenges when HTTPS is
+    // on, and the site itself when it is off.
+    let mut ports = vec![config.http_port];
+    if config.https_mode != CaddyHttpsMode::Disabled {
+        ports.push(config.https_port);
+    }
+    Some(CaddyInputAccept { interface, ports })
 }
 
 /// Return only an address of an enabled LAN interface. Caddy must never use
@@ -734,6 +757,24 @@ mod tests {
             https_port: https,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn input_accept_follows_enabled_state_and_https_mode() {
+        let mut config = config_with_ports(80, 443);
+        config.server_address = "router.lan".into();
+        config.enabled = false;
+        assert_eq!(input_accept(&config, "lan0".into()), None);
+        config.enabled = true;
+        config.https_mode = CaddyHttpsMode::SelfSigned;
+        let accept = input_accept(&config, "lan0".into()).unwrap();
+        assert_eq!(accept.interface, "lan0");
+        assert_eq!(accept.ports, vec![80, 443]);
+        config.https_mode = CaddyHttpsMode::Disabled;
+        assert_eq!(
+            input_accept(&config, "lan0".into()).unwrap().ports,
+            vec![80]
+        );
     }
 
     #[test]

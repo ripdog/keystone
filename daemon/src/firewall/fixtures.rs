@@ -422,6 +422,7 @@ pub(crate) fn rich() -> FirewallConfig {
             ..FirewallGlobalSettings::default()
         },
         upnp_forward: None,
+        caddy_input: None,
     }
 }
 

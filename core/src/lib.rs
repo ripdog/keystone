@@ -1965,6 +1965,18 @@ pub struct FirewallConfig {
     /// not stored with the firewall rows, and kept out of API responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upnp_forward: Option<upnp::UpnpForwardAccept>,
+    /// Set while Caddy is enabled: the input rules that let LAN clients reach
+    /// it. Derived from the Caddy configuration, like `upnp_forward`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caddy_input: Option<CaddyInputAccept>,
+}
+
+/// LAN interface and TCP ports Caddy listens on. Keystone generates the input
+/// accepts for these itself, so a working Caddy never needs a manual rule.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CaddyInputAccept {
+    pub interface: String,
+    pub ports: Vec<u16>,
 }
 
 /// A named set of IPv4/IPv6 addresses and CIDR networks (may mix families).

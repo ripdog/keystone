@@ -249,6 +249,7 @@ mod tests {
             port_groups: vec![],
             global_settings: FirewallGlobalSettings::default(),
             upnp_forward: None,
+            caddy_input: None,
         }
     }
 
@@ -425,6 +426,22 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    #[test]
+    fn caddy_ports_are_accepted_only_while_caddy_is_enabled() {
+        let mut config = create_test_config();
+        let json_of =
+            |c: &FirewallConfig| serde_json::to_string(&generate_ruleset(c).nftables).unwrap();
+        assert!(!json_of(&config).contains("Allow Caddy"));
+
+        config.caddy_input = Some(keystone_core::CaddyInputAccept {
+            interface: "eth1".to_string(),
+            ports: vec![80, 443],
+        });
+        let json = json_of(&config);
+        assert!(json.contains("Allow Caddy on eth1 tcp/80"), "{json}");
+        assert!(json.contains("Allow Caddy on eth1 tcp/443"), "{json}");
     }
 
     #[test]

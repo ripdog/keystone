@@ -1252,6 +1252,7 @@ impl<'a> FirewallDb<'a> {
             port_groups: self.get_port_groups().await?,
             global_settings: self.get_firewall_global_settings().await?,
             upnp_forward: crate::upnp::load_forward_accept(self.pool).await?,
+            caddy_input: crate::caddy::load_input_accept(self.pool).await?,
         })
     }
 

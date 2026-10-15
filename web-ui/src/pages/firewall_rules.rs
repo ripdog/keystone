@@ -9,8 +9,8 @@ use crate::api;
 use crate::components::form_utils::{event_target_checked, event_target_value};
 use crate::components::rule_table::{
     AddressField, AddressFieldInput, DragHandle, FilterBox, PortField, PortFieldInput,
-    ReorderButtons, RuleHits, address_group_names, matches_filter, move_by, move_onto,
-    port_group_names, use_rule_counters,
+    ReorderButtons, RuleHits, ZoneSelect, address_group_names, matches_filter, move_by, move_onto,
+    port_group_names, use_rule_counters, zone_names,
 };
 use keystone_core::{FirewallAction, ForwardRule, InputRule, LanDevice, RuleProtocol};
 use leptos::prelude::*;
@@ -165,6 +165,7 @@ pub(super) fn InputRulesTab(
     let counters = use_rule_counters(token, on_unauthorized);
     let address_groups = address_group_names(token, reload_trigger);
     let port_groups = port_group_names(token, reload_trigger);
+    let zones = zone_names(token, reload_trigger);
 
     let editing = RwSignal::new(Option::<InputRule>::None);
     let error_message = RwSignal::new(String::new());
@@ -300,6 +301,7 @@ pub(super) fn InputRulesTab(
                     on_unauthorized=on_unauthorized
                     address_groups=address_groups
                     port_groups=port_groups
+                    zones=zones
                 />
             })}
 
@@ -475,6 +477,7 @@ fn InputRuleEditor(
     on_unauthorized: Callback<()>,
     address_groups: Signal<Vec<String>>,
     port_groups: Signal<Vec<String>>,
+    zones: Signal<Vec<String>>,
 ) -> impl IntoView {
     let name = RwSignal::new(rule.name.clone());
     let description = RwSignal::new(rule.description.clone().unwrap_or_default());
@@ -591,14 +594,8 @@ fn InputRuleEditor(
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                    <label class="block text-sm text-gray-400 mb-1">"Zone (blank = any)"</label>
-                    <input
-                        type="text"
-                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
-                        prop:value=move || zone.get()
-                        on:input=move |ev| zone.set(event_target_value(&ev))
-                        placeholder="e.g., wan"
-                    />
+                    <label class="block text-sm text-gray-400 mb-1">"Zone"</label>
+                    <ZoneSelect value=zone zones=zones />
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">"Protocol"</label>
@@ -740,6 +737,7 @@ pub(super) fn ForwardRulesTab(
     let counters = use_rule_counters(token, on_unauthorized);
     let address_groups = address_group_names(token, reload_trigger);
     let port_groups = port_group_names(token, reload_trigger);
+    let zones = zone_names(token, reload_trigger);
 
     let editing = RwSignal::new(Option::<ForwardRule>::None);
     let error_message = RwSignal::new(String::new());
@@ -878,6 +876,7 @@ pub(super) fn ForwardRulesTab(
                     on_unauthorized=on_unauthorized
                     address_groups=address_groups
                     port_groups=port_groups
+                    zones=zones
                 />
             })}
 
@@ -1058,6 +1057,7 @@ fn ForwardRuleEditor(
     on_unauthorized: Callback<()>,
     address_groups: Signal<Vec<String>>,
     port_groups: Signal<Vec<String>>,
+    zones: Signal<Vec<String>>,
 ) -> impl IntoView {
     let name = RwSignal::new(rule.name.clone());
     let description = RwSignal::new(rule.description.clone().unwrap_or_default());
@@ -1204,23 +1204,11 @@ fn ForwardRuleEditor(
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">"Source Zone"</label>
-                    <input
-                        type="text"
-                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
-                        prop:value=move || source_zone.get()
-                        on:input=move |ev| source_zone.set(event_target_value(&ev))
-                        placeholder="blank = any"
-                    />
+                    <ZoneSelect value=source_zone zones=zones />
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">"Dest Zone"</label>
-                    <input
-                        type="text"
-                        class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
-                        prop:value=move || dest_zone.get()
-                        on:input=move |ev| dest_zone.set(event_target_value(&ev))
-                        placeholder="blank = any"
-                    />
+                    <ZoneSelect value=dest_zone zones=zones />
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">"Protocol"</label>

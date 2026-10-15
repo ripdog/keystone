@@ -7,7 +7,7 @@
 use super::form_utils::event_target_value;
 use crate::api;
 use gloo_timers::callback::Interval;
-use keystone_core::{AddressGroup, FirewallRuleCounter, PortGroup};
+use keystone_core::{AddressGroup, FirewallRuleCounter, FirewallZone, PortGroup};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -160,6 +160,53 @@ pub fn port_group_names(token: Signal<String>, reload: RwSignal<i32>) -> Signal<
         Some(Ok(list)) => names_of(list.iter().map(|group: &PortGroup| group.name.as_str())),
         _ => Vec::new(),
     })
+}
+
+/// Names of the firewall zones, refreshed when `reload` changes.
+pub fn zone_names(token: Signal<String>, reload: RwSignal<i32>) -> Signal<Vec<String>> {
+    let zones = LocalResource::new(move || {
+        let token = token.get();
+        let _ = reload.get();
+        async move { api::fetch_firewall_zones(&token).await }
+    });
+    Signal::derive(move || match zones.get() {
+        Some(Ok(list)) => names_of(list.iter().map(|zone: &FirewallZone| zone.name.as_str())),
+        _ => Vec::new(),
+    })
+}
+
+/// Options for a zone dropdown: "any", every zone, and the current value when
+/// it names a zone that no longer exists, so saving never silently drops it.
+pub fn zone_options(zones: &[String], current: &str) -> Vec<String> {
+    let mut options = zones.to_vec();
+    if !current.is_empty() && !options.iter().any(|z| z == current) {
+        options.push(current.to_owned());
+    }
+    options
+}
+
+/// A zone dropdown whose empty value means "any".
+#[component]
+pub fn ZoneSelect(value: RwSignal<String>, zones: Signal<Vec<String>>) -> impl IntoView {
+    view! {
+        <select
+            class="w-full px-3 py-2 bg-gray-600 text-gray-200 rounded border border-gray-500"
+            prop:value=move || value.get()
+            on:change=move |ev| value.set(event_target_value(&ev))
+        >
+            <option value="">"Any"</option>
+            {move || {
+                zone_options(&zones.get(), &value.get_untracked())
+                    .into_iter()
+                    .map(|zone| {
+                        let selected = zone == value.get_untracked();
+                        let label = zone.clone();
+                        view! { <option value=zone selected=selected>{label}</option> }
+                    })
+                    .collect_view()
+            }}
+        </select>
+    }
 }
 
 fn names_of<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
@@ -479,6 +526,14 @@ pub fn PortFieldInput(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zone_options_keep_a_stale_current_zone() {
+        let zones = vec!["lan".to_string(), "wan".to_string()];
+        assert_eq!(zone_options(&zones, ""), zones);
+        assert_eq!(zone_options(&zones, "lan"), zones);
+        assert_eq!(zone_options(&zones, "old"), vec!["lan", "wan", "old"]);
+    }
 
     #[test]
     fn filter_matches_every_term_in_any_field() {

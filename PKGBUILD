@@ -1,4 +1,4 @@
-pkgname=keystone
+pkgname=keystone-router
 pkgver=$(awk '/^\[workspace\.package\]$/ { in_package = 1; next } /^\[/ { in_package = 0 } in_package && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.toml)
 pkgrel=1
 pkgdesc="Linux router/firewall manager with split-privilege web UI"
@@ -9,6 +9,7 @@ depends=("glibc" "sqlite" "nftables" "conntrack-tools" "systemd" "iproute2" "ipu
 optdepends=('miniupnpd-nft: UPnP IGD and NAT-PMP port mapping (AUR; the extra/miniupnpd build uses iptables and is unsupported)'
             'blocky-bin: DNS ad-blocking and encrypted upstream DNS (AUR)')
 makedepends=("rust" "cargo" "trunk" "git")
+conflicts=('keystone') # the extra repo's assembler framework shares the old name
 # Do not inherit host-specific -march=native/-O3/LTO flags. C dependencies
 # (including cryptographic RNG implementations) control their own optimisation.
 options=("!strip" "!buildflags" "!lto")

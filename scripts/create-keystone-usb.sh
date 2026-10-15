@@ -84,11 +84,11 @@ OPTIONS:
 EXAMPLES:
   # Create new USB
   sudo ./scripts/create-keystone-usb.sh -i archlinux-2026.01.01-x86_64.iso -d /dev/sde \
-    -k pkg/keystone-0.1.0-1-x86_64.pkg.tar.zst
+    -k pkg/keystone-router-0.1.0-1-x86_64.pkg.tar.zst
 
   # Upgrade Keystone only (existing USB)
   sudo ./scripts/create-keystone-usb.sh --upgrade-keystone -d /dev/sde \
-    -k pkg/keystone-0.1.0-1-x86_64.pkg.tar.zst
+    -k pkg/keystone-router-0.1.0-1-x86_64.pkg.tar.zst
 EOF
 }
 

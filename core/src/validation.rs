@@ -207,6 +207,31 @@ pub fn hostname_or_ip(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The provider name of a `dns <provider> {env.VAR} ...` line. Every argument
+/// must be an environment placeholder, so a credential can never be written
+/// into the generated (world-readable) Caddyfile.
+pub fn dns_provider(line: &str) -> Option<&str> {
+    let mut parts = line.split_ascii_whitespace();
+    if parts.next() != Some("dns") {
+        return None;
+    }
+    let provider = parts.next()?;
+    let args: Vec<&str> = parts.collect();
+    let name_ok = !provider.is_empty()
+        && provider.len() <= 64
+        && provider
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    let env_ok = |arg: &&str| {
+        arg.strip_prefix("{env.")
+            .and_then(|rest| rest.strip_suffix('}'))
+            .is_some_and(|var| {
+                !var.is_empty() && var.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            })
+    };
+    (name_ok && !args.is_empty() && args.len() <= 4 && args.iter().all(env_ok)).then_some(provider)
+}
+
 /// Restrict custom TLS syntax to supported certificate and DNS-challenge
 /// directives instead of treating it as an unrestricted Caddyfile fragment.
 pub fn custom_tls_config(value: &str) -> Result<(), String> {
@@ -233,22 +258,14 @@ pub fn custom_tls_config(value: &str) -> Result<(), String> {
         false
     };
     let valid_dns = if let ["tls {", dns, "}"] = trimmed.as_slice() {
-        let parts: Vec<&str> = dns.split_ascii_whitespace().collect();
-        parts.len() == 3
-            && parts[0] == "dns"
-            && parts[1] == "cloudflare"
-            && parts[2].starts_with("{env.")
-            && parts[2].ends_with('}')
-            && parts[2][5..parts[2].len() - 1]
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+        dns_provider(dns).is_some()
     } else {
         false
     };
     if valid_files || valid_dns {
         Ok(())
     } else {
-        Err("Only 'tls /absolute/cert /absolute/key' or a Cloudflare DNS challenge block is supported".into())
+        Err("Only 'tls /absolute/cert /absolute/key' or a DNS challenge block ('dns <provider> {env.VARIABLE}') is supported. Credentials must come from the Caddy service environment, never the config.".into())
     }
 }
 
@@ -323,6 +340,9 @@ mod tests {
     fn caddy_rejects_extra_sites() {
         assert!(hostname_or_ip("router.example\nsite.example").is_err());
         assert!(custom_tls_config("tls {\n dns cloudflare {env.CF_API_TOKEN}\n}").is_ok());
+        assert!(custom_tls_config("tls {\n dns porkbun {env.KEY} {env.SECRET}\n}").is_ok());
+        assert!(custom_tls_config("tls {\n dns route53 secret123\n}").is_err());
+        assert!(custom_tls_config("tls {\n dns bad/name {env.X}\n}").is_err());
         assert!(
             custom_tls_config("tls {\n dns cloudflare {env.CF_API_TOKEN}\n}\nother.example {")
                 .is_err()

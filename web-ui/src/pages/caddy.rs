@@ -314,12 +314,17 @@ fn SettingsTab(
                         class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white font-mono text-sm"
                     />
                     <p class="text-sm text-gray-500 mt-1">
-                        "For security, only a three-line Cloudflare DNS challenge block or 'tls /absolute/cert /absolute/key' is accepted. Do not paste API tokens here."
+                        "Accepted: 'tls /absolute/cert /absolute/key', or a DNS challenge block 'dns <provider> {env.VARIABLE}' for any DNS provider. Credentials are never entered here; they are read from the Caddy service environment."
                     </p>
                     <div class="mt-2 p-3 bg-gray-900 rounded text-sm text-gray-400">
-                        <p class="font-medium text-gray-300 mb-1">"Example for Cloudflare DNS challenge:"</p>
+                        <p class="font-medium text-gray-300 mb-1">"Example (Cloudflare DNS challenge):"</p>
                         <pre class="text-xs font-mono">"tls {\n    dns cloudflare {env.CF_API_TOKEN}\n}"</pre>
-                        <p class="mt-2">"Requires the Cloudflare DNS provider module in Caddy and CF_API_TOKEN set in the Caddy service environment. The standard Arch Caddy package does not include the provider."</p>
+                        <p class="mt-2">"Providers that take several values may list up to four placeholders, e.g. 'dns porkbun {env.API_KEY} {env.API_SECRET}'."</p>
+                        <p class="font-medium text-gray-300 mt-3 mb-1">"Providing the token"</p>
+                        <p>"Create a systemd drop-in for Caddy, then restart it:"</p>
+                        <pre class="text-xs font-mono">"sudo systemctl edit caddy\n\n[Service]\nEnvironment=CF_API_TOKEN=your-token\n\nsudo systemctl restart caddy"</pre>
+                        <p class="mt-2">"For a root-only file instead, use EnvironmentFile=/etc/caddy/dns.env (mode 600)."</p>
+                        <p class="mt-2">"The provider module must be built into Caddy (the standard Arch package has none). Keystone reports a missing module when you validate."</p>
                     </div>
                 </div>
             </Show>

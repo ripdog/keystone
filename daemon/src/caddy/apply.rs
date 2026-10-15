@@ -140,17 +140,20 @@ async fn lan_bind_ip(pool: &SqlitePool, selected: &str) -> Result<String> {
 const LAN_IP_WAIT_ATTEMPTS: u32 = 20;
 const LAN_IP_WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Cloudflare DNS support is an optional Caddy module, not in Arch's base binary.
-/// Report the missing dependency before trying to adapt the generated Caddyfile.
+/// DNS challenge providers are optional Caddy modules, not in Arch's base
+/// binary. Report a missing provider before trying to adapt the generated
+/// Caddyfile.
 fn ensure_required_dns_modules(config: &CaddyConfig) -> Result<()> {
-    if config.https_mode != CaddyHttpsMode::AcmeCustom
-        || !config.custom_tls_config.lines().any(|line| {
-            let mut words = line.split_ascii_whitespace();
-            words.next() == Some("dns") && words.next() == Some("cloudflare")
-        })
-    {
+    if config.https_mode != CaddyHttpsMode::AcmeCustom {
         return Ok(());
     }
+    let Some(provider) = config
+        .custom_tls_config
+        .lines()
+        .find_map(keystone_core::validation::dns_provider)
+    else {
+        return Ok(());
+    };
     let output = Command::new("caddy")
         .arg("list-modules")
         .output()
@@ -158,16 +161,15 @@ fn ensure_required_dns_modules(config: &CaddyConfig) -> Result<()> {
     anyhow::ensure!(output.status.success(), "Failed to list Caddy modules");
     let modules = String::from_utf8_lossy(&output.stdout);
     anyhow::ensure!(
-        has_cloudflare_module(&modules),
-        "Caddy is missing the Cloudflare DNS provider (dns.providers.cloudflare). Install a Caddy build with github.com/caddy-dns/cloudflare before enabling Cloudflare DNS challenge TLS."
+        has_dns_provider_module(&modules, provider),
+        "Caddy is missing the {provider} DNS provider (dns.providers.{provider}). Install a Caddy build that includes it (for example github.com/caddy-dns/{provider}) before enabling DNS challenge TLS."
     );
     Ok(())
 }
 
-fn has_cloudflare_module(modules: &str) -> bool {
-    modules
-        .lines()
-        .any(|line| line.trim() == "dns.providers.cloudflare")
+fn has_dns_provider_module(modules: &str, provider: &str) -> bool {
+    let wanted = format!("dns.providers.{provider}");
+    modules.lines().any(|line| line.trim() == wanted)
 }
 
 /// Generate the Caddyfile content from the configuration
@@ -919,11 +921,18 @@ mod tests {
     }
 
     #[test]
-    fn cloudflare_module_detection_requires_exact_provider() {
-        assert!(has_cloudflare_module(
-            "tls.issuance.acme\ndns.providers.cloudflare\n"
+    fn dns_provider_detection_requires_exact_provider() {
+        assert!(has_dns_provider_module(
+            "tls.issuance.acme\ndns.providers.cloudflare\n",
+            "cloudflare"
         ));
-        assert!(!has_cloudflare_module("dns.providers.cloudflare_extra\n"));
-        assert!(!has_cloudflare_module("tls.issuance.acme\n"));
+        assert!(!has_dns_provider_module(
+            "dns.providers.cloudflare_extra\n",
+            "cloudflare"
+        ));
+        assert!(!has_dns_provider_module(
+            "dns.providers.route53\n",
+            "cloudflare"
+        ));
     }
 }

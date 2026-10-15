@@ -102,9 +102,20 @@ async fn lan_interface_name(pool: &SqlitePool, selected: &str) -> Result<String>
 /// its implicit all-interfaces bind when acting as Keystone's proxy.
 async fn lan_bind_ip(pool: &SqlitePool, selected: &str) -> Result<String> {
     let name = lan_interface_name(pool, selected).await?;
+    // networkd configures the address asynchronously, so right after a unified
+    // apply it may not be assigned yet.
+    for _ in 0..LAN_IP_WAIT_ATTEMPTS {
+        if let Some(ip) = get_interface_ip(&name) {
+            return Ok(ip);
+        }
+        tokio::time::sleep(LAN_IP_WAIT_INTERVAL).await;
+    }
     get_interface_ip(&name)
         .ok_or_else(|| anyhow::anyhow!("No assigned IPv4 address on LAN interface {name}"))
 }
+
+const LAN_IP_WAIT_ATTEMPTS: u32 = 20;
+const LAN_IP_WAIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Cloudflare DNS support is an optional Caddy module, not in Arch's base binary.
 /// Report the missing dependency before trying to adapt the generated Caddyfile.

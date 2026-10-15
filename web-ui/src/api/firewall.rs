@@ -10,12 +10,12 @@ use keystone_core::{
     DeleteResponse, FirewallConfirmRequest, FirewallConfirmResponse, FirewallCountersResponse,
     FirewallGlobalSettings, FirewallGlobalSettingsResponse, FirewallLogResponse,
     FirewallPreviewResponse, FirewallRollbackResponse, FirewallRuleCounter, FirewallZone,
-    FirewallZonesResponse, ForwardRule, InputRule, LanDevice, LanDevicesResponse, PortForward,
-    PortGroup, PortGroupsResponse, ReorderRulesRequest, SaveAddressGroupRequest,
-    SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse, SaveFirewallZoneRequest,
-    SaveForwardRuleRequest, SaveInputRuleRequest, SavePortGroupRequest, SaveZoneForwardRequest,
-    SimplePortForward, SimplePortForwardsResponse, TestPacketRequest, TestPacketResponse,
-    ZoneForwardPolicy,
+    FirewallZonesResponse, ForwardRule, ForwardRulesResponse, InputRule, InputRulesResponse,
+    LanDevice, LanDevicesResponse, PortForward, PortGroup, PortGroupsResponse, ReorderRulesRequest,
+    SaveAddressGroupRequest, SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
+    SaveFirewallZoneRequest, SaveForwardRuleRequest, SaveInputRuleRequest, SavePortGroupRequest,
+    SaveZoneForwardRequest, SimplePortForward, SimplePortForwardsResponse, TestPacketRequest,
+    TestPacketResponse, ZoneForwardPolicy, ZoneForwardsResponse,
 };
 
 use super::client::{call, call_at, call_with, delete, get, post_empty};
@@ -124,7 +124,8 @@ pub async fn reorder_forward_rules(token: &str, rule_ids: Vec<i64>) -> Result<()
 
 /// Fetch zone-to-zone forward policies
 pub async fn fetch_zone_forwards(token: &str) -> Result<Vec<ZoneForwardPolicy>, String> {
-    get("/api/firewall/zone-forwards", token).await
+    let response: ZoneForwardsResponse = get("/api/firewall/zone-forwards", token).await?;
+    Ok(response.forwards)
 }
 
 /// Save a zone forward policy
@@ -144,7 +145,8 @@ pub async fn delete_zone_forward(token: &str, id: i64) -> Result<DeleteResponse,
 
 /// Fetch input rules
 pub async fn fetch_input_rules(token: &str) -> Result<Vec<InputRule>, String> {
-    get("/api/firewall/input-rules", token).await
+    let response: InputRulesResponse = get("/api/firewall/input-rules", token).await?;
+    Ok(response.rules)
 }
 
 /// Save an input rule
@@ -164,7 +166,8 @@ pub async fn delete_input_rule(token: &str, id: i64) -> Result<DeleteResponse, S
 
 /// Fetch forward rules
 pub async fn fetch_forward_rules(token: &str) -> Result<Vec<ForwardRule>, String> {
-    get("/api/firewall/forward-rules", token).await
+    let response: ForwardRulesResponse = get("/api/firewall/forward-rules", token).await?;
+    Ok(response.rules)
 }
 
 /// Save a forward rule

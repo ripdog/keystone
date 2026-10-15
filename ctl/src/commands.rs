@@ -67,6 +67,17 @@ pub enum Commands {
         /// JWT token for authentication (reads from file if not provided)
         #[arg(short, long, env = "KEYSTONE_TOKEN")]
         token: Option<String>,
+
+        /// Confirm immediately after applying, skipping the rollback window
+        #[arg(short = 'y', long)]
+        confirm: bool,
+    },
+
+    /// Confirm the pending apply (looks up the session ID automatically)
+    Confirm {
+        /// JWT token for authentication (reads from file if not provided)
+        #[arg(short, long, env = "KEYSTONE_TOKEN")]
+        token: Option<String>,
     },
 
     /// Manage users
@@ -320,6 +331,10 @@ pub enum FirewallCommands {
         /// JWT token for authentication
         #[arg(short, long, env = "KEYSTONE_TOKEN")]
         token: Option<String>,
+
+        /// Confirm immediately after applying, skipping the rollback window
+        #[arg(short = 'y', long)]
+        confirm: bool,
     },
 
     /// Confirm applied changes (prevents rollback)
@@ -328,9 +343,9 @@ pub enum FirewallCommands {
         #[arg(short, long, env = "KEYSTONE_TOKEN")]
         token: Option<String>,
 
-        /// Session ID from apply command
+        /// Session ID from apply command (defaults to the pending session)
         #[arg(long)]
-        session_id: String,
+        session_id: Option<String>,
     },
 
     /// Rollback to previous firewall configuration
@@ -1119,4 +1134,27 @@ pub enum AddressOverrideCommands {
         #[arg(long)]
         id: i64,
     },
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn apply_accepts_confirm_flag() {
+        let cli = Cli::try_parse_from(["keystonectl", "apply", "-y", "--token", "t"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Apply { confirm: true, .. })
+        ));
+    }
+
+    #[test]
+    fn confirm_needs_no_session_id() {
+        assert!(Cli::try_parse_from(["keystonectl", "confirm", "--token", "t"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["keystonectl", "firewall", "confirm", "--token", "t"]).is_ok()
+        );
+    }
 }

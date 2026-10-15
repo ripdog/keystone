@@ -125,10 +125,7 @@ pub fn apply_all(response: &ApplyAllResponse) {
         }
         if let Some(session_id) = &response.firewall_session_id {
             println!("  Session ID: {}", session_id);
-            println!(
-                "  Run 'keystonectl firewall confirm --session-id {}'",
-                session_id
-            );
+            println!("  Run 'keystonectl confirm' (session {})", session_id);
         }
     }
 }
@@ -455,10 +452,7 @@ pub fn firewall_apply(response: &FirewallApplyResponse) {
         println!("✓ {}", response.message);
         if let Some(session_id) = &response.session_id {
             println!("  Session ID: {}", session_id);
-            println!(
-                "  Run 'keystonectl firewall confirm --session-id {}'",
-                session_id
-            );
+            println!("  Run 'keystonectl confirm' (session {})", session_id);
         }
     } else {
         println!("✗ {}", response.message);

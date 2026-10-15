@@ -5,7 +5,7 @@ use keystone_core::api::{
 };
 use keystone_core::*;
 
-use crate::client::DaemonClient;
+use crate::client::{AuthedDaemonClient, DaemonClient};
 use crate::commands::{
     FirewallCommands, ForwardRulesCommands, InputRulesCommands, PortForwardsCommands,
     SettingsCommands, ZoneForwardsCommands, ZonesCommands,
@@ -387,7 +387,7 @@ pub async fn handle_firewall_command(
             output(cli_json, &response, pretty::firewall_preview);
         }
 
-        FirewallCommands::Apply { token } => {
+        FirewallCommands::Apply { token, confirm } => {
             let authed = client.authed(get_token(token)?);
             let request = FirewallApplyRequest {};
             let response: FirewallApplyResponse = authed.post("/firewall/apply", &request).await?;
@@ -395,17 +395,14 @@ pub async fn handle_firewall_command(
             if !response.success {
                 std::process::exit(1);
             }
+            if confirm && response.pending_confirmation {
+                confirm_session(&authed, response.session_id, cli_json).await?;
+            }
         }
 
         FirewallCommands::Confirm { token, session_id } => {
             let authed = client.authed(get_token(token)?);
-            let request = FirewallConfirmRequest { session_id };
-            let response: FirewallConfirmResponse =
-                authed.call::<ConfirmFirewall>(&request).await?;
-            output(cli_json, &response, pretty::firewall_confirm);
-            if !response.success {
-                std::process::exit(1);
-            }
+            confirm_session(&authed, session_id, cli_json).await?;
         }
 
         FirewallCommands::Rollback { token } => {
@@ -424,5 +421,31 @@ pub async fn handle_firewall_command(
         }
     }
 
+    Ok(())
+}
+
+/// Confirm a pending apply. Without an explicit session ID, the pending one
+/// is looked up from the daemon.
+pub async fn confirm_session(
+    authed: &AuthedDaemonClient<'_>,
+    session_id: Option<String>,
+    cli_json: bool,
+) -> Result<()> {
+    let session_id = match session_id {
+        Some(id) => id,
+        None => {
+            let status: FirewallStatusResponse = authed.get("/firewall/status").await?;
+            match status.session_id {
+                Some(id) if status.pending_confirmation => id,
+                _ => anyhow::bail!("Nothing is pending confirmation"),
+            }
+        }
+    };
+    let request = FirewallConfirmRequest { session_id };
+    let response: FirewallConfirmResponse = authed.call::<ConfirmFirewall>(&request).await?;
+    output(cli_json, &response, pretty::firewall_confirm);
+    if !response.success {
+        std::process::exit(1);
+    }
     Ok(())
 }

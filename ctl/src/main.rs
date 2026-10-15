@@ -226,7 +226,7 @@ async fn main() -> Result<()> {
             output(cli.json, &response, pretty::dashboard);
         }
 
-        Some(Commands::Apply { token }) => {
+        Some(Commands::Apply { token, confirm }) => {
             let authed = client.authed(get_token(token)?);
             let response: ApplyAllResponse =
                 authed.post("/apply-all", &serde_json::json!({})).await?;
@@ -234,6 +234,19 @@ async fn main() -> Result<()> {
             if !response.success {
                 std::process::exit(1);
             }
+            if confirm && response.firewall_pending_confirmation {
+                handlers::firewall::confirm_session(
+                    &authed,
+                    response.firewall_session_id,
+                    cli.json,
+                )
+                .await?;
+            }
+        }
+
+        Some(Commands::Confirm { token }) => {
+            let authed = client.authed(get_token(token)?);
+            handlers::firewall::confirm_session(&authed, None, cli.json).await?;
         }
 
         Some(Commands::Users(subcmd)) => match subcmd {

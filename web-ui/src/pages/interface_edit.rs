@@ -56,6 +56,7 @@ pub fn InterfaceEditPage(
     let (ipv6_ra_use_route_prefix, set_ipv6_ra_use_route_prefix) = signal(true);
     let (ipv6_ra_use_autonomous, set_ipv6_ra_use_autonomous) = signal(true);
     let (ipv6_send_ra, set_ipv6_send_ra) = signal(false);
+    let (mdns, set_mdns) = signal(false);
     let (pd_enabled, set_pd_enabled) = signal(false);
     let (pd_uplink, set_pd_uplink) = signal(String::new());
     let (pd_subnet_id, set_pd_subnet_id) = signal(String::new());
@@ -119,6 +120,7 @@ pub fn InterfaceEditPage(
                             set_ipv6_ra_use_autonomous.set(ra_cfg.use_autonomous_prefix);
                         }
                         set_ipv6_send_ra.set(cfg.ipv6_send_ra);
+                        set_mdns.set(cfg.mdns);
                         if let Some(pd_cfg) = &cfg.dhcp_prefix_delegation {
                             set_pd_enabled.set(true);
                             set_pd_uplink.set(pd_cfg.uplink_interface.clone().unwrap_or_default());
@@ -193,6 +195,7 @@ pub fn InterfaceEditPage(
                             ipv6_accept_ra_config: None,
                             ipv6_send_ra: false,
                             dhcp_prefix_delegation: None,
+                            mdns: false,
                             ip_forward: IpForwardMode::No,
                             ip_masquerade: IpMasqueradeMode::No,
                             mtu: None,
@@ -397,6 +400,7 @@ pub fn InterfaceEditPage(
                         None
                     },
                     ipv6_send_ra: ipv6_send_ra.get(),
+                    mdns: mdns.get() && role.get() == InterfaceRole::LAN,
                     dhcp_prefix_delegation: if pd_enabled.get() {
                         let uplink = pd_uplink.get();
                         Some(DhcpPrefixDelegationConfig {
@@ -904,6 +908,24 @@ pub fn InterfaceEditPage(
                             </div>
                         </Show>
                     </div>
+
+                    // Multicast DNS: reach the router as <hostname>.local
+                    <Show when=move || role.get() == InterfaceRole::LAN>
+                        <div class="bg-gray-700/50 rounded-lg p-4 space-y-1">
+                            <label class="flex items-center gap-3 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked=move || mdns.get()
+                                    on:change=move |ev| set_mdns.set(event_target_checked(&ev))
+                                    class="w-5 h-5 rounded"
+                                />
+                                <span class="text-gray-200">"Answer multicast DNS (<hostname>.local)"</span>
+                            </label>
+                            <p class="text-sm text-gray-400 ml-8">
+                                "Opens UDP 5353 on this interface. Names resolve only on this network segment. Requires the avahi package."
+                            </p>
+                        </div>
+                    </Show>
 
                     // IPv6 Router Advertisement and delegated-prefix distribution
                     <div class="bg-gray-700/50 rounded-lg p-4 space-y-3">

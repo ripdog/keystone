@@ -27,8 +27,8 @@ StateDirectoryMode=0700
 # filesystem sandbox is constructed (Caddy itself remains optional).
 # miniupnpd and keystone-blocky are created here too, so /etc/miniupnpd and
 # /etc/keystone-blocky exist before the sandbox is built; the write access they
-# need is granted below.
-ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d miniupnpd keystone-blocky
+# need is granted below. So is /etc/avahi (multicast DNS).
+ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d miniupnpd keystone-blocky avahi
 ConfigurationDirectoryMode=0755
 
 # Restrict capabilities
@@ -70,6 +70,10 @@ ReadWritePaths=/etc/miniupnpd
 # 0644 files), so this daemon, which lacks CAP_DAC_OVERRIDE, reads it as an
 # ordinary user would; /var/lib itself is read-only here, not hidden.
 ReadWritePaths=/etc/keystone-blocky
+# Multicast DNS: Keystone writes /etc/avahi/avahi-daemon.conf (atomically, via a
+# temp file in the same directory) and starts or stops avahi-daemon.service
+# over D-Bus, which needs no filesystem access of its own.
+ReadWritePaths=/etc/avahi
 PrivateTmp=yes
 
 # Additional hardening

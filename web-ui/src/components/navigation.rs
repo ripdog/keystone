@@ -336,6 +336,14 @@ pub const NAV_ITEMS: &[NavItem] = &[
         "systemd-networkd preview generated config",
     ),
     page(
+        "Network tools",
+        "/diagnostics/tools",
+        SECURITY,
+        DIAGNOSTICS,
+        "terminal",
+        "ping traceroute tracepath dns lookup dig drill nslookup tcp port check connectivity troubleshoot",
+    ),
+    page(
         "Logs",
         "/diagnostics/logs",
         SECURITY,

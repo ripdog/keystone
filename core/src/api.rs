@@ -8,6 +8,7 @@
 
 use crate::blocky::*;
 use crate::changes::*;
+use crate::diagnostics::*;
 use crate::sqm::*;
 use crate::upnp::*;
 use crate::*;
@@ -127,6 +128,9 @@ endpoints! {
     SaveBlockyConfig: Put "/blocky/config", SaveBlockyConfigRequest => SaveBlockyConfigResponse;
 
     PauseBlocky: Post "/blocky/pause", BlockyPauseRequest => BlockyActionResponse;
+
+    /// Run one network diagnostic (ping, traceroute, DNS lookup or TCP check).
+    RunDiagnostic: Post "/diagnostics/run", DiagnosticRequest => DiagnosticResponse;
 
     ApplySsh: Post "/ssh/apply", SshConfig => SshApplyResponse;
 

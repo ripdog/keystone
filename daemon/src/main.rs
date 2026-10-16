@@ -15,6 +15,7 @@ mod config_validation;
 mod consistency;
 mod db;
 mod dhcp_session;
+mod diagnostics;
 mod dnsmasq;
 mod firewall;
 mod gateway;
@@ -329,6 +330,8 @@ async fn main() -> anyhow::Result<()> {
         // Merge systemd routes
         .merge(systemd::routes::systemd_routes())
         .merge(ssh::routes())
+        // Merge network diagnostics routes
+        .merge(diagnostics::routes())
         // Merge wizard routes
         .merge(wizard::wizard_routes())
         .layer(middleware::from_fn_with_state(
@@ -1905,7 +1908,9 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use keystone_core::api::{SaveCaddyConfig, SaveDnsmasqConfig, SaveFirewallZone, SaveInputRule};
+    use keystone_core::api::{
+        RunDiagnostic, SaveCaddyConfig, SaveDnsmasqConfig, SaveFirewallZone, SaveInputRule,
+    };
     use keystone_core::{
         CaddyConfig, DnsmasqConfig, FirewallZone, InputRule, SaveCaddyConfigRequest,
         SaveDnsmasqConfigRequest, SaveFirewallZoneRequest, SaveInputRuleRequest,
@@ -1938,6 +1943,7 @@ mod tests {
                     firewall: manager.clone(),
                 },
             ))
+            .merge(diagnostics::routes())
             .merge(caddy::routes::caddy_routes(caddy::routes::CaddyState {
                 db,
                 firewall: manager,
@@ -1994,6 +2000,14 @@ mod tests {
                     name: "lan".into(),
                     ..Default::default()
                 },
+            },
+        )
+        .await;
+        assert_routed::<RunDiagnostic>(
+            &app,
+            &keystone_core::diagnostics::DiagnosticRequest::TcpConnect {
+                host: "127.0.0.1".into(),
+                port: 1,
             },
         )
         .await;

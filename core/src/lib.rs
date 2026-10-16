@@ -9,6 +9,7 @@ use thiserror::Error;
 pub mod api;
 pub mod blocky;
 pub mod changes;
+pub mod diagnostics;
 pub mod sqm;
 pub mod upnp;
 pub mod validation;

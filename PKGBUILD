@@ -5,7 +5,7 @@ pkgdesc="Linux router/firewall manager with split-privilege web UI"
 arch=("x86_64")
 url="https://github.com/ripdog/keystone"
 license=("GPL-3.0-only")
-depends=("glibc" "sqlite" "nftables" "conntrack-tools" "systemd" "iproute2" "iputils" "dnsmasq" "hwdata")
+depends=("glibc" "sqlite" "nftables" "conntrack-tools" "systemd" "iproute2" "iputils" "ldns" "dnsmasq" "hwdata")
 optdepends=('miniupnpd-nft: UPnP IGD and NAT-PMP port mapping (AUR; the extra/miniupnpd build uses iptables and is unsupported)'
             'blocky-bin: DNS ad-blocking and encrypted upstream DNS (AUR)'
             'avahi: multicast DNS, so the router answers to <hostname>.local')

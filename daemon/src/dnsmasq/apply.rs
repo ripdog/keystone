@@ -66,9 +66,14 @@ fn released_resolv_conf() -> String {
 }
 
 /// Whether the router's resolv.conf can point at the local dnsmasq: resolv.conf
-/// has no port field, and dnsmasq must be listening on loopback.
+/// has no port field, and dnsmasq must be listening on loopback. In `System`
+/// upstream mode dnsmasq itself reads resolv.conf for its upstream servers, so
+/// pointing it at dnsmasq would leave it with none.
 fn resolv_conf_applicable(config: &keystone_core::DnsmasqConfig) -> bool {
-    config.enabled && config.dns_port == 53 && !config.except_interfaces.iter().any(|i| i == "lo")
+    config.enabled
+        && config.upstream_mode != DnsmasqUpstreamMode::System
+        && config.dns_port == 53
+        && !config.except_interfaces.iter().any(|i| i == "lo")
 }
 
 /// Point `/etc/resolv.conf` at the local dnsmasq (`manage == true`) or release
@@ -488,9 +493,13 @@ mod tests {
         let mut config = keystone_core::DnsmasqConfig {
             enabled: true,
             dns_port: 53,
+            upstream_mode: DnsmasqUpstreamMode::Custom,
             ..Default::default()
         };
         assert!(resolv_conf_applicable(&config));
+        config.upstream_mode = DnsmasqUpstreamMode::System;
+        assert!(!resolv_conf_applicable(&config));
+        config.upstream_mode = DnsmasqUpstreamMode::Custom;
         config.dns_port = 5353;
         assert!(!resolv_conf_applicable(&config));
         config.dns_port = 53;

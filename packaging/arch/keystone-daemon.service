@@ -59,6 +59,9 @@ ReadWritePaths=/etc/ssh/sshd_config.d
 # Match Caddy's packaged service storage paths. The daemon's validator runs
 # as the caddy user, so the caddy-owned log/state directories remain private.
 ReadWritePaths=-/etc/dnsmasq.conf -/var/lib/dnsmasq
+# While dnsmasq serves DNS, Keystone points the router's own /etc/resolv.conf at
+# it (rewritten in place, like dnsmasq.conf). A symlinked resolv.conf is skipped.
+ReadWritePaths=-/etc/resolv.conf
 ReadWritePaths=/etc/caddy -/var/log/caddy -/var/lib/caddy -/run/caddy
 # UPnP: Keystone writes /etc/miniupnpd/miniupnpd.conf (atomically, via a temp
 # file in the same directory). miniupnpd's lease file in /var/lib/miniupnpd

@@ -1914,7 +1914,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use keystone_core::api::{
-        RunDiagnostic, SaveCaddyConfig, SaveDnsmasqConfig, SaveFirewallZone, SaveInputRule,
+        SaveCaddyConfig, SaveDnsmasqConfig, SaveFirewallZone, SaveInputRule, StartDiagnostic,
     };
     use keystone_core::{
         CaddyConfig, DnsmasqConfig, FirewallZone, InputRule, SaveCaddyConfigRequest,
@@ -2008,7 +2008,7 @@ mod tests {
             },
         )
         .await;
-        assert_routed::<RunDiagnostic>(
+        assert_routed::<StartDiagnostic>(
             &app,
             &keystone_core::diagnostics::DiagnosticRequest::TcpConnect {
                 host: "127.0.0.1".into(),

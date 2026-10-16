@@ -6,20 +6,35 @@
 //! [`DiagnosticRequest::validate`] has already checked, under a time limit and
 //! an output limit, and at most [`MAX_CONCURRENT`] at once.
 //!
+//! A run is a job. `POST /diagnostics/run` starts it and returns its id; the
+//! output grows in memory as the tool prints, and the page reads it with
+//! `GET /diagnostics/jobs/{id}?after=<offset>` until the outcome is set.
+//! `POST /diagnostics/jobs/{id}/stop` ends a run early. Finished jobs are kept
+//! briefly so a reload can still show them.
+//!
 //! The daemon's sandbox needs nothing extra: ping and tracepath open raw
 //! sockets (`CAP_NET_RAW`, already granted), and nothing is written to disk.
 
+use std::collections::HashMap;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::{Json, Router, http::StatusCode, routing::post};
-use keystone_core::api::{Endpoint, Req, Res, RunDiagnostic};
-use keystone_core::diagnostics::{DiagnosticRequest, DiagnosticResponse, IpFamily};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use axum::{
+    Json, Router,
+    extract::{Path, Query},
+    http::StatusCode,
+    routing::{get, post},
+};
+use keystone_core::api::{Endpoint, Req, Res, StartDiagnostic, StopDiagnostic};
+use keystone_core::diagnostics::{
+    DiagnosticOutcome, DiagnosticProgress, DiagnosticRequest, DiagnosticStarted, IpFamily,
+};
+use serde::Deserialize;
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::net::{TcpStream, lookup_host};
 use tokio::process::Command;
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 use crate::AppState;
 
@@ -32,7 +47,13 @@ const TRACEROUTE_TIMEOUT: Duration = Duration::from_secs(90);
 const DNS_TIMEOUT: Duration = Duration::from_secs(20);
 const TCP_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Finished jobs are dropped after this long.
+const FINISHED_JOB_TTL: Duration = Duration::from_secs(10 * 60);
+/// Most jobs kept, running or finished.
+const MAX_JOBS: usize = 50;
+
 static SLOTS: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
+static JOBS: LazyLock<Mutex<HashMap<String, Arc<Job>>>> = LazyLock::new(Mutex::default);
 
 /// A program to run and its arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,31 +144,108 @@ fn invocation(request: &DiagnosticRequest) -> Option<Invocation> {
     }
 }
 
-/// Keep reading until the stream ends, storing at most [`MAX_OUTPUT_BYTES`].
-/// Returns whether anything was dropped.
-async fn drain(mut stream: impl AsyncRead + Unpin, buffer: &mut Vec<u8>) -> bool {
-    let mut truncated = false;
-    let mut chunk = [0u8; 4096];
-    loop {
-        match stream.read(&mut chunk).await {
-            Ok(0) | Err(_) => return truncated,
-            Ok(read) => {
-                let room = MAX_OUTPUT_BYTES.saturating_sub(buffer.len());
-                buffer.extend_from_slice(&chunk[..read.min(room)]);
-                truncated |= read > room;
-            }
+/// One diagnostic run and what it has printed so far.
+struct Job {
+    command: String,
+    started: Instant,
+    stop: Notify,
+    state: Mutex<JobState>,
+}
+
+#[derive(Default)]
+struct JobState {
+    output: String,
+    truncated: bool,
+    outcome: Option<DiagnosticOutcome>,
+    finished_at: Option<Instant>,
+}
+
+/// How a run ended, before it is turned into a [`DiagnosticOutcome`].
+#[derive(Default)]
+struct Ending {
+    success: bool,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    stopped: bool,
+}
+
+impl Job {
+    fn new(command: String) -> Arc<Self> {
+        Arc::new(Job {
+            command,
+            started: Instant::now(),
+            stop: Notify::new(),
+            state: Mutex::default(),
+        })
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, JobState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Add output, keeping at most [`MAX_OUTPUT_BYTES`] in total.
+    fn append(&self, text: &str) {
+        let mut state = self.state();
+        let room = MAX_OUTPUT_BYTES.saturating_sub(state.output.len());
+        if text.len() > room {
+            state.truncated = true;
+        }
+        let mut end = text.len().min(room);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        state.output.push_str(&text[..end]);
+    }
+
+    fn finish(&self, ending: Ending) {
+        let mut state = self.state();
+        if state.outcome.is_some() {
+            return;
+        }
+        state.outcome = Some(DiagnosticOutcome {
+            success: ending.success,
+            exit_code: ending.exit_code,
+            duration_ms: self.started.elapsed().as_millis() as u64,
+            timed_out: ending.timed_out,
+            stopped: ending.stopped,
+            truncated: state.truncated,
+        });
+        state.finished_at = Some(Instant::now());
+    }
+
+    /// Output from byte offset `after` (clamped to a character boundary).
+    fn progress(&self, after: u64) -> DiagnosticProgress {
+        let state = self.state();
+        let mut start = (after as usize).min(state.output.len());
+        while !state.output.is_char_boundary(start) {
+            start -= 1;
+        }
+        DiagnosticProgress {
+            command: self.command.clone(),
+            output: state.output[start..].to_owned(),
+            next: state.output.len() as u64,
+            outcome: state.outcome.clone(),
         }
     }
 }
 
-/// Run `invocation` and collect its output. On timeout the process is killed
-/// and the output so far is returned.
-async fn run(invocation: &Invocation) -> DiagnosticResponse {
-    let started = Instant::now();
-    let mut response = DiagnosticResponse {
-        command: invocation.display(),
-        ..Default::default()
-    };
+/// Append every line of `stream` to the job. Lines are decoded one at a time,
+/// so a multi-byte character is never split between two reads.
+async fn pump(stream: impl AsyncRead + Unpin, job: &Job) {
+    let mut reader = BufReader::new(stream);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => job.append(&String::from_utf8_lossy(&line)),
+        }
+    }
+}
+
+/// Run `invocation`, feeding its output to the job. The process is killed on
+/// timeout and when the job is stopped.
+async fn run(job: &Job, invocation: &Invocation) {
     let spawned = Command::new(invocation.program)
         .args(&invocation.args)
         .env("LC_ALL", "C")
@@ -159,124 +257,215 @@ async fn run(invocation: &Invocation) -> DiagnosticResponse {
     let mut child = match spawned {
         Ok(child) => child,
         Err(error) => {
-            response.output = if error.kind() == std::io::ErrorKind::NotFound {
+            job.append(&if error.kind() == std::io::ErrorKind::NotFound {
                 format!("{} is not installed on this router.\n", invocation.program)
             } else {
                 format!("Could not start {}: {error}\n", invocation.program)
-            };
-            return response;
+            });
+            job.finish(Ending::default());
+            return;
         }
     };
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
-        response.output = "Could not capture output.\n".to_owned();
-        return response;
+        job.append("Could not capture output.\n");
+        job.finish(Ending::default());
+        return;
     };
 
-    let mut out = Vec::new();
-    let mut err = Vec::new();
-    let finished = tokio::time::timeout(invocation.timeout, async {
-        let (out_cut, err_cut) = tokio::join!(drain(stdout, &mut out), drain(stderr, &mut err));
-        let status = child.wait().await;
-        (out_cut || err_cut, status)
-    })
-    .await;
-
-    match finished {
-        Ok((truncated, status)) => {
-            response.truncated = truncated;
-            if let Ok(status) = status {
-                response.exit_code = status.code();
-                response.success = status.success();
-            }
+    enum Event {
+        Exited(std::io::Result<std::process::ExitStatus>),
+        TimedOut,
+        Stopped,
+    }
+    let event = {
+        let work = async {
+            tokio::join!(pump(stdout, job), pump(stderr, job));
+            child.wait().await
+        };
+        tokio::select! {
+            result = tokio::time::timeout(invocation.timeout, work) => match result {
+                Ok(status) => Event::Exited(status),
+                Err(_) => Event::TimedOut,
+            },
+            _ = job.stop.notified() => Event::Stopped,
         }
-        Err(_) => {
-            response.timed_out = true;
+    };
+    match event {
+        Event::Exited(status) => {
+            let status = status.ok();
+            job.finish(Ending {
+                success: status.is_some_and(|s| s.success()),
+                exit_code: status.and_then(|s| s.code()),
+                ..Ending::default()
+            });
+        }
+        Event::TimedOut => {
             let _ = child.kill().await;
+            job.append(&format!(
+                "\nStopped after {} seconds.\n",
+                invocation.timeout.as_secs()
+            ));
+            job.finish(Ending {
+                timed_out: true,
+                ..Ending::default()
+            });
+        }
+        Event::Stopped => {
+            let _ = child.kill().await;
+            job.append("\nStopped.\n");
+            job.finish(Ending {
+                stopped: true,
+                ..Ending::default()
+            });
         }
     }
-    let mut text = String::from_utf8_lossy(&out).into_owned();
-    if !err.is_empty() {
-        text.push_str(&String::from_utf8_lossy(&err));
-    }
-    if response.timed_out {
-        text.push_str(&format!(
-            "\nStopped after {} seconds.\n",
-            invocation.timeout.as_secs()
-        ));
-    }
-    response.output = text;
-    response.duration_ms = started.elapsed().as_millis() as u64;
-    response
 }
 
-/// Connect to `host:port` and report how long it took.
-async fn tcp_connect(host: &str, port: u16) -> DiagnosticResponse {
-    let started = Instant::now();
+/// Connect to `host:port`, one address at a time, reporting each result.
+async fn tcp_connect(job: &Job, host: &str, port: u16) {
     let host = host.trim();
-    let mut response = DiagnosticResponse {
-        command: format!("tcp connect {host}:{port}"),
-        ..Default::default()
-    };
     let attempt = async {
-        let addresses: Vec<_> = lookup_host((host, port)).await?.collect();
+        let addresses: Vec<_> = match lookup_host((host, port)).await {
+            Ok(addresses) => addresses.collect(),
+            Err(error) => {
+                job.append(&format!("{host}: {error}\n"));
+                return false;
+            }
+        };
         if addresses.is_empty() {
-            return Err(std::io::Error::other("no addresses found"));
+            job.append(&format!("{host}: no addresses found\n"));
+            return false;
         }
-        let mut report = String::new();
         let mut reached = false;
         for address in addresses {
             let began = Instant::now();
             match TcpStream::connect(address).await {
                 Ok(_) => {
                     reached = true;
-                    report.push_str(&format!(
+                    job.append(&format!(
                         "{address}: open ({} ms)\n",
                         began.elapsed().as_millis()
                     ));
                 }
-                Err(error) => report.push_str(&format!("{address}: {error}\n")),
+                Err(error) => job.append(&format!("{address}: {error}\n")),
             }
         }
-        Ok((reached, report))
+        reached
     };
-    match tokio::time::timeout(TCP_TIMEOUT, attempt).await {
-        Ok(Ok((reached, report))) => {
-            response.success = reached;
-            response.output = report;
-        }
-        Ok(Err(error)) => response.output = format!("{host}: {error}\n"),
-        Err(_) => {
-            response.timed_out = true;
-            response.output = format!("Timed out after {} seconds.\n", TCP_TIMEOUT.as_secs());
+    tokio::select! {
+        result = tokio::time::timeout(TCP_TIMEOUT, attempt) => match result {
+            Ok(success) => job.finish(Ending { success, ..Ending::default() }),
+            Err(_) => {
+                job.append(&format!("Timed out after {} seconds.\n", TCP_TIMEOUT.as_secs()));
+                job.finish(Ending { timed_out: true, ..Ending::default() });
+            }
+        },
+        _ = job.stop.notified() => {
+            job.append("\nStopped.\n");
+            job.finish(Ending { stopped: true, ..Ending::default() });
         }
     }
-    response.duration_ms = started.elapsed().as_millis() as u64;
-    response
 }
 
-async fn run_diagnostic(
-    Json(request): Json<Req<RunDiagnostic>>,
-) -> Result<Json<Res<RunDiagnostic>>, (StatusCode, Json<serde_json::Value>)> {
-    let error = |status, message: &str| (status, Json(serde_json::json!({ "error": message })));
+/// Drop old finished jobs, then the oldest finished ones beyond [`MAX_JOBS`].
+fn prune(jobs: &mut HashMap<String, Arc<Job>>) {
+    let now = Instant::now();
+    let finished_at = |job: &Arc<Job>| job.state().finished_at;
+    jobs.retain(|_, job| finished_at(job).is_none_or(|at| now - at < FINISHED_JOB_TTL));
+    while jobs.len() >= MAX_JOBS {
+        let oldest = jobs
+            .iter()
+            .filter_map(|(id, job)| finished_at(job).map(|at| (at, id.clone())))
+            .min();
+        match oldest {
+            Some((_, id)) => jobs.remove(&id),
+            None => break,
+        };
+    }
+}
+
+type ApiError = (StatusCode, Json<serde_json::Value>);
+
+fn api_error(status: StatusCode, message: &str) -> ApiError {
+    (status, Json(serde_json::json!({ "error": message })))
+}
+
+fn find(id: &str) -> Result<Arc<Job>, ApiError> {
+    JOBS.lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(id)
+        .cloned()
+        .ok_or_else(|| api_error(StatusCode::NOT_FOUND, "No such diagnostic"))
+}
+
+async fn start_diagnostic(
+    Json(request): Json<Req<StartDiagnostic>>,
+) -> Result<Json<Res<StartDiagnostic>>, ApiError> {
     request
         .validate()
-        .map_err(|message| error(StatusCode::BAD_REQUEST, &message))?;
-    let _slot = SLOTS.try_acquire().map_err(|_| {
-        error(
+        .map_err(|message| api_error(StatusCode::BAD_REQUEST, &message))?;
+    let slot = SLOTS.try_acquire().map_err(|_| {
+        api_error(
             StatusCode::TOO_MANY_REQUESTS,
             "Too many diagnostics are already running",
         )
     })?;
-    let response = match (invocation(&request), &request) {
-        (Some(invocation), _) => run(&invocation).await,
-        (None, DiagnosticRequest::TcpConnect { host, port }) => tcp_connect(host, *port).await,
+    let program = invocation(&request);
+    let command = match (&program, &request) {
+        (Some(program), _) => program.display(),
+        (None, DiagnosticRequest::TcpConnect { host, port }) => {
+            format!("tcp connect {}:{port}", host.trim())
+        }
         (None, _) => unreachable!("every other tool runs a program"),
     };
-    Ok(Json(response))
+    let job = Job::new(command);
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    {
+        let mut jobs = JOBS.lock().unwrap_or_else(|e| e.into_inner());
+        prune(&mut jobs);
+        jobs.insert(id.clone(), job.clone());
+    }
+    tokio::spawn(async move {
+        let _slot = slot;
+        match (program, request) {
+            (Some(program), _) => run(&job, &program).await,
+            (None, DiagnosticRequest::TcpConnect { host, port }) => {
+                tcp_connect(&job, &host, port).await
+            }
+            (None, _) => {}
+        }
+    });
+    Ok(Json(DiagnosticStarted { id }))
+}
+
+#[derive(Debug, Deserialize)]
+struct ProgressQuery {
+    #[serde(default)]
+    after: u64,
+}
+
+async fn get_progress(
+    Path(id): Path<String>,
+    Query(query): Query<ProgressQuery>,
+) -> Result<Json<DiagnosticProgress>, ApiError> {
+    Ok(Json(find(&id)?.progress(query.after)))
+}
+
+async fn stop_diagnostic(
+    Path(id): Path<String>,
+    Json(_): Json<Req<StopDiagnostic>>,
+) -> Result<Json<Res<StopDiagnostic>>, ApiError> {
+    let job = find(&id)?;
+    job.stop.notify_one();
+    // Shows the run as it is now; the page keeps polling until it has ended.
+    Ok(Json(job.progress(u64::MAX)))
 }
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new().route(RunDiagnostic::PATH, post(run_diagnostic))
+    Router::new()
+        .route(StartDiagnostic::PATH, post(start_diagnostic))
+        .route("/diagnostics/jobs/{id}", get(get_progress))
+        .route(StopDiagnostic::PATH, post(stop_diagnostic))
 }
 
 #[cfg(test)]
@@ -361,52 +550,134 @@ mod tests {
         }
     }
 
+    async fn run_to_end(invocation: &Invocation) -> (String, DiagnosticOutcome) {
+        let job = Job::new(invocation.display());
+        run(&job, invocation).await;
+        let progress = job.progress(0);
+        (progress.output, progress.outcome.expect("run has ended"))
+    }
+
     #[tokio::test]
     async fn output_and_exit_status_are_reported() {
-        let ok = run(&shell("echo hello; echo oops >&2", Duration::from_secs(5))).await;
+        let (output, ok) =
+            run_to_end(&shell("echo hello; echo oops >&2", Duration::from_secs(5))).await;
         assert!(ok.success);
         assert_eq!(ok.exit_code, Some(0));
-        assert!(ok.output.contains("hello") && ok.output.contains("oops"));
-        let failed = run(&shell("exit 3", Duration::from_secs(5))).await;
+        assert!(output.contains("hello") && output.contains("oops"));
+        let (_, failed) = run_to_end(&shell("exit 3", Duration::from_secs(5))).await;
         assert!(!failed.success);
         assert_eq!(failed.exit_code, Some(3));
     }
 
     #[tokio::test]
+    async fn output_can_be_read_while_the_tool_is_still_running() {
+        let job = Job::new("test".into());
+        let task = {
+            let job = job.clone();
+            tokio::spawn(async move {
+                run(
+                    &job,
+                    &shell("echo first; sleep 1; echo second", Duration::from_secs(10)),
+                )
+                .await
+            })
+        };
+        let mut offset = 0;
+        let mut seen_while_running = false;
+        let mut text = String::new();
+        loop {
+            let progress = job.progress(offset);
+            offset = progress.next;
+            text.push_str(&progress.output);
+            if progress.outcome.is_some() {
+                break;
+            }
+            seen_while_running |= text.contains("first") && !text.contains("second");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        task.await.unwrap();
+        assert!(seen_while_running, "first line was not visible early");
+        assert_eq!(text, "first\nsecond\n");
+    }
+
+    #[tokio::test]
     async fn a_slow_tool_is_stopped_and_its_partial_output_kept() {
         let started = Instant::now();
-        let response = run(&shell("echo first; sleep 30", Duration::from_millis(300))).await;
-        assert!(response.timed_out);
-        assert!(!response.success);
-        assert!(response.output.contains("first"));
+        let (output, outcome) =
+            run_to_end(&shell("echo first; sleep 30", Duration::from_millis(300))).await;
+        assert!(outcome.timed_out);
+        assert!(!outcome.success);
+        assert!(output.contains("first"));
         assert!(started.elapsed() < Duration::from_secs(10));
     }
 
     #[tokio::test]
+    async fn a_running_tool_can_be_stopped() {
+        let job = Job::new("test".into());
+        let task = {
+            let job = job.clone();
+            tokio::spawn(async move {
+                run(
+                    &job,
+                    &shell("echo first; sleep 30", Duration::from_secs(60)),
+                )
+                .await
+            })
+        };
+        while !job.progress(0).output.contains("first") {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        job.stop.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("stop took too long")
+            .unwrap();
+        let outcome = job.progress(0).outcome.unwrap();
+        assert!(outcome.stopped && !outcome.timed_out && !outcome.success);
+    }
+
+    #[tokio::test]
     async fn runaway_output_is_cut_to_the_limit() {
-        let response = run(&shell("head -c 1000000 /dev/zero", Duration::from_secs(10))).await;
-        assert!(response.truncated);
-        assert!(response.output.len() <= MAX_OUTPUT_BYTES + 64);
+        let (output, outcome) = run_to_end(&shell(
+            "head -c 1000000 /dev/zero | tr '\\0' x; echo",
+            Duration::from_secs(10),
+        ))
+        .await;
+        assert!(outcome.truncated);
+        assert!(output.len() <= MAX_OUTPUT_BYTES);
+    }
+
+    #[test]
+    fn appending_never_splits_a_character() {
+        let job = Job::new("test".into());
+        job.append(&"é".repeat(MAX_OUTPUT_BYTES));
+        let progress = job.progress(0);
+        assert!(progress.output.len() <= MAX_OUTPUT_BYTES);
+        assert!(job.state().truncated);
+        // An offset inside a character reads from the character's start.
+        assert!(job.progress(1).output.starts_with('é'));
     }
 
     #[tokio::test]
     async fn a_missing_program_is_explained() {
-        let response = run(&Invocation {
+        let (output, outcome) = run_to_end(&Invocation {
             program: "keystone-no-such-tool",
             args: vec![],
             timeout: Duration::from_secs(1),
         })
         .await;
-        assert!(!response.success);
-        assert!(response.output.contains("not installed"));
+        assert!(!outcome.success);
+        assert!(output.contains("not installed"));
     }
 
     #[tokio::test]
     async fn tcp_connect_reports_open_and_closed_ports() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let open = tcp_connect("127.0.0.1", port).await;
-        assert!(open.success, "{}", open.output);
+        let job = Job::new("test".into());
+        tcp_connect(&job, "127.0.0.1", port).await;
+        let open = job.progress(0);
+        assert!(open.outcome.as_ref().unwrap().success, "{}", open.output);
         // Bound but never listening: refuses connections, and keeps the port
         // from being handed to another test.
         let idle = socket2::Socket::new(
@@ -423,8 +694,101 @@ mod tests {
         )
         .unwrap();
         let idle_port = idle.local_addr().unwrap().as_socket().unwrap().port();
-        let closed = tcp_connect("127.0.0.1", idle_port).await;
-        assert!(!closed.success, "{}", closed.output);
+        let job = Job::new("test".into());
+        tcp_connect(&job, "127.0.0.1", idle_port).await;
+        let closed = job.progress(0);
+        assert!(
+            !closed.outcome.as_ref().unwrap().success,
+            "{}",
+            closed.output
+        );
+    }
+
+    #[test]
+    fn finished_jobs_are_pruned_but_running_ones_are_kept() {
+        let mut jobs = HashMap::new();
+        let running = Job::new("running".into());
+        jobs.insert("running".to_owned(), running);
+        for n in 0..MAX_JOBS {
+            let job = Job::new(format!("done {n}"));
+            job.finish(Ending::default());
+            jobs.insert(format!("done{n}"), job);
+        }
+        prune(&mut jobs);
+        assert!(jobs.len() < MAX_JOBS);
+        assert!(jobs.contains_key("running"));
+    }
+
+    async fn call(
+        app: &Router,
+        method: &str,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        use axum::body::Body;
+        use tower::ServiceExt;
+        let request = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    #[tokio::test]
+    async fn a_diagnostic_is_started_and_read_over_http() {
+        let app: Router = routes().with_state(Arc::new(crate::AppState::new(
+            Arc::new(crate::auth::AuthManager::new(vec![7; 32])),
+            crate::db::Database::new_in_memory().await.unwrap(),
+            Arc::new(crate::firewall::FirewallApplyManager::new(
+                Arc::new(crate::db::Database::new_in_memory().await.unwrap()),
+                Arc::new(crate::networkd::NetworkdApplyManager::system()),
+            )),
+        )));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (status, started) = call(
+            &app,
+            "POST",
+            "/diagnostics/run",
+            serde_json::json!({"tool": "tcp_connect", "host": "127.0.0.1", "port": port}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let id = started["id"].as_str().unwrap().to_owned();
+        let mut progress = serde_json::Value::Null;
+        for _ in 0..100 {
+            (_, progress) = call(
+                &app,
+                "GET",
+                &format!("/diagnostics/jobs/{id}?after=0"),
+                serde_json::json!({}),
+            )
+            .await;
+            if !progress["outcome"].is_null() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(progress["outcome"]["success"], true, "{progress}");
+        assert!(progress["output"].as_str().unwrap().contains("open"));
+
+        let (status, _) = call(&app, "GET", "/diagnostics/jobs/nope", serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = call(
+            &app,
+            "POST",
+            "/diagnostics/run",
+            serde_json::json!({"tool": "ping", "host": "-f", "count": 1}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
     }
 
     #[test]

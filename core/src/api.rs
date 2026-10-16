@@ -130,8 +130,11 @@ endpoints! {
 
     PauseBlocky: Post "/blocky/pause", BlockyPauseRequest => BlockyActionResponse;
 
-    /// Run one network diagnostic (ping, traceroute, DNS lookup or TCP check).
-    RunDiagnostic: Post "/diagnostics/run", DiagnosticRequest => DiagnosticResponse;
+    /// Start one network diagnostic (ping, traceroute, DNS lookup or TCP check).
+    /// Its output is read from `GET /diagnostics/jobs/{id}?after=<offset>`.
+    StartDiagnostic: Post "/diagnostics/run", DiagnosticRequest => DiagnosticStarted;
+    /// Path parameter: `{id}` (the diagnostic); see [`render_path`].
+    StopDiagnostic: Post "/diagnostics/jobs/{id}/stop", DiagnosticNoRequest => DiagnosticProgress;
 
     /// Starts a capture; refused while another is running.
     StartCapture: Post "/capture", CaptureRequest => CaptureInfo;

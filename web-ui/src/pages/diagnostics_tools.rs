@@ -2,12 +2,16 @@
 
 use crate::api;
 use crate::components::form_utils::event_target_value;
+use gloo_timers::callback::{Interval, Timeout};
 use keystone_core::diagnostics::{
-    DiagnosticRequest, DiagnosticResponse, DnsRecordType, IpFamily, PING_MAX_COUNT,
+    DiagnosticOutcome, DiagnosticRequest, DnsRecordType, IpFamily, PING_MAX_COUNT,
     TRACEROUTE_MAX_HOPS,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+
+/// How often the page asks the daemon for new output.
+const POLL_MS: u32 = 400;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tool {
@@ -117,14 +121,19 @@ fn initial_form() -> Form {
 }
 
 /// One-line summary above the output.
-fn summary(response: &DiagnosticResponse) -> String {
-    let seconds = response.duration_ms as f64 / 1000.0;
-    if response.timed_out {
+fn summary(outcome: Option<&DiagnosticOutcome>) -> String {
+    let Some(outcome) = outcome else {
+        return "Running...".to_string();
+    };
+    let seconds = outcome.duration_ms as f64 / 1000.0;
+    if outcome.stopped {
+        format!("Stopped after {seconds:.1} s")
+    } else if outcome.timed_out {
         format!("Timed out after {seconds:.1} s")
-    } else if response.success {
+    } else if outcome.success {
         format!("Completed in {seconds:.1} s")
     } else {
-        match response.exit_code {
+        match outcome.exit_code {
             Some(code) => format!("Failed (exit status {code}) after {seconds:.1} s"),
             None => format!("Failed after {seconds:.1} s"),
         }
@@ -139,9 +148,17 @@ pub fn DiagnosticsToolsPage(
     let token = Signal::derive(move || auth_token.get().unwrap_or_default());
     let tool = RwSignal::new(Tool::Ping);
     let form = RwSignal::new(initial_form());
-    let busy = RwSignal::new(false);
+    // `starting` covers the request that starts a run; `polling` the run itself.
+    let starting = RwSignal::new(false);
+    let polling = RwSignal::new(false);
+    let in_flight = StoredValue::new(false);
+    let job = StoredValue::new(None::<String>);
+    let cursor = StoredValue::new(0u64);
     let error = RwSignal::new(None::<String>);
-    let result = RwSignal::new(None::<DiagnosticResponse>);
+    let command = RwSignal::new(None::<String>);
+    let output = RwSignal::new(String::new());
+    let outcome = RwSignal::new(None::<DiagnosticOutcome>);
+    let pre = NodeRef::<leptos::html::Pre>::new();
     let interfaces = RwSignal::new(Vec::<String>::new());
 
     Effect::new(move |_| {
@@ -160,9 +177,101 @@ pub fn DiagnosticsToolsPage(
         move |ev: leptos::ev::Event| form.update(|f| update(f, event_target_value(&ev)))
     };
 
+    let report = move |message: String| {
+        if message.contains("Unauthorized") {
+            on_unauthorized.run(());
+        } else {
+            error.set(Some(message));
+        }
+    };
+
+    let poll = move || {
+        if !polling.get_untracked() || in_flight.get_value() {
+            return;
+        }
+        let (Some(id), token_value) = (job.get_value(), token.get_untracked()) else {
+            return;
+        };
+        in_flight.set_value(true);
+        let after = cursor.get_value();
+        spawn_local(async move {
+            // A reply for a run that was replaced meanwhile is dropped.
+            let requested = id.clone();
+            let current = move || job.get_value().as_deref() == Some(requested.as_str());
+            match api::fetch_diagnostic(&token_value, &id, after).await {
+                Ok(progress) if current() => {
+                    cursor.set_value(progress.next);
+                    if command.with_untracked(Option::is_none) {
+                        command.set(Some(progress.command));
+                    }
+                    if !progress.output.is_empty() {
+                        output.update(|text| text.push_str(&progress.output));
+                    }
+                    if progress.outcome.is_some() {
+                        polling.set(false);
+                        outcome.set(progress.outcome);
+                    }
+                }
+                Ok(_) => {}
+                Err(message) if current() => {
+                    polling.set(false);
+                    report(message);
+                }
+                Err(_) => {}
+            }
+            in_flight.set_value(false);
+        });
+    };
+
+    // The Effect keeps the Interval alive while the page is shown.
+    Effect::new(move |_prev: Option<Option<Interval>>| {
+        if token.get().is_empty() {
+            None
+        } else {
+            Some(Interval::new(POLL_MS, poll))
+        }
+    });
+
+    // Keep the newest output in view.
+    Effect::new(move |_| {
+        output.track();
+        Timeout::new(0, move || {
+            if let Some(element) = pre.get_untracked() {
+                element.set_scroll_top(element.scroll_height());
+            }
+        })
+        .forget();
+    });
+
+    // Ask the daemon to end the current run, if one is going.
+    let stop = move || {
+        if !polling.get_untracked() {
+            return;
+        }
+        if let Some(id) = job.get_value() {
+            let token_value = token.get_untracked();
+            spawn_local(async move {
+                if let Err(message) = api::stop_diagnostic(&token_value, &id).await {
+                    report(message);
+                }
+            });
+        }
+    };
+    // Leaving the page ends the run instead of leaving it to its time limit.
+    on_cleanup(move || {
+        if polling.get_untracked()
+            && let Some(id) = job.get_value()
+        {
+            let token_value = token.get_untracked();
+            spawn_local(async move {
+                let _ = api::stop_diagnostic(&token_value, &id).await;
+            });
+        }
+    });
+
     let submit = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        if busy.get_untracked() {
+        if starting.get_untracked() || polling.get_untracked() {
             return;
         }
         let request = match build_request(tool.get_untracked(), &form.get_untracked()) {
@@ -173,15 +282,21 @@ pub fn DiagnosticsToolsPage(
             }
         };
         error.set(None);
-        busy.set(true);
+        starting.set(true);
         let token_value = token.get_untracked();
         spawn_local(async move {
-            match api::run_diagnostic(&token_value, &request).await {
-                Ok(response) => result.set(Some(response)),
-                Err(message) if message.contains("Unauthorized") => on_unauthorized.run(()),
-                Err(message) => error.set(Some(message)),
+            match api::start_diagnostic(&token_value, &request).await {
+                Ok(started) => {
+                    output.set(String::new());
+                    outcome.set(None);
+                    command.set(None);
+                    cursor.set_value(0);
+                    job.set_value(Some(started.id));
+                    polling.set(true);
+                }
+                Err(message) => report(message),
             }
-            busy.set(false);
+            starting.set(false);
         });
     };
 
@@ -210,9 +325,17 @@ pub fn DiagnosticsToolsPage(
                                     "px-4 py-2 text-sm border-b-2 border-transparent text-gray-400 hover:text-gray-200"
                                 }
                                 on:click=move |_| {
-                                    tool.set(candidate);
-                                    error.set(None);
-                                    result.set(None);
+                                    if tool.get_untracked() != candidate {
+                                        stop();
+                                        // Forget the run, so its replies are dropped.
+                                        job.set_value(None);
+                                        polling.set(false);
+                                        tool.set(candidate);
+                                        error.set(None);
+                                        command.set(None);
+                                        output.set(String::new());
+                                        outcome.set(None);
+                                    }
                                 }
                             >
                                 {candidate.label()}
@@ -320,36 +443,40 @@ pub fn DiagnosticsToolsPage(
                 <div class="md:col-span-2 flex items-center gap-4">
                     <button type="submit"
                         class="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm"
-                        disabled=move || busy.get()>
-                        {move || if busy.get() { "Running..." } else { "Run" }}
+                        disabled=move || starting.get() || polling.get()>
+                        {move || if starting.get() { "Starting..." } else if polling.get() { "Running..." } else { "Run" }}
                     </button>
+                    <Show when=move || polling.get()>
+                        <button type="button"
+                            class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-100 border border-gray-600 rounded text-sm"
+                            on:click=move |_| stop()>
+                            "Stop"
+                        </button>
+                    </Show>
                     {move || error.get().map(|message| view! {
                         <span class="text-red-400 text-sm">{message}</span>
                     })}
                 </div>
             </form>
 
-            {move || result.get().map(|response| {
-                let status_class = if response.success {
-                    "text-emerald-400"
-                } else {
-                    "text-red-400"
-                };
-                view! {
-                    <div class="space-y-2">
-                        <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
-                            <span class=status_class>{summary(&response)}</span>
-                            <code class="text-gray-500 text-xs break-all">{response.command.clone()}</code>
-                        </div>
-                        <pre class="bg-gray-900 border border-gray-700 rounded p-3 text-xs text-gray-200 font-mono overflow-x-auto whitespace-pre-wrap break-all max-h-[32rem] overflow-y-auto">
-                            {response.output.clone()}
-                        </pre>
-                        {response.truncated.then(|| view! {
-                            <p class="text-yellow-500 text-xs">"Output was cut to its size limit."</p>
-                        })}
+            <Show when=move || command.get().is_some() || polling.get() || outcome.get().is_some()>
+                <div class="space-y-2">
+                    <div class="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+                        <span class=move || match outcome.get() {
+                            None => "text-gray-300",
+                            Some(outcome) if outcome.success => "text-emerald-400",
+                            Some(_) => "text-red-400",
+                        }>{move || summary(outcome.get().as_ref())}</span>
+                        <code class="text-gray-500 text-xs break-all">{move || command.get().unwrap_or_default()}</code>
                     </div>
-                }
-            })}
+                    <pre node_ref=pre class="bg-gray-900 border border-gray-700 rounded p-3 text-xs text-gray-200 font-mono overflow-x-auto whitespace-pre-wrap break-all min-h-[4rem] max-h-[32rem] overflow-y-auto">
+                        {move || output.get()}
+                    </pre>
+                    {move || outcome.get().filter(|outcome| outcome.truncated).map(|_| view! {
+                        <p class="text-yellow-500 text-xs">"Output was cut to its size limit."</p>
+                    })}
+                </div>
+            </Show>
         </div>
     }
 }
@@ -414,32 +541,21 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_distinguishes_success_timeout_and_failure() {
-        let base = DiagnosticResponse {
+    fn the_summary_distinguishes_running_success_timeout_stop_and_failure() {
+        assert_eq!(summary(None), "Running...");
+        let base = DiagnosticOutcome {
             duration_ms: 1500,
             ..Default::default()
         };
-        assert!(summary(&base).starts_with("Failed after"));
-        assert!(
-            summary(&DiagnosticResponse {
-                success: true,
-                ..base.clone()
-            })
-            .starts_with("Completed")
-        );
-        assert!(
-            summary(&DiagnosticResponse {
-                timed_out: true,
-                ..base.clone()
-            })
-            .starts_with("Timed out")
-        );
-        assert!(
-            summary(&DiagnosticResponse {
-                exit_code: Some(2),
-                ..base
-            })
-            .contains("exit status 2")
-        );
+        assert!(summary(Some(&base)).starts_with("Failed after"));
+        let with = |change: fn(&mut DiagnosticOutcome)| {
+            let mut outcome = base.clone();
+            change(&mut outcome);
+            summary(Some(&outcome))
+        };
+        assert!(with(|o| o.success = true).starts_with("Completed"));
+        assert!(with(|o| o.timed_out = true).starts_with("Timed out"));
+        assert!(with(|o| o.stopped = true).starts_with("Stopped"));
+        assert!(with(|o| o.exit_code = Some(2)).contains("exit status 2"));
     }
 }

@@ -100,22 +100,44 @@ pub enum DiagnosticRequest {
     TcpConnect { host: String, port: u16 },
 }
 
-/// Outcome of a diagnostic run.
+/// A started diagnostic. Its output is read with
+/// `GET /diagnostics/jobs/{id}?after=<offset>` until `outcome` is set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticStarted {
+    pub id: String,
+}
+
+/// How a diagnostic ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct DiagnosticResponse {
+pub struct DiagnosticOutcome {
     /// The tool ran and reported success (for ping: a reply arrived).
     pub success: bool,
-    /// What was run, for display. Never run through a shell.
-    pub command: String,
-    /// Combined output of the tool.
-    pub output: String,
     pub exit_code: Option<i32>,
     pub duration_ms: u64,
-    /// The run hit its time limit and was stopped; `output` is partial.
+    /// The run hit its time limit and was stopped.
     pub timed_out: bool,
-    /// `output` was cut to the size limit.
+    /// The user stopped the run.
+    pub stopped: bool,
+    /// The output was cut to the size limit.
     pub truncated: bool,
 }
+
+/// Output of a diagnostic from an offset on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DiagnosticProgress {
+    /// What is being run, for display. Never run through a shell.
+    pub command: String,
+    /// Output after the requested offset.
+    pub output: String,
+    /// Offset (in bytes) to ask for next.
+    pub next: u64,
+    /// Set once the run has ended and `output` reaches its end.
+    pub outcome: Option<DiagnosticOutcome>,
+}
+
+/// Empty body for endpoints that act on an existing diagnostic.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DiagnosticNoRequest {}
 
 /// A hostname (underscores allowed, for names like `_dmarc`) with an optional
 /// trailing dot, or an IP address.

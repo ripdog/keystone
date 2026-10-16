@@ -3003,6 +3003,17 @@ pub struct RenameInterfaceResponse {
     pub apply: Option<ApplyAllResponse>,
 }
 
+/// Request to reset the DHCPv4 session of a WAN interface
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResetDhcpSessionRequest {}
+
+/// Result of starting a DHCPv4 session reset
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetDhcpSessionResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 /// Result of applying all configuration via /apply-all
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplyAllResponse {

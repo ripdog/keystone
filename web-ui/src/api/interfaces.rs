@@ -1,11 +1,14 @@
 //! Interface configuration API functions
 
-use keystone_core::api::{RenameInterface, SaveInterfaceConfig, SaveManagedInterfaces};
+use keystone_core::api::{
+    RenameInterface, ResetDhcpSession, SaveInterfaceConfig, SaveManagedInterfaces,
+};
 use keystone_core::{
     InterfaceConfig, InterfaceConfigResponse, ManagedInterface, ManagedInterfacesResponse,
     NetworkdPreviewResponse, RenameInterfaceRequest, RenameInterfaceResponse,
-    RenewInterfaceResponse, SaveInterfaceConfigRequest, SaveInterfaceConfigResponse,
-    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SystemState,
+    RenewInterfaceResponse, ResetDhcpSessionRequest, ResetDhcpSessionResponse,
+    SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
+    SaveManagedInterfacesResponse, SystemState,
 };
 
 use super::client::{call, call_with, get, post_empty};
@@ -95,4 +98,13 @@ pub async fn rename_interface(
         allow_dhcp_restart,
     };
     call_with::<RenameInterface>(token, &[("name", name)], &request).await
+}
+
+/// Release the interface's DHCPv4 lease and restart its link so the ISP starts
+/// a fresh session. The interface is down for several seconds.
+pub async fn reset_dhcp_session(
+    token: &str,
+    name: &str,
+) -> Result<ResetDhcpSessionResponse, String> {
+    call_with::<ResetDhcpSession>(token, &[("name", name)], &ResetDhcpSessionRequest {}).await
 }

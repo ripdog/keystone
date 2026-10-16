@@ -45,6 +45,8 @@ jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
 rand.workspace = true
 toml = "1.1"
 libc = "0.2.178"
+# Binds the DHCP release socket to the WAN interface.
+socket2 = { version = "0.6", features = ["all"] }
 
 # Firewall (nftables)
 nftables = "0.6"

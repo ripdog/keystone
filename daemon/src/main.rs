@@ -45,8 +45,8 @@ use axum::{
 use config::Config;
 use db::Database;
 use keystone_core::api::{
-    ConfirmNetworkd, DeleteUser, Endpoint, Login, RenameInterface, Req, Res, SaveBridge,
-    SaveGlobalSettings, SaveInterfaceConfig, SaveManagedInterfaces, SaveUser, SaveVlan,
+    ConfirmNetworkd, DeleteUser, Endpoint, Login, RenameInterface, Req, Res, ResetDhcpSession,
+    SaveBridge, SaveGlobalSettings, SaveInterfaceConfig, SaveManagedInterfaces, SaveUser, SaveVlan,
 };
 use keystone_core::{
     ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse, DashboardResponse,
@@ -290,6 +290,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/interface-config/{name}", delete(delete_interface_config))
         .route("/interfaces/{name}/renew", post(renew_interface))
         .route(RenameInterface::PATH, post(rename_interface))
+        .route(ResetDhcpSession::PATH, post(reset_dhcp_session))
         .route(
             "/interfaces/{name}/reconfigure",
             post(reconfigure_interface),
@@ -671,7 +672,8 @@ fn is_blocked_before_setup(path: &str) -> bool {
         || (path.starts_with("/interfaces/")
             && (path.ends_with("/renew")
                 || path.ends_with("/reconfigure")
-                || path.ends_with("/rename")))
+                || path.ends_with("/rename")
+                || path.ends_with("/reset-dhcp")))
         || (path.starts_with("/firewall/") && !firewall_recovery_endpoint)
         || path.starts_with("/dnsmasq/")
         || path.starts_with("/caddy/")
@@ -1166,6 +1168,28 @@ async fn rename_interface(
     )
     .await?;
     Ok(Json(response))
+}
+
+/// POST /interfaces/:name/reset-dhcp - Release the DHCPv4 lease, restart the
+/// link briefly and let the interface obtain a fresh lease.
+async fn reset_dhcp_session(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(_request): Json<Req<ResetDhcpSession>>,
+) -> Result<Json<Res<ResetDhcpSession>>, AppError> {
+    let config = managed_link_config(&state, &name).await?;
+    if !dhcp_session::uses_dhcpv4(&config) {
+        return Ok(Json(keystone_core::ResetDhcpSessionResponse {
+            success: false,
+            message: format!("{name} does not use DHCPv4, so there is no lease to reset"),
+        }));
+    }
+    info!("Resetting the DHCPv4 session of {name}");
+    let message = dhcp_session::start_reset(&name).await?;
+    Ok(Json(keystone_core::ResetDhcpSessionResponse {
+        success: true,
+        message,
+    }))
 }
 
 /// POST /interfaces/:name/reconfigure - Re-apply the link's `.network` file.

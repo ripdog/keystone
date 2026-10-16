@@ -28,6 +28,7 @@ pub fn InterfacesPage(
     let (saving, set_saving) = signal(false);
     let (renewing, set_renewing) = signal::<Option<String>>(None);
     let (rename_busy, set_rename_busy) = signal(false);
+    let (resetting, set_resetting) = signal(false);
     // Bumped to reload the interface list after a rename.
     let (reload, set_reload) = signal(0u32);
     let locked = expect_context::<PendingActions>().locked;
@@ -168,6 +169,35 @@ pub fn InterfacesPage(
         set_error.set(None);
     };
 
+    let reset_dhcp = move |name: String| {
+        let confirmed = web_sys::window()
+            .and_then(|window| {
+                window
+                    .confirm_with_message(&format!(
+                        "Reset the DHCP session of {name}?\n\nThe lease is released and the interface goes down for about 12 seconds. The internet connection is interrupted, and IPv6 prefixes handed out to the LAN are withdrawn until it is back."
+                    ))
+                    .ok()
+            })
+            .unwrap_or(false);
+        if !confirmed {
+            return;
+        }
+        let Some(token) = auth_token.get_untracked() else {
+            return;
+        };
+        set_resetting.set(true);
+        set_error.set(None);
+        spawn_local(async move {
+            match api::reset_dhcp_session(&token, &name).await {
+                Ok(result) if result.success => toasts.success(result.message),
+                Ok(result) => set_error.set(Some(result.message)),
+                Err(e) if e == "Unauthorized" => on_unauthorized.run(()),
+                Err(e) => set_error.set(Some(format!("Failed to reset {name}: {e}"))),
+            }
+            set_resetting.set(false);
+        });
+    };
+
     let renew_link = move |name: String| {
         let Some(token) = auth_token.get_untracked() else {
             return;
@@ -263,6 +293,8 @@ pub fn InterfacesPage(
                                 let name8 = iface.name.clone();
                                 let name9 = iface.name.clone();
                                 let name10 = iface.name.clone();
+                                let name11 = iface.name.clone();
+                                let dhcp_enabled = iface.dhcp_enabled;
                                 let address = iface.address.clone().unwrap_or_else(|| "No IP".to_string());
 
                                 let is_managed = move || get_interface_role(&name3).is_some();
@@ -337,6 +369,16 @@ pub fn InterfacesPage(
                                                     "Renewing..."
                                                 } else { "Renew" }}
                                             </button>
+                                            {dhcp_enabled.then(|| view! {
+                                                <button
+                                                    class="bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white px-3 py-1.5 rounded text-sm"
+                                                    disabled=move || resetting.get() || locked.get()
+                                                    on:click=move |_| reset_dhcp(name11.clone())
+                                                    title="Release the DHCP lease and restart the link, so the ISP starts a fresh session"
+                                                >
+                                                    {move || if resetting.get() { "Resetting..." } else { "Reset DHCP" }}
+                                                </button>
+                                            })}
                                             <A
                                                 href=move || format!("/interfaces/{}", name8)
                                                 attr:class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm"

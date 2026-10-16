@@ -192,7 +192,7 @@ mod tests {
         let (router, _) = router(&fx).await;
         let bad = serde_json::json!({
             "interface": "eth1",
-            "filter": {"clauses": [{"kind": "host", "address": "1.2.3.4 or host 5.6.7.8"}]},
+            "filter": {"groups": [{"any": [{"kind": "host", "address": "1.2.3.4 or host 5.6.7.8"}]}]},
         });
         let (status, response) = send(&router, "POST", "/capture", &bad.to_string()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);

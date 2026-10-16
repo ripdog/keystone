@@ -2,7 +2,7 @@
 //! capture pipeline can be tested end to end without privilege.
 
 use super::*;
-use keystone_core::capture::{CaptureClause, CaptureFilter, DEFAULT_SNAPLEN};
+use keystone_core::capture::{CaptureDetail, CaptureFilter, CaptureGroup, DEFAULT_SNAPLEN};
 use std::sync::atomic::AtomicU32;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -81,12 +81,14 @@ pub(crate) fn sample_command(root: &Path) -> String {
     )
 }
 
-pub(crate) fn request(filter: Vec<CaptureClause>) -> CaptureRequest {
+pub(crate) fn request(groups: Vec<CaptureGroup>) -> CaptureRequest {
     CaptureRequest {
         interface: "eth1".into(),
-        filter: CaptureFilter { clauses: filter },
+        filter: CaptureFilter { groups },
         snaplen: DEFAULT_SNAPLEN,
         max_packets: 10,
         max_seconds: 30,
+        detail: CaptureDetail::Normal,
+        link_level: false,
     }
 }

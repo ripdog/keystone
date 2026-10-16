@@ -23,8 +23,10 @@ pub const MAX_SECONDS: u32 = 600;
 pub const DEFAULT_SECONDS: u32 = 60;
 /// Most capture-file bytes kept. The file lives in memory-backed storage.
 pub const MAX_CAPTURE_BYTES: u64 = 64 * 1024 * 1024;
-/// Most clauses in one filter.
-pub const MAX_CLAUSES: usize = 16;
+/// Most conditions in one filter, counting every alternative.
+pub const MAX_CLAUSES: usize = 24;
+/// Most groups in one filter.
+pub const MAX_GROUPS: usize = 12;
 /// Pseudo-interface that captures on all interfaces at once.
 pub const ANY_INTERFACE: &str = "any";
 
@@ -85,6 +87,60 @@ impl CaptureProtocol {
     }
 }
 
+/// The DHCPv4 message types (option 53) a filter can pick out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DhcpMessageType {
+    Discover,
+    Offer,
+    Request,
+    Decline,
+    Ack,
+    Nak,
+    Release,
+    Inform,
+}
+
+impl DhcpMessageType {
+    pub const ALL: [DhcpMessageType; 8] = [
+        DhcpMessageType::Discover,
+        DhcpMessageType::Offer,
+        DhcpMessageType::Request,
+        DhcpMessageType::Decline,
+        DhcpMessageType::Ack,
+        DhcpMessageType::Nak,
+        DhcpMessageType::Release,
+        DhcpMessageType::Inform,
+    ];
+
+    /// The option 53 value (RFC 2132).
+    pub const fn code(self) -> u8 {
+        match self {
+            DhcpMessageType::Discover => 1,
+            DhcpMessageType::Offer => 2,
+            DhcpMessageType::Request => 3,
+            DhcpMessageType::Decline => 4,
+            DhcpMessageType::Ack => 5,
+            DhcpMessageType::Nak => 6,
+            DhcpMessageType::Release => 7,
+            DhcpMessageType::Inform => 8,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            DhcpMessageType::Discover => "DISCOVER",
+            DhcpMessageType::Offer => "OFFER",
+            DhcpMessageType::Request => "REQUEST",
+            DhcpMessageType::Decline => "DECLINE",
+            DhcpMessageType::Ack => "ACK",
+            DhcpMessageType::Nak => "NAK",
+            DhcpMessageType::Release => "RELEASE",
+            DhcpMessageType::Inform => "INFORM",
+        }
+    }
+}
+
 /// One condition of a filter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -118,6 +174,13 @@ pub enum FilterTerm {
         direction: CaptureDirection,
         address: String,
     },
+    /// A DHCPv4 message of one type (UDP ports 67 and 68, IPv4 only). It reads
+    /// option 53 at its usual place, right after the magic cookie, where
+    /// systemd-networkd, dhcpcd, dnsmasq and ISC software all put it. A packet
+    /// that lists it later is not matched.
+    DhcpMessage {
+        message_type: DhcpMessageType,
+    },
 }
 
 /// A term, optionally negated.
@@ -129,11 +192,34 @@ pub struct CaptureClause {
     pub term: FilterTerm,
 }
 
-/// Clauses that must all match. An empty filter captures everything.
+/// Conditions of which at least one must match. A group of one is just that
+/// condition. `negate` inverts the whole group, so a negated group of two
+/// means "neither".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureGroup {
+    #[serde(default)]
+    pub negate: bool,
+    pub any: Vec<CaptureClause>,
+}
+
+impl CaptureGroup {
+    /// A group holding one condition.
+    pub fn single(term: FilterTerm) -> Self {
+        Self {
+            negate: false,
+            any: vec![CaptureClause {
+                negate: false,
+                term,
+            }],
+        }
+    }
+}
+
+/// Groups that must all match. An empty filter captures everything.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaptureFilter {
     #[serde(default)]
-    pub clauses: Vec<CaptureClause>,
+    pub groups: Vec<CaptureGroup>,
 }
 
 fn parse_mac(text: &str) -> Result<String, String> {
@@ -191,6 +277,14 @@ impl FilterTerm {
                     Some(last) => format!("{}portrange {first}-{last}", direction.prefix()),
                 }
             }
+            FilterTerm::DhcpMessage { message_type } => format!(
+                // Option 53 starts 240 bytes into the UDP payload: 8 bytes of
+                // UDP header, 236 of BOOTP, 4 of magic cookie. Its code is at
+                // 248, its length at 249 and the message type at 250. Checking
+                // the code too stops other options' data from matching.
+                "(udp portrange 67-68 and udp[248] = 53 and udp[250] = {})",
+                message_type.code()
+            ),
             FilterTerm::Mac { direction, address } => {
                 let direction = match direction {
                     CaptureDirection::Any => "host ",
@@ -204,27 +298,65 @@ impl FilterTerm {
 }
 
 impl CaptureFilter {
-    /// The pcap filter expression, or an error naming the first bad clause.
+    /// The pcap filter expression, or an error naming the first bad condition.
     pub fn to_expression(&self) -> Result<String, String> {
-        if self.clauses.len() > MAX_CLAUSES {
+        if self.groups.len() > MAX_GROUPS {
+            return Err(format!("a filter may have at most {MAX_GROUPS} groups"));
+        }
+        let total: usize = self.groups.iter().map(|group| group.any.len()).sum();
+        if total > MAX_CLAUSES {
             return Err(format!(
                 "a filter may have at most {MAX_CLAUSES} conditions"
             ));
         }
-        let mut parts = Vec::with_capacity(self.clauses.len());
-        for (index, clause) in self.clauses.iter().enumerate() {
-            let primitive = clause
-                .term
-                .to_expression()
-                .map_err(|error| format!("condition {}: {error}", index + 1))?;
-            parts.push(if clause.negate {
-                format!("not ({primitive})")
-            } else {
-                primitive
+        let mut parts = Vec::with_capacity(self.groups.len());
+        for (group_index, group) in self.groups.iter().enumerate() {
+            if group.any.is_empty() {
+                return Err(format!(
+                    "condition {}: it has no alternatives",
+                    group_index + 1
+                ));
+            }
+            let mut alternatives = Vec::with_capacity(group.any.len());
+            for (index, clause) in group.any.iter().enumerate() {
+                let primitive = clause.term.to_expression().map_err(|error| {
+                    if group.any.len() == 1 {
+                        format!("condition {}: {error}", group_index + 1)
+                    } else {
+                        format!(
+                            "condition {}, alternative {}: {error}",
+                            group_index + 1,
+                            index + 1
+                        )
+                    }
+                })?;
+                alternatives.push(if clause.negate {
+                    format!("not ({primitive})")
+                } else {
+                    primitive
+                });
+            }
+            parts.push(match (alternatives.len(), group.negate) {
+                (1, false) => alternatives.remove(0),
+                (_, false) => format!("({})", alternatives.join(" or ")),
+                (_, true) => format!("not ({})", alternatives.join(" or ")),
             });
         }
         Ok(parts.join(" and "))
     }
+}
+
+/// How much of each packet the live view decodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureDetail {
+    /// One line per packet.
+    #[default]
+    Normal,
+    /// Adds the IP header fields and protocol details such as DHCP options.
+    Verbose,
+    /// Adds more protocol detail still.
+    VeryVerbose,
 }
 
 /// Start a capture.
@@ -240,6 +372,12 @@ pub struct CaptureRequest {
     pub max_packets: u32,
     #[serde(default = "default_seconds")]
     pub max_seconds: u32,
+    /// Only changes the live view; the pcap file always has the whole packet.
+    #[serde(default)]
+    pub detail: CaptureDetail,
+    /// Show Ethernet addresses in the live view.
+    #[serde(default)]
+    pub link_level: bool,
 }
 
 fn default_snaplen() -> u32 {
@@ -342,52 +480,133 @@ mod tests {
         CaptureClause { negate, term }
     }
 
-    fn request(clauses: Vec<CaptureClause>) -> CaptureRequest {
+    fn proto(protocol: CaptureProtocol) -> FilterTerm {
+        FilterTerm::Protocol { protocol }
+    }
+
+    fn port(direction: CaptureDirection, first: u16, last: Option<u16>) -> FilterTerm {
+        FilterTerm::Port {
+            direction,
+            first,
+            last,
+        }
+    }
+
+    fn any_of(terms: Vec<FilterTerm>) -> CaptureGroup {
+        CaptureGroup {
+            negate: false,
+            any: terms.into_iter().map(|term| clause(false, term)).collect(),
+        }
+    }
+
+    fn filter(groups: Vec<CaptureGroup>) -> CaptureFilter {
+        CaptureFilter { groups }
+    }
+
+    fn request(groups: Vec<CaptureGroup>) -> CaptureRequest {
         CaptureRequest {
             interface: "eth1".into(),
-            filter: CaptureFilter { clauses },
+            filter: filter(groups),
             snaplen: DEFAULT_SNAPLEN,
             max_packets: DEFAULT_PACKETS,
             max_seconds: DEFAULT_SECONDS,
+            detail: CaptureDetail::Normal,
+            link_level: false,
         }
     }
 
     #[test]
-    fn clauses_are_anded_and_negation_is_parenthesised() {
-        let filter = CaptureFilter {
-            clauses: vec![
-                clause(
-                    false,
-                    FilterTerm::Protocol {
-                        protocol: CaptureProtocol::Tcp,
-                    },
-                ),
-                clause(
-                    false,
-                    FilterTerm::Host {
-                        direction: CaptureDirection::Src,
-                        address: "192.168.1.20".into(),
-                    },
-                ),
-                clause(
-                    true,
-                    FilterTerm::Port {
-                        direction: CaptureDirection::Any,
-                        first: 22,
-                        last: None,
-                    },
-                ),
+    fn groups_are_anded_and_negation_is_parenthesised() {
+        let f = filter(vec![
+            CaptureGroup::single(proto(CaptureProtocol::Tcp)),
+            CaptureGroup::single(FilterTerm::Host {
+                direction: CaptureDirection::Src,
+                address: "192.168.1.20".into(),
+            }),
+            CaptureGroup {
+                negate: false,
+                any: vec![clause(true, port(CaptureDirection::Any, 22, None))],
+            },
+        ]);
+        assert_eq!(
+            f.to_expression().unwrap(),
+            "tcp and src host 192.168.1.20 and not (port 22)"
+        );
+    }
+
+    #[test]
+    fn alternatives_are_ored_inside_parentheses() {
+        let f = filter(vec![
+            CaptureGroup::single(FilterTerm::Host {
+                direction: CaptureDirection::Any,
+                address: "10.0.0.1".into(),
+            }),
+            any_of(vec![
+                proto(CaptureProtocol::Tcp),
+                proto(CaptureProtocol::Udp),
+            ]),
+        ]);
+        assert_eq!(f.to_expression().unwrap(), "host 10.0.0.1 and (tcp or udp)");
+        // Without the parentheses "or" would bind looser than "and" and the
+        // host would only constrain the first alternative.
+        assert!(f.to_expression().unwrap().contains("(tcp or udp)"));
+    }
+
+    #[test]
+    fn a_negated_group_means_none_of_them() {
+        let mut group = any_of(vec![
+            proto(CaptureProtocol::Arp),
+            proto(CaptureProtocol::Icmp),
+        ]);
+        group.negate = true;
+        assert_eq!(
+            filter(vec![group]).to_expression().unwrap(),
+            "not (arp or icmp)"
+        );
+        // A negated alternative inside an unnegated group.
+        let group = CaptureGroup {
+            negate: false,
+            any: vec![
+                clause(false, proto(CaptureProtocol::Tcp)),
+                clause(true, port(CaptureDirection::Dst, 443, None)),
             ],
         };
         assert_eq!(
-            filter.to_expression().unwrap(),
-            "tcp and src host 192.168.1.20 and not (port 22)"
+            filter(vec![group]).to_expression().unwrap(),
+            "(tcp or not (dst port 443))"
         );
     }
 
     #[test]
     fn empty_filter_captures_everything() {
         assert_eq!(CaptureFilter::default().to_expression().unwrap(), "");
+    }
+
+    #[test]
+    fn dhcp_messages_match_option_53_in_its_usual_place() {
+        let f = filter(vec![CaptureGroup::single(FilterTerm::DhcpMessage {
+            message_type: DhcpMessageType::Discover,
+        })]);
+        assert_eq!(
+            f.to_expression().unwrap(),
+            "(udp portrange 67-68 and udp[248] = 53 and udp[250] = 1)"
+        );
+        let codes: Vec<u8> = DhcpMessageType::ALL.iter().map(|m| m.code()).collect();
+        assert_eq!(codes, [1, 2, 3, 4, 5, 6, 7, 8]);
+        // Safe to OR with other conditions: the term is self-contained.
+        let either = any_of(vec![
+            FilterTerm::DhcpMessage {
+                message_type: DhcpMessageType::Offer,
+            },
+            FilterTerm::DhcpMessage {
+                message_type: DhcpMessageType::Ack,
+            },
+        ]);
+        let text = filter(vec![either]).to_expression().unwrap();
+        assert!(
+            text.starts_with("((udp portrange 67-68") && text.contains(") or ("),
+            "{text}"
+        );
     }
 
     #[test]
@@ -406,18 +625,14 @@ mod tests {
 
     #[test]
     fn port_ranges_collapse_and_reject_nonsense() {
-        let port = |first, last| FilterTerm::Port {
-            direction: CaptureDirection::Any,
-            first,
-            last,
-        };
-        assert_eq!(port(80, Some(80)).to_expression().unwrap(), "port 80");
+        let p = |first, last| port(CaptureDirection::Any, first, last);
+        assert_eq!(p(80, Some(80)).to_expression().unwrap(), "port 80");
         assert_eq!(
-            port(1000, Some(2000)).to_expression().unwrap(),
+            p(1000, Some(2000)).to_expression().unwrap(),
             "portrange 1000-2000"
         );
-        assert!(port(0, None).to_expression().is_err());
-        assert!(port(2000, Some(1000)).to_expression().is_err());
+        assert!(p(0, None).to_expression().is_err());
+        assert!(p(2000, Some(1000)).to_expression().is_err());
     }
 
     #[test]
@@ -460,6 +675,36 @@ mod tests {
     }
 
     #[test]
+    fn errors_say_which_condition_and_alternative() {
+        let bad_host = FilterTerm::Host {
+            direction: CaptureDirection::Any,
+            address: "nope".into(),
+        };
+        let single = filter(vec![
+            CaptureGroup::single(proto(CaptureProtocol::Tcp)),
+            CaptureGroup::single(bad_host.clone()),
+        ]);
+        assert!(
+            single
+                .to_expression()
+                .unwrap_err()
+                .starts_with("condition 2:")
+        );
+        let nested = filter(vec![any_of(vec![proto(CaptureProtocol::Tcp), bad_host])]);
+        assert!(
+            nested
+                .to_expression()
+                .unwrap_err()
+                .starts_with("condition 1, alternative 2:")
+        );
+        let empty = filter(vec![CaptureGroup {
+            negate: false,
+            any: vec![],
+        }]);
+        assert!(empty.to_expression().is_err());
+    }
+
+    #[test]
     fn request_limits_are_enforced() {
         assert!(request(vec![]).validate().is_ok());
         let mut r = request(vec![]);
@@ -476,34 +721,38 @@ mod tests {
         let mut r = request(vec![]);
         r.max_seconds = 0;
         assert!(r.validate().is_err());
-        let too_many = vec![
-            clause(
-                false,
-                FilterTerm::Protocol {
-                    protocol: CaptureProtocol::Ip
-                }
-            );
-            MAX_CLAUSES + 1
-        ];
-        assert!(request(too_many).validate().is_err());
+
+        let one = || CaptureGroup::single(proto(CaptureProtocol::Ip));
+        assert!(request(vec![one(); MAX_GROUPS]).validate().is_ok());
+        assert!(request(vec![one(); MAX_GROUPS + 1]).validate().is_err());
+        let wide = any_of(vec![proto(CaptureProtocol::Ip); MAX_CLAUSES + 1]);
+        assert!(request(vec![wide]).validate().is_err());
     }
 
     #[test]
-    fn clauses_round_trip_through_json() {
-        let r = request(vec![clause(
-            true,
-            FilterTerm::Host {
-                direction: CaptureDirection::Dst,
-                address: "10.0.0.1".into(),
-            },
-        )]);
+    fn requests_round_trip_through_json_and_default_missing_fields() {
+        let mut r = request(vec![CaptureGroup {
+            negate: true,
+            any: vec![clause(
+                true,
+                FilterTerm::Host {
+                    direction: CaptureDirection::Dst,
+                    address: "10.0.0.1".into(),
+                },
+            )],
+        }]);
+        r.detail = CaptureDetail::Verbose;
+        r.link_level = true;
         let json = serde_json::to_string(&r).unwrap();
         assert!(json.contains("\"kind\":\"host\""), "{json}");
+        assert!(json.contains("\"detail\":\"verbose\""), "{json}");
         let back: CaptureRequest = serde_json::from_str(&json).unwrap();
         assert_eq!(back, r);
-        // Omitted optional fields take their defaults.
+
         let minimal: CaptureRequest = serde_json::from_str(r#"{"interface":"eth0"}"#).unwrap();
         assert_eq!(minimal.snaplen, DEFAULT_SNAPLEN);
-        assert!(minimal.filter.clauses.is_empty());
+        assert_eq!(minimal.detail, CaptureDetail::Normal);
+        assert!(!minimal.link_level);
+        assert!(minimal.filter.groups.is_empty());
     }
 }

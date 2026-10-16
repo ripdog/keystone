@@ -11,7 +11,7 @@
 //!
 //! The daemon copies the capture pipe into a file under `/run/keystone` and
 //! feeds the viewer from that file, so a slow reader of the live view can never
-//! make the capture drop packets. The filter is built from typed clauses (see
+//! make the capture drop packets. The filter is built from typed conditions (see
 //! `keystone_core::capture`) and handed over as one argument, never through a
 //! shell.
 //!
@@ -32,8 +32,8 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use keystone_core::capture::{
-    ANY_INTERFACE, CaptureInfo, CaptureLine, CapturePacketsResponse, CaptureRequest, CaptureState,
-    MAX_CAPTURE_BYTES,
+    ANY_INTERFACE, CaptureDetail, CaptureInfo, CaptureLine, CapturePacketsResponse, CaptureRequest,
+    CaptureState, MAX_CAPTURE_BYTES,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -176,9 +176,10 @@ pub fn capture_args(request: &CaptureRequest, expression: &str) -> Vec<String> {
     args
 }
 
-/// Arguments for the viewer, run through `setpriv`.
-pub fn viewer_args(tcpdump: &Path) -> Vec<String> {
-    vec![
+/// Arguments for the viewer, run through `setpriv`. The detail options only
+/// change how packets are printed, never what is captured.
+pub fn viewer_args(tcpdump: &Path, request: &CaptureRequest) -> Vec<String> {
+    let mut args = vec![
         format!("--reuid={UNPRIVILEGED_ID}"),
         format!("--regid={UNPRIVILEGED_ID}"),
         "--clear-groups".into(),
@@ -188,7 +189,16 @@ pub fn viewer_args(tcpdump: &Path) -> Vec<String> {
         "-".into(),
         "-n".into(),
         "-l".into(),
-    ]
+    ];
+    match request.detail {
+        CaptureDetail::Normal => {}
+        CaptureDetail::Verbose => args.push("-v".into()),
+        CaptureDetail::VeryVerbose => args.push("-vv".into()),
+    }
+    if request.link_level {
+        args.push("-e".into());
+    }
+    args
 }
 
 /// Parse tcpdump's "N packets dropped by kernel" summary line.
@@ -434,7 +444,7 @@ async fn run(
         }
     };
     let mut viewer = match Command::new(&env.setpriv)
-        .args(viewer_args(&env.tcpdump))
+        .args(viewer_args(&env.tcpdump, request))
         .env_clear()
         .env("LC_ALL", "C")
         .stdin(Stdio::piped())
@@ -690,7 +700,9 @@ fn finish(session: &Session, outcome: Outcome, path: &Path) {
 mod tests {
     use super::test_support::*;
     use super::*;
-    use keystone_core::capture::{CaptureClause, CaptureDirection, FilterTerm};
+    use keystone_core::capture::{
+        CaptureClause, CaptureDirection, CaptureGroup, CaptureProtocol, DhcpMessageType, FilterTerm,
+    };
 
     async fn wait_until_done(manager: &CaptureManager) -> CaptureInfo {
         for _ in 0..200 {
@@ -705,13 +717,10 @@ mod tests {
 
     #[test]
     fn the_filter_is_one_argument_after_a_separator() {
-        let filter = vec![CaptureClause {
-            negate: false,
-            term: FilterTerm::Host {
-                direction: CaptureDirection::Src,
-                address: "10.0.0.1".into(),
-            },
-        }];
+        let filter = vec![CaptureGroup::single(FilterTerm::Host {
+            direction: CaptureDirection::Src,
+            address: "10.0.0.1".into(),
+        })];
         let request = request(filter);
         let expression = request.validate().unwrap();
         let args = capture_args(&request, &expression);
@@ -733,8 +742,35 @@ mod tests {
     }
 
     #[test]
+    fn a_filter_with_alternatives_is_still_one_argument() {
+        let group = CaptureGroup {
+            negate: false,
+            any: vec![
+                CaptureClause {
+                    negate: false,
+                    term: FilterTerm::Protocol {
+                        protocol: CaptureProtocol::Arp,
+                    },
+                },
+                CaptureClause {
+                    negate: false,
+                    term: FilterTerm::Protocol {
+                        protocol: CaptureProtocol::Icmp,
+                    },
+                },
+            ],
+        };
+        let request = request(vec![group]);
+        let expression = request.validate().unwrap();
+        let args = capture_args(&request, &expression);
+        let split = args.iter().position(|arg| arg == "--").unwrap();
+        assert_eq!(args[split + 1], "(arp or icmp)");
+        assert_eq!(args.len(), split + 2);
+    }
+
+    #[test]
     fn the_viewer_gives_up_every_privilege_before_it_decodes() {
-        let args = viewer_args(Path::new("/usr/bin/tcpdump"));
+        let args = viewer_args(Path::new("/usr/bin/tcpdump"), &request(vec![]));
         assert_eq!(args[0], "--reuid=65534");
         assert_eq!(args[1], "--regid=65534");
         assert!(args.contains(&"--clear-groups".to_string()));
@@ -743,6 +779,102 @@ mod tests {
         assert!(args[..program].iter().all(|arg| arg.starts_with("--")));
         // Reads the capture from stdin; it cannot be pointed at a file.
         assert_eq!(&args[program + 1..program + 3], ["-r", "-"]);
+        // Plain by default.
+        assert!(!args.iter().any(|a| a == "-v" || a == "-vv" || a == "-e"));
+    }
+
+    #[test]
+    fn detail_options_only_reach_the_viewer() {
+        let mut verbose = request(vec![]);
+        verbose.detail = CaptureDetail::Verbose;
+        verbose.link_level = true;
+        let viewer = viewer_args(Path::new("/usr/bin/tcpdump"), &verbose);
+        assert!(viewer.contains(&"-v".to_string()) && viewer.contains(&"-e".to_string()));
+        let mut very = verbose.clone();
+        very.detail = CaptureDetail::VeryVerbose;
+        assert!(viewer_args(Path::new("/usr/bin/tcpdump"), &very).contains(&"-vv".to_string()));
+        // The capture process writes raw packets and takes neither.
+        let capture = capture_args(&verbose, "");
+        assert!(!capture.iter().any(|a| a == "-v" || a == "-vv" || a == "-e"));
+    }
+
+    /// Every shape of filter the builder can produce must be accepted by the
+    /// real tcpdump. `-d` only compiles the filter, so it needs no privilege.
+    /// Skipped where tcpdump is not installed.
+    #[test]
+    fn real_tcpdump_compiles_every_filter_shape() {
+        let tcpdump = Path::new("/usr/bin/tcpdump");
+        if !tcpdump.exists() {
+            eprintln!("tcpdump not installed; skipping");
+            return;
+        }
+        let term = |term| CaptureGroup::single(term);
+        let mut any_dhcp = CaptureGroup {
+            negate: true,
+            any: vec![],
+        };
+        for message_type in DhcpMessageType::ALL {
+            any_dhcp.any.push(CaptureClause {
+                negate: false,
+                term: FilterTerm::DhcpMessage { message_type },
+            });
+        }
+        let filters = vec![
+            vec![term(FilterTerm::Protocol {
+                protocol: CaptureProtocol::Icmp6,
+            })],
+            vec![
+                term(FilterTerm::Host {
+                    direction: CaptureDirection::Src,
+                    address: "2001:db8::1".into(),
+                }),
+                term(FilterTerm::Net {
+                    direction: CaptureDirection::Dst,
+                    network: "2001:db8:1::5/32".into(),
+                }),
+                term(FilterTerm::Mac {
+                    direction: CaptureDirection::Any,
+                    address: "AA-BB-CC-DD-EE-FF".into(),
+                }),
+                term(FilterTerm::Port {
+                    direction: CaptureDirection::Dst,
+                    first: 1000,
+                    last: Some(2000),
+                }),
+            ],
+            vec![any_dhcp],
+            vec![CaptureGroup {
+                negate: false,
+                any: vec![
+                    CaptureClause {
+                        negate: true,
+                        term: FilterTerm::Protocol {
+                            protocol: CaptureProtocol::Arp,
+                        },
+                    },
+                    CaptureClause {
+                        negate: false,
+                        term: FilterTerm::Port {
+                            direction: CaptureDirection::Any,
+                            first: 53,
+                            last: None,
+                        },
+                    },
+                ],
+            }],
+        ];
+        for groups in filters {
+            let expression = request(groups).validate().unwrap();
+            let output = std::process::Command::new(tcpdump)
+                .args(["-d", "-y", "EN10MB", "--", &expression])
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "tcpdump rejected {expression:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
     }
 
     /// The capture opens a raw socket (CAP_NET_RAW) and the viewer is started

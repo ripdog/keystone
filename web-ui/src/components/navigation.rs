@@ -344,6 +344,14 @@ pub const NAV_ITEMS: &[NavItem] = &[
         "journal journalctl logs log viewer services systemd dnsmasq networkd errors troubleshoot",
     ),
     page(
+        "Packet Capture",
+        "/diagnostics/capture",
+        SECURITY,
+        DIAGNOSTICS,
+        "log",
+        "tcpdump pcap wireshark sniff capture packets traffic filter troubleshoot",
+    ),
+    page(
         "General",
         "/settings/general",
         SECURITY,

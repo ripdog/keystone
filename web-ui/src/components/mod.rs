@@ -2,6 +2,7 @@
 
 mod auth;
 mod command_palette;
+mod download;
 pub mod form_utils;
 mod layout;
 mod log_viewer;
@@ -17,6 +18,7 @@ mod traffic_graph;
 
 pub use auth::*;
 pub use command_palette::CommandPalette;
+pub use download::download_bytes;
 pub use layout::*;
 pub use log_viewer::*;
 pub use login::*;

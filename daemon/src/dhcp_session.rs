@@ -24,7 +24,7 @@ const BOUNCE_DOWN_TIME: Duration = Duration::from_secs(3);
 /// How long the link stays down after releasing the lease. One second was
 /// enough in testing (the link then needs a few seconds to come up); this adds
 /// margin for a slower BNG.
-const RESET_DOWN_TIME: Duration = Duration::from_secs(5);
+pub(crate) const RESET_DOWN_TIME: Duration = Duration::from_secs(5);
 
 /// If the reset task dies with the link down, this timer brings it back up.
 const FAILSAFE_DELAY_SECS: u64 = 120;
@@ -76,13 +76,14 @@ fn ipv4_from_hex(value: &str) -> Option<Ipv4Addr> {
 }
 
 /// Read the lease from `networkctl status <link> --json=short` output, either
-/// the whole document or just its `DHCPv4Client` object.
-pub fn parse_lease(json: &str) -> Result<LeaseInfo> {
+/// the whole document or just its `DHCPv4Client` object. `None` means the link
+/// has no lease; a lease that cannot be understood is an error.
+pub fn parse_lease(json: &str) -> Result<Option<LeaseInfo>> {
     let document: Value = serde_json::from_str(json).context("Unreadable networkctl output")?;
     let client = document.get("DHCPv4Client").unwrap_or(&document);
-    let message = client
-        .pointer("/Lease/Message")
-        .ok_or_else(|| anyhow!("The link has no DHCPv4 lease"))?;
+    let Some(message) = client.pointer("/Lease/Message") else {
+        return Ok(None);
+    };
 
     let address = message
         .get("yiaddr")
@@ -114,11 +115,11 @@ pub fn parse_lease(json: &str) -> Result<LeaseInfo> {
         bail!("The DHCPv4 client identifier is too short");
     }
 
-    Ok(LeaseInfo {
+    Ok(Some(LeaseInfo {
         address,
         server,
         client_id,
-    })
+    }))
 }
 
 /// A DHCPRELEASE (RFC 2131 section 4.4.4): unicast to the server, with the
@@ -163,7 +164,8 @@ fn link_mac(name: &str) -> Result<[u8; 6]> {
         .map_err(|_| anyhow!("{name} has no 6-byte hardware address"))
 }
 
-async fn read_lease(name: &str) -> Result<LeaseInfo> {
+/// The interface's current DHCPv4 lease, if it has one.
+pub async fn read_lease(name: &str) -> Result<Option<LeaseInfo>> {
     let output = tokio::time::timeout(
         Duration::from_secs(15),
         tokio::process::Command::new("/usr/bin/networkctl")
@@ -199,6 +201,24 @@ fn send_release(iface: &str, lease: &LeaseInfo, packet: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Send a DHCPRELEASE for `lease` out of `name`.
+pub fn release_lease(name: &str, lease: &LeaseInfo) -> Result<()> {
+    let packet = build_release(lease, link_mac(name)?, rand::random::<u32>());
+    send_release(name, lease, &packet).context("Failed to send the DHCP release")?;
+    info!(
+        "Sent DHCPRELEASE for {} to {} on {name}",
+        lease.address, lease.server
+    );
+    Ok(())
+}
+
+/// Claim the right to take a DHCP link down; held for the whole operation.
+pub fn try_lock_reset() -> Result<tokio::sync::MutexGuard<'static, ()>> {
+    RESET_LOCK
+        .try_lock()
+        .map_err(|_| anyhow!("A DHCP session reset is already running"))
+}
+
 fn failsafe_unit(name: &str) -> String {
     format!("keystone-link-up-{name}")
 }
@@ -210,7 +230,22 @@ async fn run_systemctl_stop(unit: &str) {
         .await;
 }
 
-/// Arrange for the link to come back up even if this daemon dies mid-reset.
+/// Arrange for the links to come back up even if this daemon dies mid-operation.
+/// A rename passes both names, since the link has one or the other by then.
+pub async fn schedule_failsafes(names: &[&str]) -> Result<()> {
+    for name in names {
+        schedule_failsafe(name).await?;
+    }
+    Ok(())
+}
+
+/// Cancel the timers from [`schedule_failsafes`] once the links are up.
+pub async fn cancel_failsafes(names: &[&str]) {
+    for name in names {
+        run_systemctl_stop(&format!("{}.timer", failsafe_unit(name))).await;
+    }
+}
+
 async fn schedule_failsafe(name: &str) -> Result<()> {
     let unit = failsafe_unit(name);
     // A leftover from an earlier, interrupted reset would block the new one.
@@ -241,27 +276,19 @@ async fn schedule_failsafe(name: &str) -> Result<()> {
 /// bounce then continues in the background.
 pub async fn start_reset(name: &str) -> Result<String> {
     keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
-    let guard = RESET_LOCK
-        .try_lock()
-        .map_err(|_| anyhow!("A DHCP session reset is already running"))?;
+    let guard = try_lock_reset()?;
 
-    let lease = read_lease(name).await?;
-    let mac = link_mac(name)?;
-    let xid = rand::random::<u32>();
-    let packet = build_release(&lease, mac, xid);
+    let lease = read_lease(name)
+        .await?
+        .ok_or_else(|| anyhow!("{name} has no DHCPv4 lease to release"))?;
 
-    schedule_failsafe(name).await?;
-    if let Err(error) =
-        send_release(name, &lease, &packet).context("Failed to send the DHCP release")
-    {
+    schedule_failsafes(&[name]).await?;
+    if let Err(error) = release_lease(name, &lease) {
         // Nothing changed on the link, so the safety timer is not needed.
-        run_systemctl_stop(&format!("{}.timer", failsafe_unit(name))).await;
+        cancel_failsafes(&[name]).await;
         return Err(error);
     }
-    info!(
-        "Sent DHCPRELEASE for {} to {} on {name}; bouncing the link",
-        lease.address, lease.server
-    );
+    info!("Bouncing {name} after releasing its lease");
 
     let link = name.to_string();
     tokio::spawn(async move {
@@ -306,7 +333,7 @@ mod tests {
         {"tag":54,"data":"67f36620"}]}},"ClientIdentifier":[1,0,232,76,104,158,210]}}"#;
 
     fn lease() -> LeaseInfo {
-        parse_lease(STATUS_JSON).unwrap()
+        parse_lease(STATUS_JSON).unwrap().unwrap()
     }
 
     #[test]
@@ -317,14 +344,14 @@ mod tests {
         assert_eq!(lease.client_id, [1, 0, 232, 76, 104, 158, 210]);
         // The bare DHCPv4Client object works too.
         let inner = serde_json::from_str::<Value>(STATUS_JSON).unwrap()["DHCPv4Client"].to_string();
-        assert_eq!(parse_lease(&inner).unwrap(), lease);
+        assert_eq!(parse_lease(&inner).unwrap(), Some(lease));
     }
 
     #[test]
-    fn a_missing_or_partial_lease_is_an_error() {
+    fn no_lease_is_none_and_a_partial_lease_is_an_error() {
         assert!(parse_lease("not json").is_err());
-        assert!(parse_lease("{}").is_err());
-        assert!(parse_lease(r#"{"DHCPv4Client":{}}"#).is_err());
+        assert_eq!(parse_lease("{}").unwrap(), None);
+        assert_eq!(parse_lease(r#"{"DHCPv4Client":{}}"#).unwrap(), None);
         let no_server = STATUS_JSON.replace(
             r#"{"tag":54,"data":"67f36620"}"#,
             r#"{"tag":3,"data":"67f36620"}"#,

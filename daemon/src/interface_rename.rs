@@ -10,6 +10,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use keystone_core::{BridgeConfig, InterfaceConfig, RenameInterfaceResponse, VlanConfig};
@@ -25,6 +26,13 @@ use crate::sqm;
 use crate::status;
 
 const SYS_CLASS_NET: &str = "/sys/class/net";
+
+/// Whether `name` is an enabled interface that runs a DHCPv4 client.
+fn has_dhcpv4_client(configs: &[InterfaceConfig], name: &str) -> bool {
+    configs
+        .iter()
+        .any(|config| config.name == name && config.enabled && dhcp_session::uses_dhcpv4(config))
+}
 
 /// Everything that decides whether a rename is allowed, gathered up front.
 pub struct RenameContext<'a> {
@@ -120,7 +128,7 @@ fn is_admin_up(name: &str) -> bool {
 
 /// Rename the live device. A device must be down to change its name, so it is
 /// taken down and, if it was up, brought back up under the new name.
-async fn rename_live(old: &str, new: &str) -> Result<()> {
+async fn rename_live(old: &str, new: &str, hold: Duration) -> Result<()> {
     let was_up = is_admin_up(old);
     run_ip(&["link", "set", "dev", old, "down"]).await?;
     if let Err(error) = run_ip(&["link", "set", "dev", old, "name", new]).await {
@@ -128,6 +136,11 @@ async fn rename_live(old: &str, new: &str) -> Result<()> {
             warn!("Could not bring {old} back up after a failed rename: {up:#}");
         }
         return Err(error);
+    }
+    // After a DHCP release, the ISP needs a few quiet seconds to forget the
+    // session before the interface asks for a new lease.
+    if !hold.is_zero() {
+        tokio::time::sleep(hold).await;
     }
     if was_up {
         run_ip(&["link", "set", "dev", new, "up"]).await?;
@@ -163,7 +176,6 @@ pub async fn rename_interface(
     actor: Option<&str>,
     old: &str,
     new: &str,
-    allow_dhcp_restart: bool,
 ) -> Result<RenameInterfaceResponse> {
     if db.get_global_settings().await?.config_changes_disabled {
         return Ok(refusal(
@@ -193,18 +205,24 @@ pub async fn rename_interface(
         return Ok(refusal(reason));
     }
 
-    // The apply that follows rewrites this interface's .network file, so
-    // networkd reconfigures the link and restarts its DHCP client from a
-    // DISCOVER. Some ISPs then stop routing until the lease expires.
-    if !allow_dhcp_restart
-        && configs
-            .iter()
-            .any(|config| config.name == old && config.enabled && dhcp_session::uses_dhcpv4(config))
-    {
-        return Ok(refusal(format!(
-            "{old} gets its address by DHCP. Renaming it restarts the DHCP client, and some ISPs then stop routing your traffic until the old lease expires (about 25 minutes). Confirm that you accept this to rename it anyway."
-        )));
-    }
+    // An interface with a DHCPv4 lease would restart its client from a
+    // DISCOVER while the ISP still holds the old lease, which some BNGs answer
+    // by not routing. So the lease is released first and the link stays down
+    // for a few seconds, as in `dhcp_session::start_reset`.
+    let dhcp = has_dhcpv4_client(&configs, old);
+    let _reset_guard = if dhcp {
+        match dhcp_session::try_lock_reset() {
+            Ok(guard) => Some(guard),
+            Err(error) => return Ok(refusal(format!("{error:#}"))),
+        }
+    } else {
+        None
+    };
+    let lease = if dhcp {
+        dhcp_session::read_lease(old).await?
+    } else {
+        None
+    };
 
     let mac = permanent_mac(old).await?;
 
@@ -225,7 +243,16 @@ pub async fn rename_interface(
         if shaped {
             sqm::release_interface(db, old).await?;
         }
-        rename_live(old, new).await
+        let hold = match &lease {
+            Some(lease) => {
+                // The link is down under one name or the other until it is up.
+                dhcp_session::schedule_failsafes(&[old, new]).await?;
+                dhcp_session::release_lease(old, lease)?;
+                dhcp_session::RESET_DOWN_TIME
+            }
+            None => Duration::ZERO,
+        };
+        rename_live(old, new, hold).await
     }
     .await;
     if let Err(error) = live {
@@ -246,10 +273,18 @@ pub async fn rename_interface(
         }));
     }
     info!("Renamed interface {old} to {new}");
+    if lease.is_some() {
+        dhcp_session::cancel_failsafes(&[old, new]).await;
+    }
 
     let applied = apply::apply_all(db, firewall_manager, None, actor).await?;
+    let released = if lease.is_some() {
+        " Its DHCP lease was released first."
+    } else {
+        ""
+    };
     let message = if applied.success {
-        format!("Renamed {old} to {new}. {}", applied.message)
+        format!("Renamed {old} to {new}.{released} {}", applied.message)
     } else {
         format!(
             "Renamed {old} to {new}, but applying the configuration failed. {}",
@@ -291,6 +326,29 @@ mod tests {
                 bridges,
             },
         )
+    }
+
+    #[test]
+    fn only_enabled_dhcpv4_interfaces_release_a_lease_on_rename() {
+        let config =
+            |name: &str, enabled: bool, dhcp_mode: keystone_core::DhcpMode| InterfaceConfig {
+                name: name.into(),
+                enabled,
+                dhcp_mode,
+                ..Default::default()
+            };
+        let configs = [
+            config("wan", true, keystone_core::DhcpMode::Yes),
+            config("v4", true, keystone_core::DhcpMode::Ipv4),
+            config("off", false, keystone_core::DhcpMode::Yes),
+            config("v6", true, keystone_core::DhcpMode::Ipv6),
+            config("lan", true, keystone_core::DhcpMode::No),
+        ];
+        assert!(has_dhcpv4_client(&configs, "wan"));
+        assert!(has_dhcpv4_client(&configs, "v4"));
+        for name in ["off", "v6", "lan", "missing"] {
+            assert!(!has_dhcpv4_client(&configs, name), "{name}");
+        }
     }
 
     #[test]

@@ -215,7 +215,7 @@ pub fn InterfacesPage(
         });
     };
 
-    let rename_link = Callback::new(move |(name, new_name, allow): (String, String, bool)| {
+    let rename_link = Callback::new(move |(name, new_name): (String, String)| {
         if has_changes() {
             set_error.set(Some(
                 "Save or discard your changes to the interface list before renaming an interface"
@@ -229,7 +229,7 @@ pub fn InterfacesPage(
         set_rename_busy.set(true);
         set_error.set(None);
         spawn_local(async move {
-            match api::rename_interface(&token, &name, &new_name, allow).await {
+            match api::rename_interface(&token, &name, &new_name).await {
                 Ok(response) => {
                     let renamed = response.apply.is_some();
                     if response.success {
@@ -430,10 +430,9 @@ fn RenameControl(
     dhcp: bool,
     disabled: Signal<bool>,
     busy: ReadSignal<bool>,
-    on_rename: Callback<(String, String, bool)>,
+    on_rename: Callback<(String, String)>,
 ) -> impl IntoView {
     let (editing, set_editing) = signal(false);
-    let (accepted, set_accepted) = signal(false);
     let (input, set_input) = signal(name.clone());
     let open_name = name.clone();
 
@@ -468,13 +467,9 @@ fn RenameControl(
                     />
                     <button
                         class="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-2 py-1 rounded text-sm"
-                        disabled=move || disabled.get() || (dhcp && !accepted.get())
+                        disabled=move || disabled.get()
                         on:click=move |_| {
-                            on_rename.run((
-                                submit_name.clone(),
-                                input.get_untracked().trim().to_string(),
-                                accepted.get_untracked(),
-                            ))
+                            on_rename.run((submit_name.clone(), input.get_untracked().trim().to_string()))
                         }
                     >
                         {move || if busy.get() { "Renaming..." } else { "Rename" }}
@@ -488,14 +483,9 @@ fn RenameControl(
                     </button>
                 </div>
                 {dhcp.then(|| view! {
-                    <label class="flex items-start gap-2 text-xs text-red-200">
-                        <input
-                            type="checkbox"
-                            prop:checked=move || accepted.get()
-                            on:change=move |ev| set_accepted.set(event_target_checked(&ev))
-                        />
-                        "This interface gets its address by DHCP. Renaming restarts the DHCP client, and some ISPs then stop routing your traffic until the old lease expires (about 25 minutes). I accept this."
-                    </label>
+                    <p class="text-xs text-yellow-200">
+                        "This interface gets its address by DHCP. Its lease is released first and the interface stays down for about 12 seconds, so the connection is interrupted and IPv6 prefixes handed out to the LAN are withdrawn until it is back."
+                    </p>
                 })}
                 <p class="text-xs text-yellow-200">
                     "The interface briefly goes down and its configuration is re-applied; confirm the change afterwards. Letters, digits, '-' and '_' only, up to 15 characters; not eth0, wlan0, enp3s0 style names."

@@ -1164,7 +1164,6 @@ async fn rename_interface(
         actor,
         &name,
         &request.new_name,
-        request.allow_dhcp_restart,
     )
     .await?;
     Ok(Json(response))

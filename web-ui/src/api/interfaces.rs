@@ -91,11 +91,9 @@ pub async fn rename_interface(
     token: &str,
     name: &str,
     new_name: &str,
-    allow_dhcp_restart: bool,
 ) -> Result<RenameInterfaceResponse, String> {
     let request = RenameInterfaceRequest {
         new_name: new_name.to_string(),
-        allow_dhcp_restart,
     };
     call_with::<RenameInterface>(token, &[("name", name)], &request).await
 }

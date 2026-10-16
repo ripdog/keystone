@@ -639,12 +639,6 @@ fn check_dnsmasq(
                 ));
             }
         }
-        DnsmasqUpstreamMode::LocalAdGuard => out.push(warn(
-            "consistency_dnsmasq_adguard".into(),
-            "AdGuard upstream on port 5353",
-            "The local AdGuard upstream uses port 5353, which is normally mDNS. Verify that AdGuard Home really listens on 127.0.0.1:5353.".into(),
-            "Check AdGuard Home's DNS listen port, or use Custom upstream servers on the DNS/DHCP page.",
-        )),
         DnsmasqUpstreamMode::Custom | DnsmasqUpstreamMode::Blocky => {}
     }
     for r in &ranges {
@@ -1133,10 +1127,6 @@ mod tests {
         assert!(has(&s, "consistency_dnsmasq_loop"));
         s.resolv_nameservers.push("9.9.9.9".parse().unwrap());
         assert!(!has(&s, "consistency_dnsmasq_loop"));
-
-        let mut s = healthy();
-        s.dnsmasq.config.upstream_mode = DnsmasqUpstreamMode::LocalAdGuard;
-        assert!(has(&s, "consistency_dnsmasq_adguard"));
 
         let mut s = healthy();
         s.configs[1].addresses.clear();

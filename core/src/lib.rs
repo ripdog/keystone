@@ -579,8 +579,6 @@ pub enum DnsmasqUpstreamMode {
     System,
     /// Use custom upstream servers only (--no-resolv)
     Custom,
-    /// Chain to local AdGuard Home (localhost:5353 or similar)
-    LocalAdGuard,
     /// Send every query to the local Blocky service, which filters ads and
     /// forwards to encrypted upstreams. dnsmasq's cache is then disabled.
     Blocky,
@@ -591,7 +589,6 @@ impl std::fmt::Display for DnsmasqUpstreamMode {
         match self {
             DnsmasqUpstreamMode::System => write!(f, "system"),
             DnsmasqUpstreamMode::Custom => write!(f, "custom"),
-            DnsmasqUpstreamMode::LocalAdGuard => write!(f, "localadguard"),
             DnsmasqUpstreamMode::Blocky => write!(f, "blocky"),
         }
     }
@@ -603,7 +600,6 @@ impl std::str::FromStr for DnsmasqUpstreamMode {
         match s.to_lowercase().as_str() {
             "system" => Ok(DnsmasqUpstreamMode::System),
             "custom" => Ok(DnsmasqUpstreamMode::Custom),
-            "localadguard" | "adguard" => Ok(DnsmasqUpstreamMode::LocalAdGuard),
             "blocky" => Ok(DnsmasqUpstreamMode::Blocky),
             _ => Err(format!("Unknown upstream mode: {}", s)),
         }
@@ -4006,7 +4002,7 @@ mod tests {
             bogus_priv: true,
             local_domain: Some("lan".to_string()),
             expand_hosts: true,
-            upstream_mode: DnsmasqUpstreamMode::LocalAdGuard,
+            upstream_mode: DnsmasqUpstreamMode::Custom,
             upstream_servers: vec![DnsmasqUpstreamServer {
                 address: "127.0.0.1".to_string(),
                 port: Some(5353),
@@ -4076,14 +4072,7 @@ mod tests {
             "custom".parse::<DnsmasqUpstreamMode>().unwrap(),
             DnsmasqUpstreamMode::Custom
         );
-        assert_eq!(
-            "localadguard".parse::<DnsmasqUpstreamMode>().unwrap(),
-            DnsmasqUpstreamMode::LocalAdGuard
-        );
-        assert_eq!(
-            DnsmasqUpstreamMode::LocalAdGuard.to_string(),
-            "localadguard"
-        );
+        assert!("localadguard".parse::<DnsmasqUpstreamMode>().is_err());
         assert_eq!(
             "blocky".parse::<DnsmasqUpstreamMode>().unwrap(),
             DnsmasqUpstreamMode::Blocky

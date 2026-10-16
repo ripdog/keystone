@@ -844,7 +844,7 @@ pub enum DnsmasqConfigCommands {
         #[arg(long)]
         local_domain: Option<String>,
 
-        /// Upstream DNS mode: system, custom, localadguard, blocky
+        /// Upstream DNS mode: system, custom, blocky
         #[arg(long)]
         upstream_mode: Option<String>,
 

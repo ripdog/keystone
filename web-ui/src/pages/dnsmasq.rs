@@ -524,7 +524,6 @@ fn DnsSettingsTab(
                     >
                         <option value="system">"System (use /etc/resolv.conf)"</option>
                         <option value="custom">"Custom upstream servers"</option>
-                        <option value="localadguard">"Local AdGuard Home (localhost:5353)"</option>
                         <option value="blocky">"Blocky (ad-blocking, encrypted upstream)"</option>
                     </select>
                 </div>

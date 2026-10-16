@@ -832,3 +832,62 @@ mod interface_list_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod local_adguard_migration_tests {
+    use super::*;
+    use crate::db::Database;
+
+    const MIGRATION: &str =
+        include_str!("../../migrations/20261017000100_drop_local_adguard_mode.sql");
+
+    async fn run_migration(pool: &SqlitePool) {
+        for statement in MIGRATION.split(';').filter(|s| !s.trim().is_empty()) {
+            sqlx::query(statement).execute(pool).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_local_adguard_mode_becomes_a_custom_server_on_the_same_port() {
+        let db = Database::new_in_memory().await.unwrap();
+        let pool = db.pool();
+        sqlx::query("UPDATE dnsmasq_config SET upstream_mode = 'localadguard' WHERE id = 1")
+            .execute(pool)
+            .await
+            .unwrap();
+        // Listed while the old mode was active, so never used by it.
+        sqlx::query("INSERT INTO dnsmasq_upstream_servers (address) VALUES ('9.9.9.9')")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        run_migration(pool).await;
+
+        let config = load_dnsmasq_config(pool).await.unwrap();
+        assert_eq!(config.upstream_mode, DnsmasqUpstreamMode::Custom);
+        assert_eq!(config.upstream_servers.len(), 1);
+        assert_eq!(config.upstream_servers[0].address, "127.0.0.1");
+        assert_eq!(config.upstream_servers[0].port, Some(5353));
+    }
+
+    #[tokio::test]
+    async fn other_modes_and_their_servers_are_untouched() {
+        let db = Database::new_in_memory().await.unwrap();
+        let pool = db.pool();
+        sqlx::query("UPDATE dnsmasq_config SET upstream_mode = 'custom' WHERE id = 1")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO dnsmasq_upstream_servers (address) VALUES ('9.9.9.9')")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        run_migration(pool).await;
+
+        let config = load_dnsmasq_config(pool).await.unwrap();
+        assert_eq!(config.upstream_mode, DnsmasqUpstreamMode::Custom);
+        assert_eq!(config.upstream_servers.len(), 1);
+        assert_eq!(config.upstream_servers[0].address, "9.9.9.9");
+    }
+}

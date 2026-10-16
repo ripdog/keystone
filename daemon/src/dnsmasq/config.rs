@@ -23,9 +23,6 @@ pub const DNSMASQ_CONFIG_PATH: &str = "/etc/dnsmasq.d/50-keystone.conf";
 /// Dnsmasq lease file location
 pub const DNSMASQ_LEASE_FILE: &str = "/var/lib/dnsmasq/dnsmasq.leases";
 
-/// AdGuard Home default port for LocalAdGuard mode
-pub const ADGUARD_DEFAULT_PORT: u16 = 5353;
-
 /// Generate the complete dnsmasq configuration file content
 pub fn generate_dnsmasq_config(state: &DnsmasqStateResponse) -> String {
     let mut lines = Vec::new();
@@ -158,11 +155,6 @@ fn generate_upstream_dns(lines: &mut Vec<String>, config: &DnsmasqConfig) {
                     lines.push(format!("server={}{}", server.address, port_suffix));
                 }
             }
-        }
-        DnsmasqUpstreamMode::LocalAdGuard => {
-            lines.push("no-resolv".to_string());
-            lines.push(format!("server=127.0.0.1#{}", ADGUARD_DEFAULT_PORT));
-            lines.push("# Chaining to local AdGuard Home".to_string());
         }
         DnsmasqUpstreamMode::Blocky => {
             lines.push("no-resolv".to_string());

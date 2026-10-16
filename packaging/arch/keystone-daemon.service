@@ -38,6 +38,10 @@ ConfigurationDirectoryMode=0755
 # reach networkd and systemd over their sockets and need no filesystem write
 # access. A unit test keeps these capabilities in place.
 # CAP_SETUID/SETGID let Caddy validation drop to the caddy service identity.
+# Packet capture (capture/mod.rs) uses CAP_NET_RAW for tcpdump's raw socket, and
+# CAP_SETUID/SETGID so setpriv can start the packet decoder as nobody. The
+# capture file goes in /run/keystone/capture, under RuntimeDirectory= below. A
+# unit test keeps these in place.
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_SYS_ADMIN CAP_CHOWN CAP_SETUID CAP_SETGID
 # Both capabilities must also be ambient: subprocesses otherwise lose
 # CAP_SETUID during Caddy's setgid/setgroups/setuid sequence.

@@ -7,6 +7,7 @@
 //! wrong body shape to a route without a compile error.
 
 use crate::blocky::*;
+use crate::capture::*;
 use crate::changes::*;
 use crate::sqm::*;
 use crate::upnp::*;
@@ -127,6 +128,12 @@ endpoints! {
     SaveBlockyConfig: Put "/blocky/config", SaveBlockyConfigRequest => SaveBlockyConfigResponse;
 
     PauseBlocky: Post "/blocky/pause", BlockyPauseRequest => BlockyActionResponse;
+
+    /// Starts a capture; refused while another is running.
+    StartCapture: Post "/capture", CaptureRequest => CaptureInfo;
+    StopCapture: Post "/capture/stop", CaptureNoRequest => CaptureInfo;
+    /// Deletes the finished capture and its file.
+    DiscardCapture: Delete "/capture", CaptureNoRequest => CaptureStateResponse;
 
     ApplySsh: Post "/ssh/apply", SshConfig => SshApplyResponse;
 

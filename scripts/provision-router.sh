@@ -18,7 +18,7 @@ pacman -Sy --noconfirm archlinux-keyring
 pacman -Syu --noconfirm
 pacman -S --noconfirm \
     rust cargo git \
-    nftables dnsmasq avahi \
+    nftables dnsmasq avahi tcpdump \
     base-devel \
     iproute2
 

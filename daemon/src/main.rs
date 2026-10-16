@@ -7,6 +7,7 @@ mod apply;
 mod auth;
 mod blocky;
 mod caddy;
+mod capture;
 mod changes;
 mod client_traffic;
 mod clients;
@@ -324,6 +325,10 @@ async fn main() -> anyhow::Result<()> {
         .merge(upnp::routes::upnp_routes(upnp_state))
         // Merge DNS filtering (Blocky) routes
         .merge(blocky::routes::blocky_routes(blocky_state))
+        // Merge packet capture routes
+        .merge(capture::routes::capture_routes(
+            capture::CaptureManager::new(capture::CaptureEnv::system()),
+        ))
         // Merge pending-change and snapshot routes
         .merge(changes::changes_routes(changes_state))
         // Merge systemd routes

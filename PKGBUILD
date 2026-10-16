@@ -8,7 +8,8 @@ license=("GPL-3.0-only")
 depends=("glibc" "sqlite" "nftables" "conntrack-tools" "systemd" "iproute2" "iputils" "dnsmasq" "hwdata")
 optdepends=('miniupnpd-nft: UPnP IGD and NAT-PMP port mapping (AUR; the extra/miniupnpd build uses iptables and is unsupported)'
             'blocky-bin: DNS ad-blocking and encrypted upstream DNS (AUR)'
-            'avahi: multicast DNS, so the router answers to <hostname>.local')
+            'avahi: multicast DNS, so the router answers to <hostname>.local'
+            'tcpdump: packet capture on the diagnostics page')
 makedepends=("rust" "cargo" "trunk" "git")
 conflicts=('keystone') # the extra repo's assembler framework shares the old name
 # Do not inherit host-specific -march=native/-O3/LTO flags. C dependencies

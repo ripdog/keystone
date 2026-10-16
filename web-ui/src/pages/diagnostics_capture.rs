@@ -1,8 +1,9 @@
 //! Diagnostics: packet capture with a filter builder, a live view and a pcap
 //! download.
 //!
-//! The filter is a list of typed rows that are turned into
-//! `keystone_core::capture` clauses. The expression shown under the builder is
+//! The filter is a list of groups; a packet must match every group, and a group
+//! matches when any of its rows does. Rows are typed and are turned into
+//! `keystone_core::capture` conditions. The expression shown under the builder is
 //! produced by the same function the daemon uses, so what is previewed is what
 //! tcpdump will be given. The daemon takes one capture at a time and keeps its
 //! file until the next one starts.
@@ -12,9 +13,9 @@ use crate::components::download_bytes;
 use crate::components::form_utils::{event_target_checked, event_target_value};
 use gloo_timers::callback::{Interval, Timeout};
 use keystone_core::capture::{
-    CaptureClause, CaptureDirection, CaptureFilter, CaptureInfo, CaptureLine, CaptureProtocol,
-    CaptureRequest, CaptureState, DEFAULT_PACKETS, DEFAULT_SECONDS, DEFAULT_SNAPLEN, FilterTerm,
-    MAX_CLAUSES,
+    CaptureClause, CaptureDetail, CaptureDirection, CaptureFilter, CaptureGroup, CaptureInfo,
+    CaptureLine, CaptureProtocol, CaptureRequest, CaptureState, DEFAULT_PACKETS, DEFAULT_SECONDS,
+    DEFAULT_SNAPLEN, DhcpMessageType, FilterTerm, MAX_CLAUSES, MAX_GROUPS,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -31,15 +32,17 @@ enum RowKind {
     Net,
     Port,
     Mac,
+    Dhcp,
 }
 
 impl RowKind {
-    const ALL: [RowKind; 5] = [
+    const ALL: [RowKind; 6] = [
         RowKind::Protocol,
         RowKind::Host,
         RowKind::Net,
         RowKind::Port,
         RowKind::Mac,
+        RowKind::Dhcp,
     ];
 
     fn value(self) -> &'static str {
@@ -49,6 +52,7 @@ impl RowKind {
             RowKind::Net => "net",
             RowKind::Port => "port",
             RowKind::Mac => "mac",
+            RowKind::Dhcp => "dhcp",
         }
     }
 
@@ -59,6 +63,7 @@ impl RowKind {
             RowKind::Net => "Network",
             RowKind::Port => "Port",
             RowKind::Mac => "MAC address",
+            RowKind::Dhcp => "DHCPv4 message",
         }
     }
 
@@ -71,7 +76,7 @@ impl RowKind {
 
     fn placeholder(self) -> &'static str {
         match self {
-            RowKind::Protocol => "",
+            RowKind::Protocol | RowKind::Dhcp => "",
             RowKind::Host => "192.168.1.20 or 2001:db8::1",
             RowKind::Net => "192.168.1.0/24",
             RowKind::Port => "53",
@@ -83,6 +88,7 @@ impl RowKind {
     fn default_value(self) -> &'static str {
         match self {
             RowKind::Protocol => "tcp",
+            RowKind::Dhcp => "discover",
             _ => "",
         }
     }
@@ -109,6 +115,11 @@ impl ClauseSpec {
             last: String::new(),
         }
     }
+}
+
+/// The option value used for a DHCP message type in the page.
+fn dhcp_value(message: DhcpMessageType) -> String {
+    message.label().to_lowercase()
 }
 
 fn parse_port(text: &str) -> Result<u16, String> {
@@ -150,6 +161,12 @@ fn clause_from_spec(spec: &ClauseSpec) -> Result<CaptureClause, String> {
             direction: spec.direction,
             address: spec.value.clone(),
         },
+        RowKind::Dhcp => FilterTerm::DhcpMessage {
+            message_type: DhcpMessageType::ALL
+                .into_iter()
+                .find(|message| dhcp_value(*message) == spec.value)
+                .ok_or_else(|| "choose a DHCP message type".to_string())?,
+        },
     };
     term.to_expression()?;
     Ok(CaptureClause {
@@ -158,25 +175,198 @@ fn clause_from_spec(spec: &ClauseSpec) -> Result<CaptureClause, String> {
     })
 }
 
-/// One-click starting points. Filters are ANDed, so each is a single idea.
-fn presets() -> Vec<(&'static str, Vec<ClauseSpec>)> {
-    let port = |first: &str, last: &str| ClauseSpec {
+/// Rows of which at least one must match.
+#[derive(Clone, PartialEq, Debug)]
+struct GroupSpec {
+    /// Inverts the whole group. Only meaningful for more than one row; a
+    /// single row is negated on the row itself.
+    negate: bool,
+    any: Vec<ClauseSpec>,
+}
+
+impl GroupSpec {
+    fn one(spec: ClauseSpec) -> Self {
+        Self {
+            negate: false,
+            any: vec![spec],
+        }
+    }
+
+    fn any_of(any: Vec<ClauseSpec>) -> Self {
+        Self { negate: false, any }
+    }
+}
+
+/// Turn a group into a core group, or say what is wrong. `number` is the
+/// group's place in the filter, for the message.
+fn group_from_spec(spec: &GroupSpec, number: usize) -> Result<CaptureGroup, String> {
+    let many = spec.any.len() > 1;
+    let any = spec
+        .any
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            clause_from_spec(row).map_err(|error| {
+                if many {
+                    format!("condition {number}, alternative {}: {error}", index + 1)
+                } else {
+                    format!("condition {number}: {error}")
+                }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(CaptureGroup {
+        negate: spec.negate,
+        any,
+    })
+}
+
+/// A ready-made filter.
+struct Preset {
+    label: &'static str,
+    /// Shown as a tooltip.
+    hint: &'static str,
+    groups: Vec<GroupSpec>,
+    /// Decode detail and MAC display to switch to, when the filter needs them
+    /// to be useful.
+    detail: Option<CaptureDetail>,
+    link_level: Option<bool>,
+}
+
+fn port_spec(first: &str, last: &str) -> ClauseSpec {
+    ClauseSpec {
         last: last.to_string(),
         ..ClauseSpec::new(RowKind::Port, first)
+    }
+}
+
+fn dhcp_spec(message: DhcpMessageType) -> ClauseSpec {
+    ClauseSpec::new(RowKind::Dhcp, &dhcp_value(message))
+}
+
+fn protocol_spec(protocol: &str) -> ClauseSpec {
+    ClauseSpec::new(RowKind::Protocol, protocol)
+}
+
+/// Conditions that are added to the filter, so they combine with a host or
+/// anything else already there.
+fn add_ons() -> Vec<Preset> {
+    let plain = |label, hint, groups| Preset {
+        label,
+        hint,
+        groups,
+        detail: None,
+        link_level: None,
     };
     vec![
-        ("DNS", vec![port("53", "")]),
-        ("DHCP", vec![port("67", "68")]),
-        ("NTP", vec![port("123", "")]),
-        ("ARP", vec![ClauseSpec::new(RowKind::Protocol, "arp")]),
-        ("Ping", vec![ClauseSpec::new(RowKind::Protocol, "icmp")]),
-        (
-            "Not SSH",
-            vec![ClauseSpec {
-                negate: true,
-                ..port("22", "")
-            }],
+        plain("DNS", "Port 53", vec![GroupSpec::one(port_spec("53", ""))]),
+        plain(
+            "DHCPv4 ports",
+            "UDP ports 67 and 68",
+            vec![GroupSpec::one(port_spec("67", "68"))],
         ),
+        plain(
+            "NTP",
+            "Port 123",
+            vec![GroupSpec::one(port_spec("123", ""))],
+        ),
+        plain(
+            "ARP",
+            "Address resolution",
+            vec![GroupSpec::one(protocol_spec("arp"))],
+        ),
+        plain(
+            "Ping",
+            "ICMPv4 echo and friends",
+            vec![GroupSpec::one(protocol_spec("icmp"))],
+        ),
+        plain(
+            "Not SSH",
+            "Hide port 22, such as your own session",
+            vec![GroupSpec::one(ClauseSpec {
+                negate: true,
+                ..port_spec("22", "")
+            })],
+        ),
+    ]
+}
+
+/// Filters for chasing the ISP's DHCPv4 and IPv4 fault. Each replaces the
+/// filter. Run them on the WAN interface. See what the router sends after a
+/// restart: a DISCOVER with no option 50 is the case that goes wrong, an
+/// INIT-REBOOT REQUEST (it carries option 50) is the safe one.
+fn scenarios() -> Vec<Preset> {
+    let dhcp = |label, hint, groups| Preset {
+        label,
+        hint,
+        groups,
+        detail: Some(CaptureDetail::Verbose),
+        link_level: Some(true),
+    };
+    vec![
+        dhcp(
+            "DHCPv4 exchange",
+            "Every DHCPv4 packet in both directions, with options (53, 50, 61)",
+            vec![
+                GroupSpec::one(protocol_spec("udp")),
+                GroupSpec::one(port_spec("67", "68")),
+            ],
+        ),
+        dhcp(
+            "DISCOVER",
+            "Fresh DISCOVERs only. A DISCOVER while the ISP still holds the lease is the trigger",
+            vec![GroupSpec::one(dhcp_spec(DhcpMessageType::Discover))],
+        ),
+        dhcp(
+            "REQUEST",
+            "REQUESTs only. With option 50 it is an INIT-REBOOT or SELECTING request",
+            vec![GroupSpec::one(dhcp_spec(DhcpMessageType::Request))],
+        ),
+        dhcp(
+            "RELEASE",
+            "DHCPRELEASE only, to confirm one is really on the wire",
+            vec![GroupSpec::one(dhcp_spec(DhcpMessageType::Release))],
+        ),
+        dhcp(
+            "Server replies",
+            "OFFER, ACK and NAK from the ISP",
+            vec![GroupSpec::any_of(vec![
+                dhcp_spec(DhcpMessageType::Offer),
+                dhcp_spec(DhcpMessageType::Ack),
+                dhcp_spec(DhcpMessageType::Nak),
+            ])],
+        ),
+        dhcp(
+            "DHCPv4 + DHCPv6",
+            "Both clients restarting together, ports 67-68 and 546-547",
+            vec![GroupSpec::any_of(vec![
+                port_spec("67", "68"),
+                port_spec("546", "547"),
+            ])],
+        ),
+        Preset {
+            label: "ARP + ping",
+            hint: "Gateway reachability while broken: ARP answered but ICMP silent",
+            groups: vec![GroupSpec::any_of(vec![
+                protocol_spec("arp"),
+                protocol_spec("icmp"),
+            ])],
+            detail: Some(CaptureDetail::Normal),
+            link_level: Some(true),
+        },
+        Preset {
+            label: "IPv4 without DHCP",
+            hint: "The IPv4 data path, with the DHCP chatter removed",
+            groups: vec![
+                GroupSpec::one(protocol_spec("ip")),
+                GroupSpec::one(ClauseSpec {
+                    negate: true,
+                    ..port_spec("67", "68")
+                }),
+            ],
+            detail: Some(CaptureDetail::Normal),
+            link_level: Some(false),
+        },
     ]
 }
 
@@ -248,6 +438,48 @@ impl ClauseRow {
     }
 }
 
+/// A group of rows, any one of which may match.
+#[derive(Clone, Copy)]
+struct GroupRow {
+    id: u32,
+    negate: RwSignal<bool>,
+    rows: RwSignal<Vec<ClauseRow>>,
+}
+
+impl GroupRow {
+    fn spec(&self) -> GroupSpec {
+        GroupSpec {
+            negate: self.negate.get(),
+            any: self.rows.get().iter().map(ClauseRow::spec).collect(),
+        }
+    }
+}
+
+/// Hands out ids for rows and groups, which only need to differ from each other.
+#[derive(Clone, Copy)]
+struct Ids(StoredValue<u32>);
+
+impl Ids {
+    fn next(self) -> u32 {
+        let id = self.0.get_value();
+        self.0.set_value(id + 1);
+        id
+    }
+
+    fn group(self, spec: GroupSpec) -> GroupRow {
+        GroupRow {
+            id: self.next(),
+            negate: RwSignal::new(spec.negate),
+            rows: RwSignal::new(
+                spec.any
+                    .into_iter()
+                    .map(|row| ClauseRow::new(self.next(), row))
+                    .collect(),
+            ),
+        }
+    }
+}
+
 fn direction_value(direction: CaptureDirection) -> &'static str {
     match direction {
         CaptureDirection::Any => "any",
@@ -264,11 +496,28 @@ fn direction_from_value(value: &str) -> CaptureDirection {
     }
 }
 
+fn detail_value(detail: CaptureDetail) -> &'static str {
+    match detail {
+        CaptureDetail::Normal => "normal",
+        CaptureDetail::Verbose => "verbose",
+        CaptureDetail::VeryVerbose => "very_verbose",
+    }
+}
+
+fn detail_from_value(value: &str) -> CaptureDetail {
+    match value {
+        "verbose" => CaptureDetail::Verbose,
+        "very_verbose" => CaptureDetail::VeryVerbose,
+        _ => CaptureDetail::Normal,
+    }
+}
+
 const INPUT_CLASS: &str =
     "px-2 py-1.5 bg-gray-700 text-gray-200 rounded border border-gray-600 text-sm";
 const BUTTON_CLASS: &str = "px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-100 rounded border border-gray-600 text-sm disabled:opacity-50";
 const PRIMARY_BUTTON_CLASS: &str =
     "px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm disabled:opacity-50";
+const CHIP_CLASS: &str = "px-2 py-1 bg-gray-700/60 hover:bg-gray-600 text-gray-200 rounded text-xs border border-gray-600";
 
 #[component]
 pub fn DiagnosticsCapturePage(
@@ -279,11 +528,13 @@ pub fn DiagnosticsCapturePage(
 
     let interfaces = RwSignal::new(vec!["any".to_string()]);
     let interface = RwSignal::new(String::new());
-    let rows = RwSignal::new(Vec::<ClauseRow>::new());
-    let next_row_id = StoredValue::new(0u32);
+    let groups = RwSignal::new(Vec::<GroupRow>::new());
+    let ids = Ids(StoredValue::new(0u32));
     let packets = RwSignal::new(DEFAULT_PACKETS.to_string());
     let seconds = RwSignal::new(DEFAULT_SECONDS.to_string());
     let snaplen = RwSignal::new(DEFAULT_SNAPLEN.to_string());
+    let detail = RwSignal::new(CaptureDetail::Normal);
+    let link_level = RwSignal::new(false);
 
     let info = RwSignal::new(None::<CaptureInfo>);
     let lines = RwSignal::new(Vec::<CaptureLine>::new());
@@ -312,33 +563,38 @@ pub fn DiagnosticsCapturePage(
         }
     };
 
-    let add_row = move |spec: ClauseSpec| {
-        if rows.with_untracked(|rows| rows.len()) >= MAX_CLAUSES {
+    // Add groups to the filter, refusing to go past the limits.
+    let add_groups = move |specs: Vec<GroupSpec>| {
+        let existing = groups.with_untracked(|groups| groups.len());
+        let terms: usize = groups.with_untracked(|groups| {
+            groups
+                .iter()
+                .map(|group| group.rows.with_untracked(|rows| rows.len()))
+                .sum()
+        });
+        let adding: usize = specs.iter().map(|group| group.any.len()).sum();
+        if existing + specs.len() > MAX_GROUPS || terms + adding > MAX_CLAUSES {
             error.set(Some(format!(
-                "A filter may have at most {MAX_CLAUSES} conditions"
+                "A filter may have at most {MAX_GROUPS} groups and {MAX_CLAUSES} conditions"
             )));
             return;
         }
-        let id = next_row_id.get_value();
-        next_row_id.set_value(id + 1);
-        rows.update(|rows| rows.push(ClauseRow::new(id, spec)));
+        groups.update(|groups| {
+            groups.extend(specs.into_iter().map(|spec| ids.group(spec)));
+        });
     };
 
-    // The filter as clauses, or the first row's problem.
-    let clauses = Memo::new(move |_| {
-        rows.get()
+    // The filter, or the first row's problem.
+    let filter = Memo::new(move |_| {
+        groups
+            .get()
             .iter()
             .enumerate()
-            .map(|(index, row)| {
-                clause_from_spec(&row.spec()).map_err(|e| format!("condition {}: {e}", index + 1))
-            })
+            .map(|(index, group)| group_from_spec(&group.spec(), index + 1))
             .collect::<Result<Vec<_>, String>>()
+            .map(|groups| CaptureFilter { groups })
     });
-    let expression = Memo::new(move |_| {
-        clauses
-            .get()
-            .and_then(|clauses| CaptureFilter { clauses }.to_expression())
-    });
+    let expression = Memo::new(move |_| filter.get().and_then(|filter| filter.to_expression()));
 
     // Learn the interfaces, and pick up a capture that is already there.
     Effect::new(move |_| {
@@ -438,8 +694,8 @@ pub fn DiagnosticsCapturePage(
 
     let start = move |_| {
         error.set(None);
-        let clauses = match clauses.get_untracked() {
-            Ok(clauses) => clauses,
+        let filter = match filter.get_untracked() {
+            Ok(filter) => filter,
             Err(message) => {
                 error.set(Some(message));
                 return;
@@ -453,10 +709,12 @@ pub fn DiagnosticsCapturePage(
         let request = (|| {
             Ok::<_, String>(CaptureRequest {
                 interface: interface.get_untracked(),
-                filter: CaptureFilter { clauses },
+                filter,
                 snaplen: number(snaplen.get_untracked(), "Snapshot length")?,
                 max_packets: number(packets.get_untracked(), "Packet limit")?,
                 max_seconds: number(seconds.get_untracked(), "Time limit")?,
+                detail: detail.get_untracked(),
+                link_level: link_level.get_untracked(),
             })
         })();
         let request = match request {
@@ -615,35 +873,67 @@ pub fn DiagnosticsCapturePage(
                         </select>
                     </label>
 
+                    // Ready-made filters
+                    <div class="space-y-2">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="text-sm text-gray-300">"DHCP / ISP debugging (replaces the filter):"</span>
+                            {scenarios().into_iter().map(|preset| {
+                                let Preset { label, hint, groups: specs, detail: preset_detail, link_level: preset_link } = preset;
+                                view! {
+                                    <button
+                                        class=CHIP_CLASS
+                                        title=hint
+                                        on:click=move |_| {
+                                            error.set(None);
+                                            groups.set(Vec::new());
+                                            add_groups(specs.clone());
+                                            if let Some(value) = preset_detail {
+                                                detail.set(value);
+                                            }
+                                            if let Some(value) = preset_link {
+                                                link_level.set(value);
+                                            }
+                                        }
+                                    >
+                                        {label}
+                                    </button>
+                                }
+                            }).collect_view()}
+                        </div>
+                        <p class="text-xs text-gray-500">
+                            "Capture on the WAN interface. Verbose decoding shows DHCP options, so you can tell a fresh DISCOVER from a REQUEST that carries option 50. DHCPv4 message filters read option 53 at its usual position, right after the magic cookie."
+                        </p>
+                    </div>
+
                     <div class="space-y-2">
                         <div class="flex flex-wrap items-center gap-2">
                             <span class="text-sm text-gray-300">"Filter: packets must match all of"</span>
-                            <button class=BUTTON_CLASS on:click=move |_| add_row(ClauseSpec::new(RowKind::Protocol, "tcp"))>
+                            <button class=BUTTON_CLASS on:click=move |_| add_groups(vec![GroupSpec::one(protocol_spec("tcp"))])>
                                 "+ Add condition"
                             </button>
-                            <span class="text-xs text-gray-500">"Quick:"</span>
-                            {presets().into_iter().map(|(label, specs)| view! {
-                                <button
-                                    class="px-2 py-1 bg-gray-700/60 hover:bg-gray-600 text-gray-200 rounded text-xs border border-gray-600"
-                                    on:click=move |_| {
-                                        for spec in specs.clone() {
-                                            add_row(spec);
-                                        }
-                                    }
-                                >
-                                    {label}
-                                </button>
+                            <span class="text-xs text-gray-500">"Add:"</span>
+                            {add_ons().into_iter().map(|preset| {
+                                let Preset { label, hint, groups: specs, .. } = preset;
+                                view! {
+                                    <button
+                                        class=CHIP_CLASS
+                                        title=hint
+                                        on:click=move |_| add_groups(specs.clone())
+                                    >
+                                        {label}
+                                    </button>
+                                }
                             }).collect_view()}
                         </div>
 
                         <For
-                            each=move || rows.get()
-                            key=|row| row.id
-                            children=move |row| view! {
-                                <ClauseRowView row=row rows=rows />
+                            each=move || groups.get()
+                            key=|group| group.id
+                            children=move |group| view! {
+                                <GroupView group=group groups=groups ids=ids />
                             }
                         />
-                        <Show when=move || rows.with(|rows| rows.is_empty())>
+                        <Show when=move || groups.with(|groups| groups.is_empty())>
                             <p class="text-sm text-gray-500">"No conditions: every packet on the interface is captured."</p>
                         </Show>
 
@@ -676,6 +966,32 @@ pub fn DiagnosticsCapturePage(
                                 on:input=move |ev| snaplen.set(event_target_value(&ev)) />
                         </label>
                     </div>
+
+                    <div class="flex flex-wrap items-end gap-4">
+                        <label class="space-y-1">
+                            <span class="text-sm text-gray-300">"Live view detail"</span>
+                            <select
+                                class=format!("{INPUT_CLASS} block")
+                                prop:value=move || detail_value(detail.get())
+                                on:change=move |ev| detail.set(detail_from_value(&event_target_value(&ev)))
+                            >
+                                <option value="normal">"One line per packet"</option>
+                                <option value="verbose">"Verbose (DHCP options, IP header)"</option>
+                                <option value="very_verbose">"Very verbose"</option>
+                            </select>
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer pb-2">
+                            <input
+                                type="checkbox"
+                                prop:checked=move || link_level.get()
+                                on:change=move |ev| link_level.set(event_target_checked(&ev))
+                            />
+                            "Show MAC addresses"
+                        </label>
+                    </div>
+                    <p class="text-xs text-gray-500">
+                        "Detail only changes the live view. The downloaded pcap always has the whole packet, up to the bytes kept."
+                    </p>
 
                     <div class="flex flex-wrap items-center gap-3">
                         <button
@@ -742,12 +1058,74 @@ pub fn DiagnosticsCapturePage(
     }
 }
 
-/// One editable filter condition.
+/// One condition of the filter: a row, or several alternative rows.
 #[component]
-fn ClauseRowView(row: ClauseRow, rows: RwSignal<Vec<ClauseRow>>) -> impl IntoView {
-    let has_direction = move || row.kind.get() != RowKind::Protocol;
+fn GroupView(group: GroupRow, groups: RwSignal<Vec<GroupRow>>, ids: Ids) -> impl IntoView {
+    let many = move || group.rows.with(|rows| rows.len() > 1);
+
+    // Remove one alternative, or the whole group when it was the last. When
+    // two alternatives become one, a group-level "none of" moves onto the row
+    // that is left, which means the same thing.
+    let remove_row = move |row_id: u32| {
+        group
+            .rows
+            .update(|rows| rows.retain(|row| row.id != row_id));
+        let left = group.rows.get_untracked();
+        match left.as_slice() {
+            [] => groups.update(|groups| groups.retain(|other| other.id != group.id)),
+            [only] if group.negate.get_untracked() => {
+                only.negate.update(|negated| *negated = !*negated);
+                group.negate.set(false);
+            }
+            _ => {}
+        }
+    };
+
+    let add_alternative = move |_| {
+        let id = ids.next();
+        group
+            .rows
+            .update(|rows| rows.push(ClauseRow::new(id, protocol_spec("tcp"))));
+    };
+
     view! {
-        <div class="flex flex-wrap items-center gap-2 bg-gray-700/40 rounded p-2">
+        <div class="bg-gray-700/40 rounded p-2 space-y-2">
+            <Show when=many>
+                <div class="flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                    <span>"Match any one of:"</span>
+                    <label class="flex items-center gap-1 cursor-pointer">
+                        <input
+                            type="checkbox"
+                            prop:checked=move || group.negate.get()
+                            on:change=move |ev| group.negate.set(event_target_checked(&ev))
+                        />
+                        "none of these instead"
+                    </label>
+                </div>
+            </Show>
+            <For
+                each=move || group.rows.get()
+                key=|row| row.id
+                children=move |row| view! {
+                    <ClauseRowView row=row on_remove=Callback::new(move |()| remove_row(row.id)) />
+                }
+            />
+            <button
+                class="text-xs text-blue-300 hover:text-blue-200"
+                on:click=add_alternative
+            >
+                "+ or another"
+            </button>
+        </div>
+    }
+}
+
+/// One editable filter row.
+#[component]
+fn ClauseRowView(row: ClauseRow, on_remove: Callback<()>) -> impl IntoView {
+    let has_direction = move || !matches!(row.kind.get(), RowKind::Protocol | RowKind::Dhcp);
+    view! {
+        <div class="flex flex-wrap items-center gap-2">
             <label class="flex items-center gap-1 text-sm text-gray-300 cursor-pointer">
                 <input
                     type="checkbox"
@@ -796,6 +1174,18 @@ fn ClauseRowView(row: ClauseRow, rows: RwSignal<Vec<ClauseRow>>) -> impl IntoVie
                         }).collect_view()}
                     </select>
                 }.into_any(),
+                RowKind::Dhcp => view! {
+                    <select
+                        class=INPUT_CLASS
+                        aria-label="DHCP message type"
+                        prop:value=move || row.value.get()
+                        on:change=move |ev| row.value.set(event_target_value(&ev))
+                    >
+                        {DhcpMessageType::ALL.into_iter().map(|message| view! {
+                            <option value=dhcp_value(message)>{message.label()}</option>
+                        }).collect_view()}
+                    </select>
+                }.into_any(),
                 RowKind::Port => view! {
                     <input
                         class=format!("{INPUT_CLASS} w-24")
@@ -828,7 +1218,7 @@ fn ClauseRowView(row: ClauseRow, rows: RwSignal<Vec<ClauseRow>>) -> impl IntoVie
             <button
                 class="ml-auto px-2 py-1 text-gray-400 hover:text-red-300 text-sm"
                 aria-label="Remove condition"
-                on:click=move |_| rows.update(|rows| rows.retain(|other| other.id != row.id))
+                on:click=move |_| on_remove.run(())
             >
                 "Remove"
             </button>
@@ -844,12 +1234,13 @@ mod tests {
         ClauseSpec::new(kind, value)
     }
 
-    fn expression(specs: &[ClauseSpec]) -> Result<String, String> {
-        let clauses = specs
+    fn expression(groups: &[GroupSpec]) -> Result<String, String> {
+        let groups = groups
             .iter()
-            .map(clause_from_spec)
+            .enumerate()
+            .map(|(index, group)| group_from_spec(group, index + 1))
             .collect::<Result<Vec<_>, _>>()?;
-        CaptureFilter { clauses }.to_expression()
+        CaptureFilter { groups }.to_expression()
     }
 
     #[test]
@@ -860,14 +1251,34 @@ mod tests {
         range.last = "2000".into();
         range.negate = true;
         assert_eq!(
-            expression(&[spec(RowKind::Protocol, "tcp"), host, range]).unwrap(),
+            expression(&[
+                GroupSpec::one(spec(RowKind::Protocol, "tcp")),
+                GroupSpec::one(host),
+                GroupSpec::one(range),
+            ])
+            .unwrap(),
             "tcp and src host 192.168.1.20 and not (portrange 1000-2000)"
         );
         assert_eq!(expression(&[]).unwrap(), "");
     }
 
     #[test]
-    fn a_bad_row_is_named_not_swallowed() {
+    fn alternatives_become_an_or_group() {
+        let groups = [
+            GroupSpec::one(spec(RowKind::Host, "10.0.0.1")),
+            GroupSpec::any_of(vec![protocol_spec("tcp"), protocol_spec("udp")]),
+        ];
+        assert_eq!(
+            expression(&groups).unwrap(),
+            "host 10.0.0.1 and (tcp or udp)"
+        );
+        let mut none = GroupSpec::any_of(vec![protocol_spec("arp"), protocol_spec("icmp")]);
+        none.negate = true;
+        assert_eq!(expression(&[none]).unwrap(), "not (arp or icmp)");
+    }
+
+    #[test]
+    fn a_bad_row_is_named_with_its_place() {
         for bad in [
             spec(RowKind::Host, "not an address"),
             spec(RowKind::Net, "10.0.0.0"),
@@ -875,36 +1286,140 @@ mod tests {
             spec(RowKind::Port, "http"),
             spec(RowKind::Mac, "aa:bb"),
             spec(RowKind::Protocol, ""),
+            spec(RowKind::Dhcp, ""),
+            spec(RowKind::Dhcp, "hello"),
         ] {
             assert!(clause_from_spec(&bad).is_err(), "{bad:?}");
         }
         let mut backwards = spec(RowKind::Port, "2000");
         backwards.last = "1000".into();
         assert!(clause_from_spec(&backwards).is_err());
+
+        let error = expression(&[
+            GroupSpec::one(protocol_spec("tcp")),
+            GroupSpec::any_of(vec![protocol_spec("udp"), spec(RowKind::Host, "x")]),
+        ])
+        .unwrap_err();
+        assert!(error.starts_with("condition 2, alternative 2:"), "{error}");
+        let single = expression(&[GroupSpec::one(spec(RowKind::Host, "x"))]).unwrap_err();
+        assert!(single.starts_with("condition 1:"), "{single}");
     }
 
     #[test]
-    fn every_preset_is_a_valid_filter() {
-        let presets = presets();
-        assert!(presets.len() >= 5);
-        for (label, specs) in presets {
-            assert!(
-                expression(&specs).is_ok_and(|text| !text.is_empty()),
-                "{label}"
+    fn every_dhcp_message_type_can_be_chosen_in_the_page() {
+        for message in DhcpMessageType::ALL {
+            let clause = clause_from_spec(&dhcp_spec(message)).unwrap();
+            assert_eq!(
+                clause.term,
+                FilterTerm::DhcpMessage {
+                    message_type: message
+                }
             );
         }
+    }
+
+    #[test]
+    fn every_add_on_is_a_valid_filter() {
+        let presets = add_ons();
+        assert!(presets.len() >= 5);
+        for preset in presets {
+            assert!(
+                expression(&preset.groups).is_ok_and(|text| !text.is_empty()),
+                "{}",
+                preset.label
+            );
+            // Add-ons combine with what is there, so they never reset the
+            // decode settings.
+            assert_eq!(preset.detail, None, "{}", preset.label);
+            assert_eq!(preset.link_level, None, "{}", preset.label);
+        }
+    }
+
+    #[test]
+    fn every_scenario_is_a_valid_filter_that_the_limits_allow() {
+        let scenarios = scenarios();
+        assert!(scenarios.len() >= 6);
+        for preset in &scenarios {
+            let text =
+                expression(&preset.groups).unwrap_or_else(|e| panic!("{}: {e}", preset.label));
+            assert!(!text.is_empty(), "{}", preset.label);
+            assert!(preset.groups.len() <= MAX_GROUPS, "{}", preset.label);
+            let terms: usize = preset.groups.iter().map(|g| g.any.len()).sum();
+            assert!(terms <= MAX_CLAUSES, "{}", preset.label);
+            assert!(!preset.hint.is_empty(), "{}", preset.label);
+        }
+    }
+
+    #[test]
+    fn the_isp_scenarios_ask_for_what_the_bug_needs() {
+        let by_label = |label: &str| {
+            scenarios()
+                .into_iter()
+                .find(|preset| preset.label == label)
+                .unwrap_or_else(|| panic!("no scenario {label}"))
+        };
+        // The DHCP ones need decoded options to tell a DISCOVER from an
+        // INIT-REBOOT REQUEST.
+        for label in [
+            "DHCPv4 exchange",
+            "DISCOVER",
+            "REQUEST",
+            "RELEASE",
+            "Server replies",
+        ] {
+            let preset = by_label(label);
+            assert_eq!(preset.detail, Some(CaptureDetail::Verbose), "{label}");
+            assert_eq!(preset.link_level, Some(true), "{label}");
+        }
+        assert!(
+            expression(&by_label("DISCOVER").groups)
+                .unwrap()
+                .contains("udp[250] = 1")
+        );
+        assert!(
+            expression(&by_label("RELEASE").groups)
+                .unwrap()
+                .contains("udp[250] = 7")
+        );
+        assert_eq!(
+            expression(&by_label("Server replies").groups)
+                .unwrap()
+                .matches("udp[250] = ")
+                .count(),
+            3
+        );
+        assert_eq!(
+            expression(&by_label("DHCPv4 + DHCPv6").groups).unwrap(),
+            "(portrange 67-68 or portrange 546-547)"
+        );
+        assert_eq!(
+            expression(&by_label("ARP + ping").groups).unwrap(),
+            "(arp or icmp)"
+        );
+        assert_eq!(
+            expression(&by_label("IPv4 without DHCP").groups).unwrap(),
+            "ip and not (portrange 67-68)"
+        );
     }
 
     #[test]
     fn new_rows_start_valid_where_a_default_exists() {
         for kind in RowKind::ALL {
             let row = spec(kind, kind.default_value());
-            assert_eq!(
-                clause_from_spec(&row).is_ok(),
-                kind == RowKind::Protocol,
-                "{kind:?}"
-            );
+            let expected = matches!(kind, RowKind::Protocol | RowKind::Dhcp);
+            assert_eq!(clause_from_spec(&row).is_ok(), expected, "{kind:?}");
             assert_eq!(RowKind::from_value(kind.value()), kind);
+        }
+    }
+
+    #[test]
+    fn detail_choices_round_trip() {
+        for detail in [
+            CaptureDetail::Normal,
+            CaptureDetail::Verbose,
+            CaptureDetail::VeryVerbose,
+        ] {
+            assert_eq!(detail_from_value(detail_value(detail)), detail);
         }
     }
 

@@ -356,6 +356,26 @@ mod tests {
         assert!(options[19..].iter().all(|&b| b == 0));
     }
 
+    /// The reset sends from the DHCP client port bound to the WAN device
+    /// (CAP_NET_BIND_SERVICE, CAP_NET_RAW) and takes the link down (CAP_NET_ADMIN).
+    /// Tightening the daemon's capabilities must not silently break it.
+    #[test]
+    fn service_unit_grants_the_capabilities_the_reset_needs() {
+        let unit = include_str!("../../packaging/arch/keystone-daemon.service");
+        for directive in ["CapabilityBoundingSet=", "AmbientCapabilities="] {
+            let caps = unit
+                .lines()
+                .find_map(|line| line.strip_prefix(directive))
+                .unwrap();
+            for cap in ["CAP_NET_ADMIN", "CAP_NET_RAW", "CAP_NET_BIND_SERVICE"] {
+                assert!(
+                    caps.split_ascii_whitespace().any(|c| c == cap),
+                    "{directive} missing {cap}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn failsafe_unit_names_are_per_link() {
         assert_eq!(failsafe_unit("wan0"), "keystone-link-up-wan0");

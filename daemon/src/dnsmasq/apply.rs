@@ -485,9 +485,11 @@ mod tests {
 
     #[test]
     fn resolv_conf_only_applies_to_default_port_with_loopback() {
-        let mut config = keystone_core::DnsmasqConfig::default();
-        config.enabled = true;
-        config.dns_port = 53;
+        let mut config = keystone_core::DnsmasqConfig {
+            enabled: true,
+            dns_port: 53,
+            ..Default::default()
+        };
         assert!(resolv_conf_applicable(&config));
         config.dns_port = 5353;
         assert!(!resolv_conf_applicable(&config));

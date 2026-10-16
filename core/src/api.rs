@@ -7,6 +7,7 @@
 //! wrong body shape to a route without a compile error.
 
 use crate::blocky::*;
+use crate::capture::*;
 use crate::changes::*;
 use crate::diagnostics::*;
 use crate::sqm::*;
@@ -131,6 +132,12 @@ endpoints! {
 
     /// Run one network diagnostic (ping, traceroute, DNS lookup or TCP check).
     RunDiagnostic: Post "/diagnostics/run", DiagnosticRequest => DiagnosticResponse;
+
+    /// Starts a capture; refused while another is running.
+    StartCapture: Post "/capture", CaptureRequest => CaptureInfo;
+    StopCapture: Post "/capture/stop", CaptureNoRequest => CaptureInfo;
+    /// Deletes the finished capture and its file.
+    DiscardCapture: Delete "/capture", CaptureNoRequest => CaptureStateResponse;
 
     ApplySsh: Post "/ssh/apply", SshConfig => SshApplyResponse;
 

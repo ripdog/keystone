@@ -8,6 +8,7 @@ use thiserror::Error;
 
 pub mod api;
 pub mod blocky;
+pub mod capture;
 pub mod changes;
 pub mod diagnostics;
 pub mod sqm;

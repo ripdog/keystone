@@ -99,6 +99,12 @@ pub fn validate_interface_config(config: &InterfaceConfig) -> Vec<String> {
         }
     }
 
+    if config.mdns && config.role == InterfaceRole::WAN {
+        errors.push(format!(
+            "{name}: multicast DNS is for LAN interfaces; it would announce the router to the upstream network"
+        ));
+    }
+
     if let Some(pd) = &config.dhcp_prefix_delegation
         && pd.uplink_interface.as_deref() == Some(name.as_str())
     {
@@ -625,6 +631,21 @@ mod tests {
         c.ipv6_accept_ra = false;
         c.addresses.push(addr("fd00::1/64"));
         assert!(!validate_interface_config(&c).is_empty());
+    }
+
+    #[test]
+    fn mdns_is_refused_on_a_wan_interface() {
+        let mut lan = iface("lan", InterfaceRole::LAN, &["192.168.1.1/24"]);
+        lan.ipv6_accept_ra = false;
+        lan.mdns = true;
+        assert!(validate_interface_config(&lan).is_empty());
+
+        let mut wan = iface("wan", InterfaceRole::WAN, &["192.0.2.2/24"]);
+        wan.ipv6_accept_ra = false;
+        wan.mdns = true;
+        let errors = validate_interface_config(&wan);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("multicast DNS"));
     }
 
     #[test]

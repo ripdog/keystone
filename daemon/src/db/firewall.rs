@@ -1253,6 +1253,11 @@ impl<'a> FirewallDb<'a> {
             global_settings: self.get_firewall_global_settings().await?,
             upnp_forward: crate::upnp::load_forward_accept(self.pool).await?,
             caddy_input: crate::caddy::load_input_accept(self.pool).await?,
+            mdns_input: crate::mdns::input_accept(
+                &super::interfaces::InterfacesDb::new(self.pool)
+                    .get_interface_configs()
+                    .await?,
+            ),
         })
     }
 

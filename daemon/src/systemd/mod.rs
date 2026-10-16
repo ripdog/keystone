@@ -125,6 +125,8 @@ pub(crate) const MANAGED_UNITS: &[&str] = &[
     "dnsmasq.service",
     "caddy.service",
     "miniupnpd.service",
+    "avahi-daemon.service",
+    "avahi-daemon.socket",
     "keystone-blocky.service",
     "sshd.service",
 ];

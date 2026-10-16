@@ -250,6 +250,7 @@ mod tests {
             global_settings: FirewallGlobalSettings::default(),
             upnp_forward: None,
             caddy_input: None,
+            mdns_input: None,
         }
     }
 
@@ -442,6 +443,33 @@ mod tests {
         let json = json_of(&config);
         assert!(json.contains("Allow Caddy on eth1 tcp/80"), "{json}");
         assert!(json.contains("Allow Caddy on eth1 tcp/443"), "{json}");
+    }
+
+    #[test]
+    fn mdns_accept_exists_only_while_an_interface_answers_mdns() {
+        let mut config = create_test_config();
+        let json_of =
+            |c: &FirewallConfig| serde_json::to_string(&generate_ruleset(c).nftables).unwrap();
+        assert!(!json_of(&config).contains("multicast DNS"));
+
+        config.mdns_input = Some(keystone_core::MdnsInputAccept {
+            interfaces: vec!["eth1".to_string(), "br0".to_string()],
+        });
+        let json = json_of(&config);
+        assert!(json.contains("Allow multicast DNS (udp/5353)"), "{json}");
+        assert!(json.contains("5353"), "{json}");
+    }
+
+    #[test]
+    fn mdns_comment_stays_short_however_many_interfaces_there_are() {
+        let mut config = create_test_config();
+        config.mdns_input = Some(keystone_core::MdnsInputAccept {
+            interfaces: (0..40).map(|n| format!("vlan-lan-{n:04}")).collect(),
+        });
+        let rules = rules_commented(&config, "Allow multicast DNS");
+        assert_eq!(rules.len(), 1);
+        let comment = rules[0]["comment"].as_str().unwrap();
+        assert!(comment.len() <= 127);
     }
 
     #[test]

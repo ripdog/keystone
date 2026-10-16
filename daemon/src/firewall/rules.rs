@@ -198,6 +198,7 @@ pub(crate) const SECTION_INVALID: &str = "Priority 2: Invalid packets";
 pub(crate) const SECTION_LOOPBACK: &str = "Priority 3: Loopback";
 pub(crate) const SECTION_ICMP_SAFETY: &str = "Priority 3.5: Dangerous ICMP (always dropped)";
 pub(crate) const SECTION_CADDY: &str = "Priority 3.7: Caddy web server (generated)";
+pub(crate) const SECTION_MDNS: &str = "Priority 3.8: Multicast DNS (generated)";
 pub(crate) const SECTION_USER_INPUT: &str = "Priority 4: User input rules";
 pub(crate) const SECTION_BUILTIN_ICMP: &str = "Priority 4.5: Built-in ICMP accepts";
 pub(crate) const SECTION_ZONE_DEFAULTS: &str = "Priority 5: Zone default policies";
@@ -514,6 +515,7 @@ fn input(config: &FirewallConfig, zones: &ZoneFacts, groups: &GroupIndex) -> Cha
     // Caddy fronts the web UI, so its LAN listeners are always reachable. This
     // runs before user rules so that no rule edit can lock the UI out.
     rules.extend(caddy_input_accepts(config));
+    rules.extend(mdns_input_accepts(config));
 
     // User rules run before the built-in ICMP accepts, so a user rule can drop
     // or limit ping. The dangerous-ICMP drops above can never be overridden.
@@ -558,6 +560,31 @@ fn caddy_input_accepts(config: &FirewallConfig) -> Vec<RuleSpec> {
             )
         })
         .collect()
+}
+
+/// Accept for multicast DNS on the interfaces that answer it, present only
+/// while one does. One rule covers both IPv4 (224.0.0.251) and IPv6 (ff02::fb)
+/// because the table is `inet` and the match is on the port.
+fn mdns_input_accepts(config: &FirewallConfig) -> Vec<RuleSpec> {
+    let Some(mdns) = &config.mdns_input else {
+        return Vec::new();
+    };
+    vec![builtin(
+        SECTION_MDNS,
+        // Fixed text: nftables rejects a comment over 128 bytes, and a long
+        // interface list must not stop the whole ruleset from loading.
+        "Allow multicast DNS (udp/5353)",
+        vec![
+            Cond::Iif(mdns.interfaces.clone()),
+            Cond::L4("udp"),
+            Cond::Port {
+                side: Side::Destination,
+                payload: "udp",
+                ports: Ports::Single(crate::mdns::MDNS_PORT),
+            },
+        ],
+        Verdict::Accept,
+    )]
 }
 
 /// ICMP types that leak information or enable redirects. Always dropped.

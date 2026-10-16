@@ -117,11 +117,12 @@ impl<'a> InterfacesDb<'a> {
                 bool,
                 String,
                 Option<i64>,
+                bool,
             ),
         >(
             r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway,
                       ipv6_accept_ra, ipv6_send_ra, ip_forward, ip_masquerade,
-                      link_local, required_for_online, activation_policy, mtu
+                      link_local, required_for_online, activation_policy, mtu, mdns
                FROM interface_config ORDER BY interface_name"#,
         )
         .fetch_all(self.pool)
@@ -145,6 +146,7 @@ impl<'a> InterfacesDb<'a> {
             required_for_online,
             activation_policy,
             mtu,
+            mdns,
         ) in rows
         {
             let addresses = self.get_interface_addresses(id).await?;
@@ -180,6 +182,7 @@ impl<'a> InterfacesDb<'a> {
                 ipv6_accept_ra_config,
                 ipv6_send_ra,
                 dhcp_prefix_delegation,
+                mdns,
                 ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                 ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
                 mtu: mtu.map(|v| v as u32),
@@ -210,11 +213,12 @@ impl<'a> InterfacesDb<'a> {
                 bool,
                 String,
                 Option<i64>,
+                bool,
             ),
         >(
             r#"SELECT id, interface_name, role, enabled, description, dhcp_mode, gateway,
                       ipv6_accept_ra, ipv6_send_ra, ip_forward, ip_masquerade,
-                      link_local, required_for_online, activation_policy, mtu
+                      link_local, required_for_online, activation_policy, mtu, mdns
                FROM interface_config WHERE interface_name = ?"#,
         )
         .bind(name)
@@ -239,6 +243,7 @@ impl<'a> InterfacesDb<'a> {
                 required_for_online,
                 activation_policy,
                 mtu,
+                mdns,
             )) => {
                 let addresses = self.get_interface_addresses(id).await?;
                 let routes = self.get_interface_routes(id).await?;
@@ -273,6 +278,7 @@ impl<'a> InterfacesDb<'a> {
                     ipv6_accept_ra_config,
                     ipv6_send_ra,
                     dhcp_prefix_delegation,
+                    mdns,
                     ip_forward: ip_forward.parse().unwrap_or(IpForwardMode::No),
                     ip_masquerade: ip_masquerade.parse().unwrap_or(IpMasqueradeMode::No),
                     mtu: mtu.map(|v| v as u32),
@@ -326,7 +332,7 @@ impl<'a> InterfacesDb<'a> {
                    dhcp_prefix_delegation_subnet_id = ?, dhcp_prefix_delegation_token = ?,
                    dhcp_prefix_delegation_announce = ?,
                    ip_forward = ?, ip_masquerade = ?, link_local = ?, required_for_online = ?,
-                   activation_policy = ?, mtu = ?, updated_at = ?
+                   activation_policy = ?, mtu = ?, mdns = ?, updated_at = ?
                    WHERE id = ?"#,
             )
             .bind(config.role.to_string())
@@ -351,6 +357,7 @@ impl<'a> InterfacesDb<'a> {
             .bind(config.required_for_online)
             .bind(config.activation_policy.to_string())
             .bind(config.mtu.map(|v| v as i64))
+            .bind(config.mdns)
             .bind(now)
             .bind(id)
             .execute(&mut *tx)
@@ -369,8 +376,8 @@ impl<'a> InterfacesDb<'a> {
                     ipv6_accept_ra, ipv6_send_ra, dhcp_prefix_delegation_enabled,
                     dhcp_prefix_delegation_uplink, dhcp_prefix_delegation_subnet_id,
                     dhcp_prefix_delegation_token, dhcp_prefix_delegation_announce, ip_forward, ip_masquerade, link_local,
-                    required_for_online, activation_policy, mtu, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    required_for_online, activation_policy, mtu, mdns, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(interface_name) DO UPDATE SET
                      role = excluded.role,
                      enabled = excluded.enabled,
@@ -390,6 +397,7 @@ impl<'a> InterfacesDb<'a> {
                      required_for_online = excluded.required_for_online,
                      activation_policy = excluded.activation_policy,
                      mtu = excluded.mtu,
+                     mdns = excluded.mdns,
                      updated_at = excluded.updated_at"#,
             )
             .bind(&config.name)
@@ -415,6 +423,7 @@ impl<'a> InterfacesDb<'a> {
             .bind(config.required_for_online)
             .bind(config.activation_policy.to_string())
             .bind(config.mtu.map(|v| v as i64))
+            .bind(config.mdns)
             .bind(now)
             .bind(now)
             .execute(&mut *tx)
@@ -807,6 +816,25 @@ mod managed_interface_tests {
     use super::*;
     use crate::db::Database;
     use keystone_core::{Dhcpv4ClientIdentifier, Dhcpv6ClientConfig};
+
+    #[tokio::test]
+    async fn mdns_flag_round_trips_through_insert_and_update() {
+        let db = Database::new_in_memory().await.unwrap();
+        let mut config = InterfaceConfig {
+            name: "lan0".into(),
+            mdns: true,
+            ..Default::default()
+        };
+        db.save_interface_config(&config).await.unwrap();
+        let saved = db.get_interface_config("lan0").await.unwrap().unwrap();
+        assert!(saved.mdns);
+
+        config.id = saved.id;
+        config.mdns = false;
+        db.save_interface_config(&config).await.unwrap();
+        let listed = db.get_interface_configs().await.unwrap();
+        assert!(!listed[0].mdns);
+    }
 
     #[tokio::test]
     async fn delegated_prefix_ipv6_token_round_trips_and_is_validated() {

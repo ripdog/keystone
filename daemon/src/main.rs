@@ -20,6 +20,7 @@ mod firewall;
 mod gateway;
 mod interface_rename;
 mod logs;
+mod mdns;
 mod networkd;
 mod snapshot_validation;
 mod snapshots;
@@ -1491,6 +1492,15 @@ pub(crate) async fn networkd_preview_files(
         filename: networkd::ROUTER_SYSCTL_CONFIG.to_string(),
         content: networkd::generate_router_sysctl_config(&configs),
     });
+
+    // The mDNS responder's configuration, shown with the interfaces it follows.
+    let mdns_conf = mdns::preview_conf(&configs)?;
+    if !mdns_conf.is_empty() {
+        files.push(keystone_core::NetworkdFilePreview {
+            filename: mdns::AVAHI_CONF_PATH.to_string(),
+            content: mdns_conf,
+        });
+    }
 
     // Generate preview for all enabled interface configs
     files.extend(

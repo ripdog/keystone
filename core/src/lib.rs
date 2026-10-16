@@ -1383,6 +1383,12 @@ pub struct InterfaceConfig {
     #[serde(default)]
     pub dhcp_prefix_delegation: Option<DhcpPrefixDelegationConfig>,
 
+    /// Answer multicast DNS on this link, so the router is reachable as
+    /// `<hostname>.local`. LAN interfaces only. Keystone opens UDP 5353 on the
+    /// interface itself while this is set.
+    #[serde(default)]
+    pub mdns: bool,
+
     // Forwarding & NAT (typically for router interfaces)
     /// IP forwarding mode
     pub ip_forward: IpForwardMode,
@@ -1429,6 +1435,7 @@ impl Default for InterfaceConfig {
             ipv6_accept_ra_config: None,
             ipv6_send_ra: false,
             dhcp_prefix_delegation: None,
+            mdns: false,
             ip_forward: IpForwardMode::No,
             ip_masquerade: IpMasqueradeMode::No,
             mtu: None,
@@ -1969,6 +1976,16 @@ pub struct FirewallConfig {
     /// it. Derived from the Caddy configuration, like `upnp_forward`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caddy_input: Option<CaddyInputAccept>,
+    /// Set while any interface answers multicast DNS: the interfaces whose
+    /// UDP 5353 is opened. Derived from the interface configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mdns_input: Option<MdnsInputAccept>,
+}
+
+/// LAN interfaces on which Keystone accepts multicast DNS (UDP 5353).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MdnsInputAccept {
+    pub interfaces: Vec<String>,
 }
 
 /// LAN interface and TCP ports Caddy listens on. Keystone generates the input
@@ -3896,6 +3913,7 @@ mod tests {
             ipv6_accept_ra_config: None,
             ipv6_send_ra: false,
             dhcp_prefix_delegation: None,
+            mdns: false,
             ip_forward: IpForwardMode::Yes,
             ip_masquerade: IpMasqueradeMode::Ipv4,
             mtu: Some(1492),

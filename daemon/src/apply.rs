@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use keystone_core::changes::Component;
 use keystone_core::{ApplyComponentResults, ComponentResult};
 use tracing::{error, info, warn};
@@ -355,6 +355,11 @@ async fn apply_networkd_config(
         .apply(&configs, &vlans, &bridges, DEFAULT_CONFIRM_TIMEOUT_SECS)
         .await?;
     let summary = applied.summary;
+
+    // mDNS is an interface setting, so it is applied with the interfaces.
+    crate::mdns::apply(&configs)
+        .await
+        .context("failed to apply mDNS")?;
 
     Ok((
         format!(

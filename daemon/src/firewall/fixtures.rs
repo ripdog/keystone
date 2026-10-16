@@ -423,6 +423,7 @@ pub(crate) fn rich() -> FirewallConfig {
         },
         upnp_forward: None,
         caddy_input: None,
+        mdns_input: None,
     }
 }
 

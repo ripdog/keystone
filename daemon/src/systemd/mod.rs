@@ -282,6 +282,26 @@ pub async fn restart_unit(unit_name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Clear a unit's failed state, including a start-limit-hit that would make
+/// systemd refuse every further start. Errors when the unit is not failed.
+pub async fn reset_failed_unit(unit_name: &str) -> Result<()> {
+    ensure_managed_unit(unit_name)?;
+    let connection = Connection::system()
+        .await
+        .context("Failed to connect to system D-Bus")?;
+
+    let manager = systemd1::ManagerProxy::new(&connection)
+        .await
+        .context("Failed to create systemd manager proxy")?;
+
+    manager
+        .reset_failed_unit(unit_name.to_string())
+        .await
+        .context("Failed to reset unit")?;
+
+    Ok(())
+}
+
 /// Enable a systemd unit (start on boot)
 pub async fn enable_unit(unit_name: &str) -> Result<()> {
     ensure_managed_unit(unit_name)?;

@@ -61,11 +61,11 @@ pub fn render_conf(interfaces: &[String]) -> Result<String> {
          use-ipv4=yes\n\
          use-ipv6=yes\n\
          allow-interfaces={}\n\
-         publish-hinfo=no\n\
-         publish-workstation=no\n\
          \n\
          [publish]\n\
          publish-addresses=yes\n\
+         publish-hinfo=no\n\
+         publish-workstation=no\n\
          \n\
          [reflector]\n\
          enable-reflector=no\n\
@@ -108,6 +108,13 @@ pub async fn apply(configs: &[InterfaceConfig]) -> Result<()> {
         write_conf(&content)?;
     }
     if changed || !service_active().await {
+        // A start that failed earlier (for example on a bad configuration)
+        // leaves the units in start-limit-hit, which refuses any restart.
+        for unit in [SOCKET, SERVICE] {
+            if let Err(error) = systemd::reset_failed_unit(unit).await {
+                info!("{unit} not reset: {error:#}");
+            }
+        }
         systemd::enable_unit(SERVICE)
             .await
             .context("failed to enable avahi-daemon.service (is the avahi package installed?)")?;
@@ -206,6 +213,42 @@ mod tests {
         assert!(conf.contains("enable-reflector=no"));
         assert!(conf.contains("enable-wide-area=no"));
         assert_eq!(conf.matches("allow-interfaces").count(), 1);
+    }
+
+    /// avahi-daemon exits on a key in the wrong group, so every key must sit in
+    /// the section avahi-daemon.conf(5) documents it under.
+    #[test]
+    fn every_key_is_in_the_section_avahi_expects() {
+        let expected = [
+            ("use-ipv4", "server"),
+            ("use-ipv6", "server"),
+            ("allow-interfaces", "server"),
+            ("publish-addresses", "publish"),
+            ("publish-hinfo", "publish"),
+            ("publish-workstation", "publish"),
+            ("enable-reflector", "reflector"),
+            ("enable-wide-area", "wide-area"),
+        ];
+        let conf = render_conf(&["eth1".to_string()]).unwrap();
+        let mut section = "";
+        let mut seen = 0;
+        for line in conf.lines().filter(|l| !l.starts_with('#')) {
+            if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+                section = name;
+            } else if let Some((key, _)) = line.split_once('=') {
+                if key.starts_with("rlimit-") {
+                    assert_eq!(section, "rlimits", "{key}");
+                } else {
+                    let (_, want) = expected
+                        .iter()
+                        .find(|(k, _)| *k == key)
+                        .unwrap_or_else(|| panic!("unexpected key {key}"));
+                    assert_eq!(section, *want, "{key}");
+                }
+                seen += 1;
+            }
+        }
+        assert!(seen >= expected.len());
     }
 
     #[test]

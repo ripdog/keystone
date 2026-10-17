@@ -20,6 +20,7 @@ use crate::networkd::NetworkdApplyManager;
 use crate::snapshots;
 use crate::sqm;
 use crate::upnp;
+use crate::wireless;
 
 /// Re-export the result type for use by main.rs
 pub use keystone_core::ApplyAllResponse as ApplyAllResult;
@@ -238,6 +239,20 @@ pub async fn apply_all(
         }
     };
 
+    // Apply the Wi-Fi access point. networkd has already created its bridge.
+    info!("Applying wireless configuration...");
+    components.wireless = match wireless::apply_saved(db).await {
+        Ok(()) => {
+            info!("Wireless: applied successfully");
+            component_success("Applied successfully")
+        }
+        Err(e) => {
+            error!("Wireless failed: {e:#}");
+            all_success = false;
+            component_failure(format!("{e:#}"))
+        }
+    };
+
     // 5. Apply dnsmasq configuration
     info!("Applying dnsmasq configuration...");
     components.dnsmasq = match dnsmasq::apply_dnsmasq_config(db.pool()).await {
@@ -293,6 +308,7 @@ pub async fn apply_all(
             Component::Sqm,
             Component::Upnp,
             Component::Blocky,
+            Component::Wireless,
             Component::Dnsmasq,
             Component::Caddy,
         ];
@@ -322,6 +338,7 @@ fn format_failed_components(components: &ApplyComponentResults) -> String {
         ("sqm", &components.sqm),
         ("upnp", &components.upnp),
         ("blocky", &components.blocky),
+        ("wireless", &components.wireless),
         ("dnsmasq", &components.dnsmasq),
         ("caddy", &components.caddy),
     ]
@@ -397,6 +414,7 @@ mod tests {
             sqm: component_success("applied"),
             upnp: component_success("applied"),
             blocky: component_success("applied"),
+            wireless: component_success("applied"),
             dnsmasq: component_failure("address already in use"),
             caddy: component_skipped("not configured"),
         };

@@ -92,6 +92,7 @@ pub fn apply_all(response: &ApplyAllResponse, show_pending: bool) {
         ("sqm", &response.components.sqm),
         ("upnp", &response.components.upnp),
         ("blocky", &response.components.blocky),
+        ("wireless", &response.components.wireless),
         ("dnsmasq", &response.components.dnsmasq),
         ("caddy", &response.components.caddy),
     ];

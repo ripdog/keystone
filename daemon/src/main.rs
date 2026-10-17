@@ -34,6 +34,7 @@ mod sysinfo;
 mod systemd;
 mod traffic;
 mod upnp;
+mod wireless;
 mod wizard;
 
 use auth::AuthManager;
@@ -268,6 +269,12 @@ async fn main() -> anyhow::Result<()> {
         firewall: applies_firewall.clone(),
     };
 
+    // Create wireless state for the Wi-Fi access point routes
+    let wireless_state = wireless::routes::WirelessState {
+        db: db.clone(),
+        firewall: applies_firewall.clone(),
+    };
+
     // Create Blocky state for DNS filtering routes
     let blocky_state = blocky::routes::BlockyState {
         db: db.clone(),
@@ -324,6 +331,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(sqm::routes::sqm_routes(sqm_state))
         // Merge UPnP / NAT-PMP routes
         .merge(upnp::routes::upnp_routes(upnp_state))
+        // Merge Wi-Fi access point routes
+        .merge(wireless::routes::wireless_routes(wireless_state))
         // Merge DNS filtering (Blocky) routes
         .merge(blocky::routes::blocky_routes(blocky_state))
         // Merge packet capture routes
@@ -1696,7 +1705,7 @@ async fn networkd_status(
     Ok(Json(state.firewall_manager.status().await))
 }
 
-/// POST /apply-all - Apply all configuration (networkd, firewall, sqm, upnp, blocky, dnsmasq, caddy)
+/// POST /apply-all - Apply all configuration (networkd, firewall, sqm, upnp, blocky, wireless, dnsmasq, caddy)
 async fn apply_all(
     State(state): State<Arc<AppState>>,
     actor: Option<Extension<Actor>>,

@@ -100,6 +100,18 @@ async fn generate(component: Component, db: &Database) -> Result<Generated> {
                 )])
             }
         }
+        // The hostapd configuration, or nothing while the access point is off.
+        Component::Wireless => {
+            let config = crate::wireless::preview_wireless_config(db).await?;
+            if config.is_empty() {
+                BTreeMap::new()
+            } else {
+                let interface = crate::wireless::load_wireless_config(db.pool())
+                    .await?
+                    .interface;
+                BTreeMap::from([(crate::wireless::config::conf_path(&interface), config)])
+            }
+        }
         Component::Dnsmasq => BTreeMap::from([(
             crate::dnsmasq::DNSMASQ_CONFIG_PATH.to_string(),
             crate::dnsmasq::preview_dnsmasq_config(db.pool()).await?,
@@ -885,6 +897,59 @@ mod tests {
         let after = pending_changes(&db, &[]).await.unwrap();
         assert!(!changed(&after, Component::Upnp));
         assert!(!changed(&after, Component::Firewall));
+    }
+
+    #[tokio::test]
+    async fn a_wireless_edit_is_pending_only_for_wireless_until_discarded() {
+        let scratch = Scratch::new();
+        let db = applied_baseline(&scratch).await;
+
+        db.save_bridge(&keystone_core::BridgeConfig {
+            name: "br-lan".to_string(),
+            members: vec!["eth1".to_string()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        // Saving the bridge is a networkd change; the baseline must not hide it.
+        let baseline = pending_changes(&db, &[]).await.unwrap();
+        assert!(!changed(&baseline, Component::Wireless));
+
+        crate::wireless::db::save_wireless_config(
+            db.pool(),
+            &keystone_core::wireless::WirelessConfig {
+                enabled: true,
+                interface: "wlan0".to_string(),
+                bridge: "br-lan".to_string(),
+                ssid: "keystone".to_string(),
+                country_code: "NZ".to_string(),
+                passphrase: "correct horse battery".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let pending = pending_changes(&db, &[]).await.unwrap();
+        assert!(changed(&pending, Component::Wireless));
+        assert!(!changed(&pending, Component::Upnp));
+        assert!(!changed(&pending, Component::Dnsmasq));
+        let wireless = pending
+            .components
+            .iter()
+            .find(|diff| diff.component == Component::Wireless)
+            .unwrap();
+        assert_eq!(wireless.files.len(), 1);
+        assert_eq!(wireless.files[0].path, "/etc/hostapd/wlan0.conf");
+        assert_eq!(wireless.files[0].status, FileChangeStatus::Added);
+        assert!(wireless.files[0].unified_diff.contains("+ssid=keystone"));
+
+        let outcome = discard_changes(&db, &[], Some(vec![Component::Wireless]), Some("admin"))
+            .await
+            .unwrap();
+        assert_eq!(outcome.components, vec![Component::Wireless]);
+        let after = pending_changes(&db, &[]).await.unwrap();
+        assert!(!changed(&after, Component::Wireless));
     }
 
     #[tokio::test]

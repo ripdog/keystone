@@ -93,6 +93,7 @@ pub const CONFIG_TABLES: &[&str] = &[
     "blocky_groups",
     "blocky_group_sources",
     "blocky_client_groups",
+    "wireless_config",
 ];
 
 /// Tables that are never captured into or restored from a snapshot: accounts
@@ -120,6 +121,9 @@ pub const NON_CONFIG_TABLES: &[&str] = &[
     // UPnP configuration last applied. Runtime state, like sqm_applied: the
     // reconciler uses it to recreate the miniupnpd table after a reboot.
     "upnp_applied",
+    // Access point configuration last applied. Runtime state: apply uses it to
+    // stop an access point whose interface was changed.
+    "wireless_applied",
 ];
 
 /// Tables that an earlier migration created and a later migration drops. A
@@ -141,7 +145,7 @@ pub const RETIRED_TABLES: &[&str] = &[
 /// Every table in [`CONFIG_TABLES`] maps to exactly one component, so a
 /// component's rows can be restored without touching the others.
 pub fn component_of(table: &str) -> Option<Component> {
-    use Component::{Blocky, Caddy, Dnsmasq, Firewall, Networkd, Sqm, Upnp};
+    use Component::{Blocky, Caddy, Dnsmasq, Firewall, Networkd, Sqm, Upnp, Wireless};
     Some(match table {
         "managed_interfaces"
         | "interface_config"
@@ -187,6 +191,7 @@ pub fn component_of(table: &str) -> Option<Component> {
         | "blocky_groups"
         | "blocky_group_sources"
         | "blocky_client_groups" => Blocky,
+        "wireless_config" => Wireless,
         "caddy_config" => Caddy,
         _ => return None,
     })

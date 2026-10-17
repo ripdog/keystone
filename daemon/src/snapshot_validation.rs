@@ -26,6 +26,7 @@ use crate::firewall::validate::validate_firewall_definitions;
 use crate::networkd::{validate_bridge_fields, validate_topology, validate_vlan_fields};
 use crate::snapshots::{CONFIG_TABLES, component_of};
 use crate::upnp;
+use crate::wireless;
 
 /// Every semantic error in the configuration the database holds, each prefixed
 /// with the component it belongs to. An empty result means the configuration
@@ -42,6 +43,7 @@ pub async fn validate_configuration(db: &Database) -> Vec<String> {
     errors.extend(firewall_errors(db).await);
     errors.extend(upnp_errors(db).await);
     errors.extend(blocky_errors(db).await);
+    errors.extend(wireless_errors(db).await);
     errors.extend(dnsmasq_errors(db).await);
     errors.extend(caddy_errors(db).await);
     errors
@@ -120,6 +122,22 @@ async fn upnp_errors(db: &Database) -> Vec<String> {
         Err(error) => return load_failure(C, "interface configuration", error),
     };
     match upnp::config::validate_config(&config, &lan, &wan) {
+        Ok(()) => Vec::new(),
+        Err(error) => prefixed(C, vec![error]),
+    }
+}
+
+async fn wireless_errors(db: &Database) -> Vec<String> {
+    const C: Component = Component::Wireless;
+    let config = match wireless::load_wireless_config(db.pool()).await {
+        Ok(config) => config,
+        Err(error) => return load_failure(C, "wireless configuration", error),
+    };
+    let bridges = match wireless::bridge_candidates(db).await {
+        Ok(bridges) => bridges,
+        Err(error) => return load_failure(C, "bridge configuration", error),
+    };
+    match config.validate(&bridges) {
         Ok(()) => Vec::new(),
         Err(error) => prefixed(C, vec![error]),
     }

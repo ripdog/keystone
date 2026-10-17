@@ -1434,6 +1434,52 @@ fn PreviewTab(token: Signal<String>) -> impl IntoView {
 // DHCP Options Tab
 // ============================================================================
 
+/// Common DHCPv4 options as (dnsmasq option name, label).
+const COMMON_DHCPV4_OPTIONS: &[(&str, &str)] = &[
+    ("router", "Default gateway (3)"),
+    ("dns-server", "DNS servers (6)"),
+    ("domain-name", "Domain name (15)"),
+    ("domain-search", "Domain search list (119)"),
+    ("subnet-mask", "Subnet mask (1)"),
+    ("broadcast", "Broadcast address (28)"),
+    ("mtu", "Interface MTU (26)"),
+    ("ntp-server", "NTP servers (42)"),
+    ("netbios-ns", "NetBIOS name servers (44)"),
+    ("hostname", "Hostname (12)"),
+    ("static-route", "Static routes (33)"),
+    ("classless-static-route", "Classless static routes (121)"),
+    ("tftp-server", "TFTP server (66)"),
+    ("bootfile-name", "Boot file name (67)"),
+];
+
+/// Common DHCPv6 options as (dnsmasq option name, label).
+const COMMON_DHCPV6_OPTIONS: &[(&str, &str)] = &[
+    ("dns-server", "DNS servers (23)"),
+    ("domain-search", "Domain search list (24)"),
+    ("ntp-server", "NTP servers (56)"),
+];
+
+/// Select value that reveals the free-text option field.
+const CUSTOM_OPTION_KEY: &str = "__custom__";
+
+fn common_dhcp_options(ipv6: bool) -> &'static [(&'static str, &'static str)] {
+    if ipv6 {
+        COMMON_DHCPV6_OPTIONS
+    } else {
+        COMMON_DHCPV4_OPTIONS
+    }
+}
+
+/// The selector value for a stored option name: its preset name when it is a
+/// common option for the family, otherwise the custom key.
+fn dhcp_option_choice(option: &str, ipv6: bool) -> String {
+    if common_dhcp_options(ipv6).iter().any(|(name, _)| *name == option) {
+        option.to_string()
+    } else {
+        CUSTOM_OPTION_KEY.to_string()
+    }
+}
+
 #[component]
 fn DhcpOptionsTab(
     token: Signal<String>,
@@ -1447,6 +1493,8 @@ fn DhcpOptionsTab(
     let show_modal = RwSignal::new(false);
     let editing_option = RwSignal::new(Option::<DnsmasqDhcpOption>::None);
     let modal_description = RwSignal::new(String::new());
+    // Selector value: a preset option name, CUSTOM_OPTION_KEY, or empty.
+    let modal_option_choice = RwSignal::new(String::new());
     let modal_option = RwSignal::new(String::new());
     let modal_value = RwSignal::new(String::new());
     let modal_enabled = RwSignal::new(true);
@@ -1457,6 +1505,7 @@ fn DhcpOptionsTab(
     let open_new_modal = move |_| {
         editing_option.set(None);
         modal_description.set(String::new());
+        modal_option_choice.set(String::new());
         modal_option.set(String::new());
         modal_value.set(String::new());
         modal_enabled.set(true);
@@ -1469,6 +1518,7 @@ fn DhcpOptionsTab(
     let open_edit_modal = move |opt: DnsmasqDhcpOption| {
         editing_option.set(Some(opt.clone()));
         modal_description.set(opt.description.clone().unwrap_or_default());
+        modal_option_choice.set(dhcp_option_choice(&opt.option, opt.ipv6));
         modal_option.set(opt.option.clone());
         modal_value.set(opt.value.clone());
         modal_enabled.set(opt.enabled);
@@ -1650,16 +1700,46 @@ fn DhcpOptionsTab(
                             </div>
 
                             <div>
-                                <label class="block text-gray-300 mb-2">"Option (name or number)"</label>
-                                <input
-                                    type="text"
-                                    prop:value=move || modal_option.get()
-                                    on:input=move |ev| modal_option.set(event_target_value(&ev))
-                                    placeholder="e.g., option:ntp-server or 42"
-                                    class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white font-mono"
+                                <label class="block text-gray-300 mb-2">"Option"</label>
+                                <select
+                                    prop:value=move || modal_option_choice.get()
+                                    on:change=move |ev| {
+                                        let choice = event_target_value(&ev);
+                                        if choice == CUSTOM_OPTION_KEY {
+                                            // Keep a custom name typed earlier; drop a preset name.
+                                            if dhcp_option_choice(&modal_option.get(), modal_ipv6.get()) != CUSTOM_OPTION_KEY {
+                                                modal_option.set(String::new());
+                                            }
+                                        } else {
+                                            modal_option.set(choice.clone());
+                                        }
+                                        modal_option_choice.set(choice);
+                                    }
+                                    class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                                     required
-                                />
-                                <p class="text-sm text-gray-500 mt-1">"Use 'option:name' format or option number"</p>
+                                >
+                                    <option value="" disabled=true>"Select an option..."</option>
+                                    {move || {
+                                        common_dhcp_options(modal_ipv6.get())
+                                            .iter()
+                                            .map(|(name, label)| {
+                                                view! { <option value=*name>{*label}</option> }
+                                            })
+                                            .collect_view()
+                                    }}
+                                    <option value=CUSTOM_OPTION_KEY>"Custom option..."</option>
+                                </select>
+                                <Show when=move || modal_option_choice.get() == CUSTOM_OPTION_KEY>
+                                    <input
+                                        type="text"
+                                        prop:value=move || modal_option.get()
+                                        on:input=move |ev| modal_option.set(event_target_value(&ev))
+                                        placeholder="e.g., 42 or ntp-server"
+                                        class="mt-2 w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white font-mono"
+                                        required
+                                    />
+                                    <p class="text-sm text-gray-500 mt-1">"Option name or number, e.g. 'ntp-server' or '42'"</p>
+                                </Show>
                             </div>
 
                             <div>
@@ -1689,7 +1769,18 @@ fn DhcpOptionsTab(
                                         type="checkbox"
                                         id="opt_ipv6"
                                         prop:checked=move || modal_ipv6.get()
-                                        on:change=move |ev| modal_ipv6.set(event_target_checked(&ev))
+                                        on:change=move |ev| {
+                                            let ipv6 = event_target_checked(&ev);
+                                            modal_ipv6.set(ipv6);
+                                            // A preset from the other family is no longer valid.
+                                            let choice = modal_option_choice.get();
+                                            if choice != CUSTOM_OPTION_KEY
+                                                && dhcp_option_choice(&choice, ipv6) == CUSTOM_OPTION_KEY
+                                            {
+                                                modal_option_choice.set(String::new());
+                                                modal_option.set(String::new());
+                                            }
+                                        }
                                         class="w-4 h-4"
                                     />
                                     <label for="opt_ipv6" class="text-gray-300">"IPv6"</label>

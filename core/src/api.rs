@@ -87,6 +87,8 @@ endpoints! {
     SaveInterfaceConfig: Post "/interface-config", SaveInterfaceConfigRequest => SaveInterfaceConfigResponse;
     /// Path parameter: `{name}` (the interface's current name); see [`render_path`].
     RenameInterface: Post "/interfaces/{name}/rename", RenameInterfaceRequest => RenameInterfaceResponse;
+    /// Path parameter: `{name}` (the LAN interface that becomes the bridge's member); see [`render_path`].
+    ConvertToBridge: Post "/interfaces/{name}/convert-to-bridge", ConvertToBridgeRequest => ConvertToBridgeResponse;
     /// Path parameter: `{name}` (the interface); see [`render_path`].
     ResetDhcpSession: Post "/interfaces/{name}/reset-dhcp", ResetDhcpSessionRequest => ResetDhcpSessionResponse;
     SaveVlan: Post "/vlans", SaveVlanConfigRequest => SaveVlanConfigResponse;

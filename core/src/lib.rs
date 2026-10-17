@@ -3005,6 +3005,23 @@ pub struct RenameInterfaceRequest {
     pub new_name: String,
 }
 
+/// Request to move a LAN interface's configuration onto a new bridge (the
+/// interface is named in the path)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvertToBridgeRequest {
+    /// Name of the bridge to create, e.g. `br-lan`.
+    pub bridge_name: String,
+}
+
+/// Result of converting a LAN interface to a bridge. The change is staged, not
+/// applied.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConvertToBridgeResponse {
+    pub success: bool,
+    pub message: String,
+    pub bridge_id: Option<i64>,
+}
+
 /// Result of renaming a physical network interface
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameInterfaceResponse {

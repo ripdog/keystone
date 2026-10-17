@@ -148,7 +148,7 @@ async fn rename_live(old: &str, new: &str, hold: Duration) -> Result<()> {
     Ok(())
 }
 
-fn system_interface_names() -> Vec<String> {
+pub(crate) fn system_interface_names() -> Vec<String> {
     std::fs::read_dir(SYS_CLASS_NET)
         .map(|entries| {
             entries

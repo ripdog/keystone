@@ -20,6 +20,7 @@ mod diagnostics;
 mod dnsmasq;
 mod firewall;
 mod gateway;
+mod bridge_convert;
 mod interface_rename;
 mod logs;
 mod mdns;
@@ -49,7 +50,7 @@ use axum::{
 use config::Config;
 use db::Database;
 use keystone_core::api::{
-    ConfirmNetworkd, DeleteUser, Endpoint, Login, RenameInterface, Req, Res, ResetDhcpSession,
+    ConfirmNetworkd, ConvertToBridge, DeleteUser, Endpoint, Login, RenameInterface, Req, Res, ResetDhcpSession,
     SaveBridge, SaveGlobalSettings, SaveInterfaceConfig, SaveManagedInterfaces, SaveUser, SaveVlan,
 };
 use keystone_core::{
@@ -300,6 +301,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/interface-config/{name}", delete(delete_interface_config))
         .route("/interfaces/{name}/renew", post(renew_interface))
         .route(RenameInterface::PATH, post(rename_interface))
+        .route(ConvertToBridge::PATH, post(convert_to_bridge))
         .route(ResetDhcpSession::PATH, post(reset_dhcp_session))
         .route(
             "/interfaces/{name}/reconfigure",
@@ -691,6 +693,7 @@ fn is_blocked_before_setup(path: &str) -> bool {
             && (path.ends_with("/renew")
                 || path.ends_with("/reconfigure")
                 || path.ends_with("/rename")
+                || path.ends_with("/convert-to-bridge")
                 || path.ends_with("/reset-dhcp")))
         || (path.starts_with("/firewall/") && !firewall_recovery_endpoint)
         || path.starts_with("/dnsmasq/")
@@ -1184,6 +1187,28 @@ async fn rename_interface(
         &request.new_name,
     )
     .await?;
+    Ok(Json(response))
+}
+
+/// POST /interfaces/:name/convert-to-bridge - Move a LAN interface's
+/// configuration onto a new bridge that has the interface as its member. The
+/// change is staged; applying it is a separate step.
+async fn convert_to_bridge(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    Json(request): Json<Req<ConvertToBridge>>,
+) -> Result<Json<Res<ConvertToBridge>>, AppError> {
+    info!("Converting {} to bridge {}", name, request.bridge_name);
+    if state.db.get_global_settings().await?.config_changes_disabled {
+        return Ok(Json(keystone_core::ConvertToBridgeResponse {
+            success: false,
+            message:
+                "Configuration changes are disabled. Unlock in Settings to change the configuration."
+                    .to_string(),
+            bridge_id: None,
+        }));
+    }
+    let response = bridge_convert::convert_to_bridge(&state.db, &name, &request.bridge_name).await?;
     Ok(Json(response))
 }
 

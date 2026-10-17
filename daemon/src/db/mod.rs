@@ -11,6 +11,7 @@
 //! - `settings` - Global application settings
 
 pub mod bridges;
+mod convert;
 pub mod firewall;
 pub mod interfaces;
 mod rename;

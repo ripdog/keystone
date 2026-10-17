@@ -6,6 +6,7 @@
 mod apply;
 mod auth;
 mod blocky;
+mod bridge_convert;
 mod caddy;
 mod capture;
 mod changes;
@@ -20,7 +21,6 @@ mod diagnostics;
 mod dnsmasq;
 mod firewall;
 mod gateway;
-mod bridge_convert;
 mod interface_rename;
 mod logs;
 mod mdns;
@@ -50,8 +50,9 @@ use axum::{
 use config::Config;
 use db::Database;
 use keystone_core::api::{
-    ConfirmNetworkd, ConvertToBridge, DeleteUser, Endpoint, Login, RenameInterface, Req, Res, ResetDhcpSession,
-    SaveBridge, SaveGlobalSettings, SaveInterfaceConfig, SaveManagedInterfaces, SaveUser, SaveVlan,
+    ConfirmNetworkd, ConvertToBridge, DeleteUser, Endpoint, Login, RenameInterface, Req, Res,
+    ResetDhcpSession, SaveBridge, SaveGlobalSettings, SaveInterfaceConfig, SaveManagedInterfaces,
+    SaveUser, SaveVlan,
 };
 use keystone_core::{
     ApplyConfigResponse, CheckCategory, CheckSeverity, CompleteSetupResponse, DashboardResponse,
@@ -467,23 +468,43 @@ async fn health_check() -> impl IntoResponse {
     }))
 }
 
+/// Interfaces whose addresses the web service may bind: the enabled LAN
+/// interfaces, plus the members of a LAN bridge.
+///
+/// The configuration can run ahead of the system: while a network change that
+/// moved the LAN onto a bridge awaits confirmation, and after it is rolled back,
+/// the address may still (or again) sit on the member port. Including the
+/// members keeps the web service reachable then. A member of a working bridge
+/// carries no address, so this exposes nothing extra.
+fn lan_bind_interface_names(
+    configs: &[keystone_core::InterfaceConfig],
+    bridges: &[keystone_core::BridgeConfig],
+) -> std::collections::HashSet<String> {
+    use keystone_core::InterfaceRole;
+    let mut names: std::collections::HashSet<String> = configs
+        .iter()
+        .filter(|interface| interface.enabled && interface.role == InterfaceRole::LAN)
+        .map(|interface| interface.name.clone())
+        .collect();
+    let members: Vec<String> = bridges
+        .iter()
+        .filter(|bridge| names.contains(&bridge.name))
+        .flat_map(|bridge| bridge.members.iter().cloned())
+        .collect();
+    names.extend(members);
+    names
+}
+
 /// Addresses eligible for the unprivileged HTTP listener.
 /// LAN roles come exclusively from the daemon database, not from user-supplied
 /// HTTP headers, the default gateway, or the web service's environment.
 async fn lan_bind_addresses(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<keystone_core::LanBindAddressesResponse>, AppError> {
-    use keystone_core::InterfaceRole;
     use std::collections::HashSet;
 
-    let lan_names: HashSet<String> = state
-        .db
-        .get_interface_configs()
-        .await?
-        .into_iter()
-        .filter(|interface| interface.enabled && interface.role == InterfaceRole::LAN)
-        .map(|interface| interface.name)
-        .collect();
+    let bridges = state.db.get_all_bridges().await?;
+    let lan_names = lan_bind_interface_names(&state.db.get_interface_configs().await?, &bridges);
 
     if lan_names.is_empty() {
         return Ok(Json(keystone_core::LanBindAddressesResponse {
@@ -1199,7 +1220,12 @@ async fn convert_to_bridge(
     Json(request): Json<Req<ConvertToBridge>>,
 ) -> Result<Json<Res<ConvertToBridge>>, AppError> {
     info!("Converting {} to bridge {}", name, request.bridge_name);
-    if state.db.get_global_settings().await?.config_changes_disabled {
+    if state
+        .db
+        .get_global_settings()
+        .await?
+        .config_changes_disabled
+    {
         return Ok(Json(keystone_core::ConvertToBridgeResponse {
             success: false,
             message:
@@ -1208,7 +1234,8 @@ async fn convert_to_bridge(
             bridge_id: None,
         }));
     }
-    let response = bridge_convert::convert_to_bridge(&state.db, &name, &request.bridge_name).await?;
+    let response =
+        bridge_convert::convert_to_bridge(&state.db, &name, &request.bridge_name).await?;
     Ok(Json(response))
 }
 
@@ -1943,6 +1970,37 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lan_bind_names_follow_a_lan_bridge_to_its_members() {
+        use keystone_core::{BridgeConfig, InterfaceConfig, InterfaceRole};
+        let config = |name: &str, role, enabled| InterfaceConfig {
+            name: name.to_string(),
+            role,
+            enabled,
+            ..Default::default()
+        };
+        let configs = [
+            config("br-lan", InterfaceRole::LAN, true),
+            config("wan0", InterfaceRole::WAN, true),
+            config("br-off", InterfaceRole::LAN, false),
+        ];
+        let bridge = |name: &str, member: &str| BridgeConfig {
+            name: name.to_string(),
+            members: vec![member.to_string()],
+            ..Default::default()
+        };
+        let bridges = [
+            bridge("br-lan", "lan0"),
+            bridge("br-off", "lan1"),
+            bridge("br-wan", "wan1"),
+        ];
+        let names = lan_bind_interface_names(&configs, &bridges);
+        // The LAN bridge and its port, but nothing from a disabled or WAN side.
+        assert!(names.contains("br-lan") && names.contains("lan0"));
+        assert!(!names.contains("wan0") && !names.contains("wan1"));
+        assert!(!names.contains("br-off") && !names.contains("lan1"));
+    }
+
     use super::is_blocked_before_setup;
     use super::*;
     use axum::body::Body;

@@ -121,7 +121,6 @@ pub(crate) const MANAGED_UNITS: &[&str] = &[
     "keystone-daemon.service",
     "keystone-web-ui.service",
     "systemd-networkd.service",
-    "nftables.service",
     "dnsmasq.service",
     "caddy.service",
     "miniupnpd.service",

@@ -432,53 +432,26 @@ pub(crate) async fn discard_changes(
     let live_ids = session_ids(live);
     let mut by_snapshot: BTreeMap<i64, Vec<Component>> = BTreeMap::new();
     // Components that were never applied have no snapshot to go back to. Their
-    // applied state is "no configuration", so they return to their defaults.
+    // applied state is a fresh installation's, so they return to their defaults.
     let mut unapplied: Vec<Component> = Vec::new();
     for component in &components {
         match snapshots::baseline_for(db, *component, &live_ids).await? {
             Some(baseline) => by_snapshot.entry(baseline.id).or_default().push(*component),
-            None if crate::rollback::can_reset_unapplied(*component) => unapplied.push(*component),
-            None => bail!(
-                "{component} has no applied configuration to discard back to; nothing was changed"
-            ),
+            None => unapplied.push(*component),
         }
     }
     let plan: Vec<(i64, Vec<Component>)> = by_snapshot.into_iter().collect();
-    let (mut restored, pre_restore_id) = if plan.is_empty() {
-        // Nothing is restored from a snapshot, but the replaced configuration
-        // is still kept, as for any discard.
-        let backup = snapshots::create_snapshot(
-            db,
-            NewSnapshot {
-                kind: SnapshotKind::PreRestore,
-                status: SnapshotStatus::Active,
-                session_id: None,
-                components: &[],
-                actor,
-                note: Some("Automatic backup before discarding changes"),
-            },
-        )
-        .await?;
-        (Vec::new(), backup.id)
-    } else {
-        let outcome = snapshots::restore_components(db, &plan, actor).await?;
-        (outcome.components, outcome.pre_restore.id)
-    };
-    for component in unapplied {
-        crate::rollback::reset_unapplied(db, component).await?;
-        restored.push(component);
-    }
-    restored.sort();
+    let outcome = snapshots::restore_plan(db, &plan, &unapplied, actor).await?;
 
     Ok(DiscardChangesResponse {
         success: true,
         message: format!(
             "Discarded pending changes for {}. The live configuration matches the last applied state; nothing was applied to the system. The replaced configuration was saved as snapshot {}.",
-            join_components(&restored),
-            pre_restore_id
+            join_components(&outcome.components),
+            outcome.pre_restore.id
         ),
-        pre_restore_snapshot_id: Some(pre_restore_id),
-        components: restored,
+        pre_restore_snapshot_id: Some(outcome.pre_restore.id),
+        components: outcome.components,
     })
 }
 
@@ -926,7 +899,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn discarding_a_never_applied_component_resets_it_to_no_configuration() {
+    async fn discarding_a_never_applied_component_returns_it_to_its_defaults() {
         let scratch = Scratch::new();
         let db = open(&scratch).await;
         // A router upgraded to a version with Wi-Fi: its baseline predates it.
@@ -958,19 +931,34 @@ mod tests {
                 .unwrap(),
             keystone_core::wireless::WirelessConfig::default()
         );
+    }
 
-        // A component that cannot be reset still refuses, changing nothing.
-        let none_applied = Scratch::new();
-        let fresh = open(&none_applied).await;
+    #[tokio::test]
+    async fn any_component_without_an_applied_snapshot_discards_to_its_defaults() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
         sqlx::query("DELETE FROM config_snapshots")
-            .execute(fresh.pool())
+            .execute(db.pool())
             .await
             .unwrap();
-        assert!(
-            discard_changes(&fresh, &[], Some(vec![Component::Caddy]), None)
-                .await
-                .is_err()
-        );
+        let default_bind: String = sqlx::query_scalar("SELECT bind_interface FROM caddy_config")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE caddy_config SET bind_interface = 'edited0'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        let outcome = discard_changes(&db, &[], Some(vec![Component::Caddy]), None)
+            .await
+            .unwrap();
+        assert_eq!(outcome.components, vec![Component::Caddy]);
+        let bind: String = sqlx::query_scalar("SELECT bind_interface FROM caddy_config")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(bind, default_bind);
     }
 
     #[tokio::test]
@@ -1127,21 +1115,6 @@ mod tests {
         let nothing = discard_changes(&db, &[], None, None).await.unwrap();
         assert!(nothing.pre_restore_snapshot_id.is_none());
         assert!(nothing.components.is_empty());
-    }
-
-    #[tokio::test]
-    async fn discard_refuses_a_component_that_was_never_applied() {
-        let scratch = Scratch::new();
-        let db = open(&scratch).await;
-        set_dnsmasq_cache_size(&db, 7).await;
-        let error = discard_changes(&db, &[], Some(vec![Component::Dnsmasq]), None)
-            .await
-            .unwrap_err();
-        assert!(
-            error.to_string().contains("no applied configuration"),
-            "{error:#}"
-        );
-        assert_eq!(snapshots::list_snapshots(&db).await.unwrap().len(), 0);
     }
 
     #[tokio::test]

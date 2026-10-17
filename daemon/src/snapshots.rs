@@ -889,10 +889,32 @@ pub async fn restore_components(
     plan: &[(i64, Vec<Component>)],
     actor: Option<&str>,
 ) -> Result<RestoreOutcome> {
-    ensure!(!plan.is_empty(), "no snapshot was selected for restore");
+    restore_plan(db, plan, &[], actor).await
+}
+
+/// Like [`restore_components`], and also return `defaults` to a fresh
+/// installation's configuration. That is the applied state of a component that
+/// was never applied: it has no snapshot, because it was added after the
+/// router's first baseline.
+pub async fn restore_plan(
+    db: &Database,
+    plan: &[(i64, Vec<Component>)],
+    defaults: &[Component],
+    actor: Option<&str>,
+) -> Result<RestoreOutcome> {
+    ensure!(
+        !plan.is_empty() || !defaults.is_empty(),
+        "no snapshot was selected for restore"
+    );
 
     let mut by_snapshot: BTreeMap<i64, Vec<Component>> = BTreeMap::new();
     let mut seen = BTreeSet::new();
+    for component in defaults {
+        ensure!(
+            seen.insert(*component),
+            "component {component} is selected more than once"
+        );
+    }
     for (id, components) in plan {
         ensure!(
             !components.is_empty(),
@@ -912,9 +934,21 @@ pub async fn restore_components(
 
     // Working copies are removed on every path, including refusals.
     let mut copies: Vec<(SnapshotInfo, PathBuf)> = Vec::new();
-    let outcome = restore_from_copies(db, &by_snapshot, actor, &mut copies).await;
+    let mut pristine: Option<PathBuf> = None;
+    let outcome = restore_from_copies(
+        db,
+        &by_snapshot,
+        defaults,
+        actor,
+        &mut copies,
+        &mut pristine,
+    )
+    .await;
     for (_, work) in &copies {
         remove_snapshot_files(work);
+    }
+    if let Some(path) = &pristine {
+        remove_snapshot_files(path);
     }
     let outcome = outcome?;
     info!(
@@ -928,8 +962,10 @@ pub async fn restore_components(
 async fn restore_from_copies(
     db: &Database,
     by_snapshot: &BTreeMap<i64, Vec<Component>>,
+    defaults: &[Component],
     actor: Option<&str>,
     copies: &mut Vec<(SnapshotInfo, PathBuf)>,
+    pristine: &mut Option<PathBuf>,
 ) -> Result<RestoreOutcome> {
     for id in by_snapshot.keys() {
         copies.push(working_copy(db, *id, "restore").await?);
@@ -939,7 +975,7 @@ async fn restore_from_copies(
         prepare_copy(work).await?;
     }
 
-    let sources: Vec<(String, PathBuf, Vec<Component>)> = copies
+    let mut sources: Vec<(String, PathBuf, Vec<Component>)> = copies
         .iter()
         .zip(by_snapshot.values())
         .enumerate()
@@ -947,6 +983,11 @@ async fn restore_from_copies(
             (source_alias(index), work.clone(), components.clone())
         })
         .collect();
+    if !defaults.is_empty() {
+        let path = pristine_database(db).await?;
+        *pristine = Some(path.clone());
+        sources.push((source_alias(sources.len()), path, defaults.to_vec()));
+    }
     // Refuse before the backup is taken or any live row is replaced.
     validate_restored_configuration(db, &sources).await?;
 
@@ -972,7 +1013,12 @@ async fn restore_from_copies(
 
     replace_configuration(db.pool(), &sources).await?;
 
-    let mut components: Vec<Component> = by_snapshot.values().flatten().copied().collect();
+    let mut components: Vec<Component> = by_snapshot
+        .values()
+        .flatten()
+        .chain(defaults)
+        .copied()
+        .collect();
     components.sort();
     let restored = copies.iter().map(|(info, _)| info.clone()).collect();
     Ok(RestoreOutcome {
@@ -1224,6 +1270,38 @@ async fn prepare_copy(path: &Path) -> Result<()> {
     .await;
     pool.close().await;
     result
+}
+
+/// A new database file in the snapshot directory, migrated to the current
+/// schema and holding nothing else: the configuration of a fresh installation.
+async fn pristine_database(db: &Database) -> Result<PathBuf> {
+    let dir = snapshot_dir(db).await?;
+    ensure_private_dir(&dir)?;
+    let path = dir.join(format!("defaults-{}.db", Uuid::new_v4().simple()));
+    let created: Result<()> = async {
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Delete);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .context("Failed to create the defaults database")?;
+        MIGRATOR
+            .run(&pool)
+            .await
+            .context("Failed to migrate the defaults database")?;
+        pool.close().await;
+        restrict_file(&path)?;
+        prepare_copy(&path).await
+    }
+    .await;
+    if let Err(error) = created {
+        remove_snapshot_files(&path);
+        return Err(error);
+    }
+    Ok(path)
 }
 
 fn source_alias(index: usize) -> String {

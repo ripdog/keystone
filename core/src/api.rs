@@ -12,6 +12,7 @@ use crate::changes::*;
 use crate::diagnostics::*;
 use crate::sqm::*;
 use crate::upnp::*;
+use crate::wireless::*;
 use crate::*;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -125,6 +126,8 @@ endpoints! {
     SaveSqmConfig: Put "/sqm/config", SaveSqmConfigRequest => SaveSqmConfigResponse;
 
     SaveUpnpConfig: Put "/upnp/config", SaveUpnpConfigRequest => SaveUpnpConfigResponse;
+
+    SaveWirelessConfig: Put "/wireless/config", SaveWirelessConfigRequest => SaveWirelessConfigResponse;
 
     SaveBlockyConfig: Put "/blocky/config", SaveBlockyConfigRequest => SaveBlockyConfigResponse;
 

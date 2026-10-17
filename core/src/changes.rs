@@ -21,18 +21,21 @@ pub enum Component {
     Upnp,
     /// DNS filtering and encrypted upstream DNS served by Blocky.
     Blocky,
+    /// Wi-Fi access point served by hostapd.
+    Wireless,
     Dnsmasq,
     Caddy,
 }
 
 impl Component {
     /// Every component, in apply order.
-    pub const ALL: [Component; 7] = [
+    pub const ALL: [Component; 8] = [
         Component::Networkd,
         Component::Firewall,
         Component::Sqm,
         Component::Upnp,
         Component::Blocky,
+        Component::Wireless,
         Component::Dnsmasq,
         Component::Caddy,
     ];
@@ -44,6 +47,7 @@ impl Component {
             Component::Sqm => "sqm",
             Component::Upnp => "upnp",
             Component::Blocky => "blocky",
+            Component::Wireless => "wireless",
             Component::Dnsmasq => "dnsmasq",
             Component::Caddy => "caddy",
         }
@@ -69,7 +73,7 @@ impl FromStr for Component {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::parse(value).ok_or_else(|| {
             format!(
-                "unknown component {value:?}; expected one of networkd, firewall, sqm, upnp, blocky, dnsmasq, caddy"
+                "unknown component {value:?}; expected one of networkd, firewall, sqm, upnp, blocky, wireless, dnsmasq, caddy"
             )
         })
     }
@@ -262,6 +266,8 @@ pub struct ComponentBaselines {
     pub upnp: Option<i64>,
     #[serde(default)]
     pub blocky: Option<i64>,
+    #[serde(default)]
+    pub wireless: Option<i64>,
     pub dnsmasq: Option<i64>,
     pub caddy: Option<i64>,
 }
@@ -274,6 +280,7 @@ impl ComponentBaselines {
             Component::Sqm => self.sqm,
             Component::Upnp => self.upnp,
             Component::Blocky => self.blocky,
+            Component::Wireless => self.wireless,
             Component::Dnsmasq => self.dnsmasq,
             Component::Caddy => self.caddy,
         }
@@ -286,6 +293,7 @@ impl ComponentBaselines {
             Component::Sqm => self.sqm = id,
             Component::Upnp => self.upnp = id,
             Component::Blocky => self.blocky = id,
+            Component::Wireless => self.wireless = id,
             Component::Dnsmasq => self.dnsmasq = id,
             Component::Caddy => self.caddy = id,
         }

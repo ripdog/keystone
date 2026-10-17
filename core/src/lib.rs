@@ -14,6 +14,7 @@ pub mod diagnostics;
 pub mod sqm;
 pub mod upnp;
 pub mod validation;
+pub mod wireless;
 
 // ============================================================================
 // Network Configuration Types (systemd-networkd compatible)
@@ -3059,6 +3060,8 @@ pub struct ApplyComponentResults {
     pub upnp: ComponentResult,
     #[serde(default)]
     pub blocky: ComponentResult,
+    #[serde(default)]
+    pub wireless: ComponentResult,
     pub dnsmasq: ComponentResult,
     pub caddy: ComponentResult,
 }

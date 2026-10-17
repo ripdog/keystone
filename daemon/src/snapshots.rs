@@ -525,6 +525,22 @@ pub async fn baseline_for(
     Ok(None)
 }
 
+/// The components covered by the pending snapshots of an apply session.
+pub async fn session_components(db: &Database, session_id: &str) -> Result<Vec<Component>> {
+    let mut components: Vec<Component> = list_snapshots(db)
+        .await?
+        .into_iter()
+        .filter(|snapshot| {
+            snapshot.status == SnapshotStatus::PendingConfirmation
+                && snapshot.session_id.as_deref() == Some(session_id)
+        })
+        .flat_map(|snapshot| snapshot.components)
+        .collect();
+    components.sort();
+    components.dedup();
+    Ok(components)
+}
+
 /// The newest pending snapshot whose session is one of `live_sessions`. It
 /// describes the apply that awaits confirmation.
 pub async fn pending_for_sessions(

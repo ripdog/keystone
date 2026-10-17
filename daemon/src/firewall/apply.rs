@@ -308,10 +308,10 @@ impl FirewallApplyManager {
         let networkd = self.networkd.rollback().await;
         let firewall = self.rollback_firewall().await?;
         if let (Ok(true), Some(session)) = (&networkd, &networkd_session) {
-            snapshots::settle_session(&self.db, session, SnapshotStatus::RolledBack).await;
+            crate::rollback::settle_rolled_back(&self.db, session).await;
         }
         if let (true, Some(session)) = (firewall.success, &firewall_session) {
-            snapshots::settle_session(&self.db, session, SnapshotStatus::RolledBack).await;
+            crate::rollback::settle_rolled_back(&self.db, session).await;
         }
         Ok(match networkd {
             Ok(true) => FirewallRollbackResponse {
@@ -483,7 +483,7 @@ impl FirewallApplyManager {
                 return;
             }
 
-            snapshots::settle_session(&db, &session_id, SnapshotStatus::RolledBack).await;
+            crate::rollback::settle_rolled_back(&db, &session_id).await;
             info!("Automatic firewall rollback completed");
         });
     }

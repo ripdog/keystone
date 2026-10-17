@@ -431,28 +431,54 @@ pub(crate) async fn discard_changes(
 
     let live_ids = session_ids(live);
     let mut by_snapshot: BTreeMap<i64, Vec<Component>> = BTreeMap::new();
+    // Components that were never applied have no snapshot to go back to. Their
+    // applied state is "no configuration", so they return to their defaults.
+    let mut unapplied: Vec<Component> = Vec::new();
     for component in &components {
-        let baseline = snapshots::baseline_for(db, *component, &live_ids)
-            .await?
-            .with_context(|| {
-                format!(
-                    "{component} has no applied configuration to discard back to; nothing was changed"
-                )
-            })?;
-        by_snapshot.entry(baseline.id).or_default().push(*component);
+        match snapshots::baseline_for(db, *component, &live_ids).await? {
+            Some(baseline) => by_snapshot.entry(baseline.id).or_default().push(*component),
+            None if crate::rollback::can_reset_unapplied(*component) => unapplied.push(*component),
+            None => bail!(
+                "{component} has no applied configuration to discard back to; nothing was changed"
+            ),
+        }
     }
     let plan: Vec<(i64, Vec<Component>)> = by_snapshot.into_iter().collect();
-    let outcome = snapshots::restore_components(db, &plan, actor).await?;
+    let (mut restored, pre_restore_id) = if plan.is_empty() {
+        // Nothing is restored from a snapshot, but the replaced configuration
+        // is still kept, as for any discard.
+        let backup = snapshots::create_snapshot(
+            db,
+            NewSnapshot {
+                kind: SnapshotKind::PreRestore,
+                status: SnapshotStatus::Active,
+                session_id: None,
+                components: &[],
+                actor,
+                note: Some("Automatic backup before discarding changes"),
+            },
+        )
+        .await?;
+        (Vec::new(), backup.id)
+    } else {
+        let outcome = snapshots::restore_components(db, &plan, actor).await?;
+        (outcome.components, outcome.pre_restore.id)
+    };
+    for component in unapplied {
+        crate::rollback::reset_unapplied(db, component).await?;
+        restored.push(component);
+    }
+    restored.sort();
 
     Ok(DiscardChangesResponse {
         success: true,
         message: format!(
             "Discarded pending changes for {}. The live configuration matches the last applied state; nothing was applied to the system. The replaced configuration was saved as snapshot {}.",
-            join_components(&outcome.components),
-            outcome.pre_restore.id
+            join_components(&restored),
+            pre_restore_id
         ),
-        pre_restore_snapshot_id: Some(outcome.pre_restore.id),
-        components: outcome.components,
+        pre_restore_snapshot_id: Some(pre_restore_id),
+        components: restored,
     })
 }
 
@@ -897,6 +923,54 @@ mod tests {
         let after = pending_changes(&db, &[]).await.unwrap();
         assert!(!changed(&after, Component::Upnp));
         assert!(!changed(&after, Component::Firewall));
+    }
+
+    #[tokio::test]
+    async fn discarding_a_never_applied_component_resets_it_to_no_configuration() {
+        let scratch = Scratch::new();
+        let db = open(&scratch).await;
+        // A router upgraded to a version with Wi-Fi: its baseline predates it.
+        let applied: Vec<Component> = Component::ALL
+            .into_iter()
+            .filter(|component| *component != Component::Wireless)
+            .collect();
+        snapshots::record_applied(&db, Some("admin"), None, &applied, "old baseline").await;
+
+        crate::wireless::db::save_wireless_config(
+            db.pool(),
+            &keystone_core::wireless::WirelessConfig {
+                enabled: true,
+                interface: "wlan0".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let outcome = discard_changes(&db, &[], Some(vec![Component::Wireless]), Some("admin"))
+            .await
+            .unwrap();
+        assert_eq!(outcome.components, vec![Component::Wireless]);
+        assert!(outcome.pre_restore_snapshot_id.is_some());
+        assert_eq!(
+            crate::wireless::load_wireless_config(db.pool())
+                .await
+                .unwrap(),
+            keystone_core::wireless::WirelessConfig::default()
+        );
+
+        // A component that cannot be reset still refuses, changing nothing.
+        let none_applied = Scratch::new();
+        let fresh = open(&none_applied).await;
+        sqlx::query("DELETE FROM config_snapshots")
+            .execute(fresh.pool())
+            .await
+            .unwrap();
+        assert!(
+            discard_changes(&fresh, &[], Some(vec![Component::Caddy]), None)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

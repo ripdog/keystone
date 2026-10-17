@@ -25,6 +25,7 @@ mod interface_rename;
 mod logs;
 mod mdns;
 mod networkd;
+mod rollback;
 mod snapshot_validation;
 mod snapshots;
 mod soho;
@@ -183,8 +184,7 @@ async fn main() -> anyhow::Result<()> {
                 let db = snapshot_db.clone();
                 let session = session.to_owned();
                 tokio::spawn(async move {
-                    snapshots::settle_session(&db, &session, snapshots::SnapshotStatus::RolledBack)
-                        .await;
+                    rollback::settle_rolled_back(&db, &session).await;
                 });
             },
         )),

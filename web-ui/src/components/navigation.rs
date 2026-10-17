@@ -96,6 +96,14 @@ pub const NAV_ITEMS: &[NavItem] = &[
         "bridge br switch lan",
     ),
     page(
+        "Wi-Fi",
+        "/wifi",
+        OVERVIEW,
+        "",
+        "wifi",
+        "wifi wireless wlan access point ap ssid hostapd wpa",
+    ),
+    page(
         "Overview",
         "/dnsmasq/overview",
         CONNECTIVITY,
@@ -441,6 +449,7 @@ pub fn icon_path(kind: &str) -> &'static str {
         "network" => "M12 3v5M5 21h14M5 16v5M19 16v5M5 16h14M12 8l-7 8M12 8l7 8",
         "layers" => "m12 2 9 5-9 5-9-5 9-5Zm-9 10 9 5 9-5M3 17l9 5 9-5",
         "bridge" => "M3 18h18M5 18V9m14 9V9M3 9h18M7 9c0 5 10 5 10 0",
+        "wifi" => "M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5v.01",
         "dns" => "M4 7h16M4 12h16M4 17h16M7 7v.01M7 12v.01M7 17v.01",
         "globe" => {
             "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20ZM2 12h20M12 2c-6 6-6 14 0 20M12 2c6 6 6 14 0 20"

@@ -15,6 +15,7 @@
 //! - `changes` - Pending changes, apply-all and configuration snapshots
 //! - `sqm` - Traffic shaping (SQM / CAKE)
 //! - `upnp` - UPnP IGD and NAT-PMP / PCP port mapping
+//! - `wireless` - Wi-Fi access point (hostapd)
 //! - `services` - Systemd service management
 //!
 //! All functions use the shared `client` module for HTTP requests,
@@ -42,6 +43,7 @@ pub mod system;
 pub mod upnp;
 pub mod users;
 pub mod vlans;
+pub mod wireless;
 pub mod wizard;
 
 // Client module provides the HTTP request helpers used by submodules
@@ -68,4 +70,5 @@ pub use system::*;
 pub use upnp::*;
 pub use users::*;
 pub use vlans::*;
+pub use wireless::*;
 pub use wizard::*;

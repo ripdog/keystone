@@ -28,6 +28,7 @@ mod ssh;
 mod status;
 mod upnp;
 mod vlans;
+mod wireless;
 mod wizard;
 
 pub use bridges::*;
@@ -52,4 +53,5 @@ pub use ssh::*;
 pub use status::*;
 pub use upnp::*;
 pub use vlans::*;
+pub use wireless::*;
 pub use wizard::*;

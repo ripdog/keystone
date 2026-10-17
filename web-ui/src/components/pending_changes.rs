@@ -55,6 +55,7 @@ pub fn component_display_name(component: Component) -> &'static str {
         Component::Sqm => "Traffic Shaping",
         Component::Upnp => "UPnP / NAT-PMP",
         Component::Blocky => "DNS filtering",
+        Component::Wireless => "Wi-Fi",
     }
 }
 
@@ -188,6 +189,7 @@ pub fn apply_outcome_rows(results: &ApplyComponentResults) -> Vec<(Component, Co
         (Component::Sqm, results.sqm.clone()),
         (Component::Upnp, results.upnp.clone()),
         (Component::Blocky, results.blocky.clone()),
+        (Component::Wireless, results.wireless.clone()),
         (Component::Dnsmasq, results.dnsmasq.clone()),
         (Component::Caddy, results.caddy.clone()),
     ]

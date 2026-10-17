@@ -1254,6 +1254,10 @@ pub struct BridgeConfig {
     /// Associated InterfaceConfig ID for the bridge's network settings
     /// This links to an InterfaceConfig that configures the bridge interface
     pub interface_config_id: Option<i64>,
+    /// MAC address of the bridge (lowercase `aa:bb:cc:dd:ee:ff`). `None` leaves
+    /// the choice to systemd-networkd.
+    #[serde(default)]
+    pub mac_address: Option<String>,
 }
 
 fn default_stp_forward_delay() -> u32 {
@@ -1270,6 +1274,7 @@ impl Default for BridgeConfig {
             stp_forward_delay: 15,
             description: None,
             interface_config_id: None,
+            mac_address: None,
         }
     }
 }

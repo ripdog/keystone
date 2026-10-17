@@ -23,11 +23,17 @@ const MOVE_STATEMENTS: &[&str] = &[
 impl Database {
     /// Create bridge `bridge` with `member` as its only member and move
     /// `member`'s interface configuration and LAN references onto it, in one
-    /// transaction. Returns the bridge's id.
+    /// transaction. Returns the bridge's id. The bridge takes `mac` when given,
+    /// so the LAN address keeps the hardware address clients already know.
     ///
     /// Callers have checked that `member` has an interface configuration and
     /// that `bridge` is free.
-    pub async fn convert_interface_to_bridge(&self, member: &str, bridge: &str) -> Result<i64> {
+    pub async fn convert_interface_to_bridge(
+        &self,
+        member: &str,
+        bridge: &str,
+        mac: Option<&str>,
+    ) -> Result<i64> {
         let mut tx = self
             .pool
             .begin()
@@ -54,7 +60,7 @@ impl Database {
                 .with_context(|| format!("Failed to move {member} to {bridge}: {sql}"))?;
         }
 
-        let bridge_id = insert_bridge(&mut tx, member, bridge, config_id).await?;
+        let bridge_id = insert_bridge(&mut tx, member, bridge, mac, config_id).await?;
         tx.commit()
             .await
             .context("Failed to commit the bridge conversion")?;
@@ -67,18 +73,20 @@ async fn insert_bridge(
     tx: &mut Transaction<'_, Sqlite>,
     member: &str,
     bridge: &str,
+    mac: Option<&str>,
     config_id: i64,
 ) -> Result<i64> {
     let members = serde_json::to_string(&[member])?;
     let description = format!("LAN bridge (was {member})");
     let result = sqlx::query(
-        "INSERT INTO bridge_config (name, members, stp, description, interface_config_id) \
-         VALUES (?, ?, 0, ?, ?)",
+        "INSERT INTO bridge_config (name, members, stp, description, interface_config_id, mac_address) \
+         VALUES (?, ?, 0, ?, ?, ?)",
     )
     .bind(bridge)
     .bind(members)
     .bind(description)
     .bind(config_id)
+    .bind(mac)
     .execute(&mut **tx)
     .await;
     match result {
@@ -132,7 +140,7 @@ mod tests {
     async fn the_lan_configuration_and_its_references_move_to_the_bridge() {
         let db = lan_database().await;
         let id = db
-            .convert_interface_to_bridge("lan0", "br-lan")
+            .convert_interface_to_bridge("lan0", "br-lan", None)
             .await
             .unwrap();
 
@@ -162,9 +170,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_bridge_takes_the_given_mac_address() {
+        let db = lan_database().await;
+        let id = db
+            .convert_interface_to_bridge("lan0", "br-lan", Some("00:e8:4c:68:9e:d1"))
+            .await
+            .unwrap();
+        let bridge = db.get_bridge(id).await.unwrap().unwrap();
+        assert_eq!(bridge.mac_address.as_deref(), Some("00:e8:4c:68:9e:d1"));
+    }
+
+    #[tokio::test]
     async fn wan_side_references_stay_where_they_were() {
         let db = lan_database().await;
-        db.convert_interface_to_bridge("lan0", "br-lan")
+        db.convert_interface_to_bridge("lan0", "br-lan", None)
             .await
             .unwrap();
         assert_eq!(
@@ -208,13 +227,13 @@ mod tests {
     #[tokio::test]
     async fn a_failed_conversion_changes_nothing() {
         let db = lan_database().await;
-        db.convert_interface_to_bridge("lan0", "br-lan")
+        db.convert_interface_to_bridge("lan0", "br-lan", None)
             .await
             .unwrap();
         // lan0 no longer has a configuration, so a second conversion fails
         // before it can touch the bridge or the references.
         assert!(
-            db.convert_interface_to_bridge("lan0", "br-other")
+            db.convert_interface_to_bridge("lan0", "br-other", None)
                 .await
                 .is_err()
         );
@@ -223,7 +242,7 @@ mod tests {
         // A duplicate bridge name rolls the configuration move back.
         exec(&db, "INSERT INTO interface_config (interface_name, role, enabled, dhcp_mode, created_at, updated_at) VALUES ('lan1', 'lan', 1, 'none', 0, 0)").await;
         assert!(
-            db.convert_interface_to_bridge("lan1", "br-lan")
+            db.convert_interface_to_bridge("lan1", "br-lan", None)
                 .await
                 .is_err()
         );

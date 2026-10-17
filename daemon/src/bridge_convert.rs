@@ -76,6 +76,13 @@ pub fn check_conversion(
     Ok(())
 }
 
+/// The hardware address of `name`, if the kernel reports a usable one.
+fn member_mac(name: &str) -> Option<String> {
+    let text = std::fs::read_to_string(format!("/sys/class/net/{name}/address")).ok()?;
+    let mac = text.trim().to_ascii_lowercase();
+    (crate::networkd::link::is_mac_address(&mac) && mac != "00:00:00:00:00:00").then_some(mac)
+}
+
 fn refusal(message: impl Into<String>) -> ConvertToBridgeResponse {
     ConvertToBridgeResponse {
         success: false,
@@ -106,7 +113,13 @@ pub async fn convert_to_bridge(
         return Ok(refusal(message));
     }
 
-    let bridge_id = db.convert_interface_to_bridge(member, bridge).await?;
+    // Keep the port's hardware address on the bridge: the LAN address moves to
+    // the bridge, and clients would otherwise keep sending to the old MAC until
+    // their ARP caches expire, which can outlast the confirm window.
+    let mac = member_mac(member);
+    let bridge_id = db
+        .convert_interface_to_bridge(member, bridge, mac.as_deref())
+        .await?;
     Ok(ConvertToBridgeResponse {
         success: true,
         message: format!(

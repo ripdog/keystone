@@ -859,6 +859,9 @@ pub fn generate_bridge_netdev_file(config: &keystone_core::BridgeConfig) -> Stri
     writeln!(output, "[NetDev]").unwrap();
     writeln!(output, "Name={}", config.name).unwrap();
     writeln!(output, "Kind=bridge").unwrap();
+    if let Some(mac) = &config.mac_address {
+        writeln!(output, "MACAddress={}", mac).unwrap();
+    }
     if let Some(desc) = &config.description {
         writeln!(output, "Description={}", desc).unwrap();
     }
@@ -1372,6 +1375,7 @@ mod tests {
             stp_forward_delay: 15,
             description: Some("LAN bridge".to_string()),
             interface_config_id: None,
+            mac_address: None,
         };
 
         let output = generate_bridge_netdev_file(&config);
@@ -1396,12 +1400,35 @@ mod tests {
             stp_forward_delay: 20,
             description: None,
             interface_config_id: None,
+            mac_address: None,
         };
 
         let output = generate_bridge_netdev_file(&config);
         assert!(output.contains("Name=br-lan"));
         assert!(output.contains("STP=yes"));
         assert!(output.contains("ForwardDelaySec=20"));
+    }
+
+    #[test]
+    fn a_bridge_mac_address_is_written_to_the_netdev_only_when_set() {
+        use keystone_core::BridgeConfig;
+
+        let mut config = BridgeConfig {
+            name: "br-lan".to_string(),
+            members: vec!["lan0".to_string()],
+            ..Default::default()
+        };
+        assert!(!generate_bridge_netdev_file(&config).contains("MACAddress"));
+
+        config.mac_address = Some("00:e8:4c:68:9e:d1".to_string());
+        let output = generate_bridge_netdev_file(&config);
+        let netdev = output.split("[Bridge]").next().unwrap();
+        assert!(
+            netdev
+                .lines()
+                .any(|line| line == "MACAddress=00:e8:4c:68:9e:d1"),
+            "the MAC belongs in the [NetDev] section:\n{output}"
+        );
     }
 
     #[test]
@@ -1487,6 +1514,7 @@ mod tests {
             stp_forward_delay: 15,
             description: None,
             interface_config_id: None,
+            mac_address: None,
         }
     }
 

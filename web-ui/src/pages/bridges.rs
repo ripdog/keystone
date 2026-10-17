@@ -121,7 +121,11 @@ pub fn BridgesPage(
         let stp = modal_stp.get();
         let stp_forward_delay_str = modal_stp_forward_delay.get();
         let description = modal_description.get();
-        let existing_id = editing_bridge.get().and_then(|b| b.id);
+        let existing = editing_bridge.get();
+        let existing_id = existing.as_ref().and_then(|b| b.id);
+        // Settings the form does not show must survive an edit.
+        let interface_config_id = existing.as_ref().and_then(|b| b.interface_config_id);
+        let mac_address = existing.and_then(|b| b.mac_address);
 
         // Validation
         if name.is_empty() {
@@ -150,7 +154,8 @@ pub fn BridgesPage(
             } else {
                 Some(description)
             },
-            interface_config_id: None,
+            interface_config_id,
+            mac_address,
         };
 
         spawn_local(async move {

@@ -16,8 +16,8 @@ impl<'a> BridgesDb<'a> {
 
     /// Get all bridge configurations
     pub async fn get_all_bridges(&self) -> Result<Vec<BridgeConfig>> {
-        let rows = sqlx::query_as::<_, (i64, String, String, i64, i64, Option<String>, Option<i64>)>(
-            "SELECT id, name, members, stp, stp_forward_delay, description, interface_config_id 
+        let rows = sqlx::query_as::<_, (i64, String, String, i64, i64, Option<String>, Option<i64>, Option<String>)>(
+            "SELECT id, name, members, stp, stp_forward_delay, description, interface_config_id, mac_address 
              FROM bridge_config 
              ORDER BY name"
         )
@@ -36,6 +36,7 @@ impl<'a> BridgesDb<'a> {
                     stp_forward_delay,
                     description,
                     interface_config_id,
+                    mac_address,
                 )| {
                     let members: Vec<String> =
                         serde_json::from_str(&members_json).unwrap_or_default();
@@ -47,6 +48,7 @@ impl<'a> BridgesDb<'a> {
                         stp_forward_delay: stp_forward_delay as u32,
                         description,
                         interface_config_id,
+                        mac_address,
                     }
                 },
             )
@@ -57,8 +59,8 @@ impl<'a> BridgesDb<'a> {
 
     /// Get a single bridge by ID
     pub async fn get_bridge(&self, id: i64) -> Result<Option<BridgeConfig>> {
-        let row = sqlx::query_as::<_, (i64, String, String, i64, i64, Option<String>, Option<i64>)>(
-            "SELECT id, name, members, stp, stp_forward_delay, description, interface_config_id 
+        let row = sqlx::query_as::<_, (i64, String, String, i64, i64, Option<String>, Option<i64>, Option<String>)>(
+            "SELECT id, name, members, stp, stp_forward_delay, description, interface_config_id, mac_address 
              FROM bridge_config 
              WHERE id = ?"
         )
@@ -68,7 +70,16 @@ impl<'a> BridgesDb<'a> {
         .context("Failed to fetch bridge")?;
 
         Ok(row.map(
-            |(id, name, members_json, stp, stp_forward_delay, description, interface_config_id)| {
+            |(
+                id,
+                name,
+                members_json,
+                stp,
+                stp_forward_delay,
+                description,
+                interface_config_id,
+                mac_address,
+            )| {
                 let members: Vec<String> = serde_json::from_str(&members_json).unwrap_or_default();
                 BridgeConfig {
                     id: Some(id),
@@ -78,6 +89,7 @@ impl<'a> BridgesDb<'a> {
                     stp_forward_delay: stp_forward_delay as u32,
                     description,
                     interface_config_id,
+                    mac_address,
                 }
             },
         ))
@@ -90,6 +102,11 @@ impl<'a> BridgesDb<'a> {
         for name in &config.members {
             keystone_core::validation::interface_name(name).map_err(anyhow::Error::msg)?;
         }
+        if let Some(mac) = &config.mac_address
+            && !crate::networkd::link::is_mac_address(mac)
+        {
+            anyhow::bail!("Invalid bridge MAC address: {mac:?}");
+        }
         let members_json =
             serde_json::to_string(&config.members).context("Failed to serialize bridge members")?;
 
@@ -100,7 +117,7 @@ impl<'a> BridgesDb<'a> {
             sqlx::query(
                 "UPDATE bridge_config 
                  SET name = ?, members = ?, stp = ?, stp_forward_delay = ?, 
-                     description = ?, interface_config_id = ?, 
+                     description = ?, interface_config_id = ?, mac_address = ?,
                      updated_at = strftime('%s', 'now')
                  WHERE id = ?",
             )
@@ -110,6 +127,7 @@ impl<'a> BridgesDb<'a> {
             .bind(config.stp_forward_delay as i64)
             .bind(&config.description)
             .bind(config.interface_config_id)
+            .bind(&config.mac_address)
             .bind(id)
             .execute(self.pool)
             .await
@@ -120,8 +138,8 @@ impl<'a> BridgesDb<'a> {
             // Insert new bridge
             let result = sqlx::query(
                 "INSERT INTO bridge_config 
-                 (name, members, stp, stp_forward_delay, description, interface_config_id) 
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                 (name, members, stp, stp_forward_delay, description, interface_config_id, mac_address) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(&config.name)
             .bind(&members_json)
@@ -129,6 +147,7 @@ impl<'a> BridgesDb<'a> {
             .bind(config.stp_forward_delay as i64)
             .bind(&config.description)
             .bind(config.interface_config_id)
+            .bind(&config.mac_address)
             .execute(self.pool)
             .await
             .context("Failed to insert bridge")?;

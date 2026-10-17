@@ -27,8 +27,9 @@ StateDirectoryMode=0700
 # filesystem sandbox is constructed (Caddy itself remains optional).
 # miniupnpd and keystone-blocky are created here too, so /etc/miniupnpd and
 # /etc/keystone-blocky exist before the sandbox is built; the write access they
-# need is granted below. So is /etc/avahi (multicast DNS).
-ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d miniupnpd keystone-blocky avahi
+# need is granted below. So are /etc/avahi (multicast DNS) and /etc/hostapd
+# (Wi-Fi access point).
+ConfigurationDirectory=systemd/networkd.conf.d dnsmasq.d caddy/Caddyfile.d miniupnpd keystone-blocky avahi hostapd
 ConfigurationDirectoryMode=0755
 
 # Restrict capabilities
@@ -81,6 +82,11 @@ ReadWritePaths=/etc/keystone-blocky
 # temp file in the same directory) and starts or stops avahi-daemon.service
 # over D-Bus, which needs no filesystem access of its own.
 ReadWritePaths=/etc/avahi
+# Wi-Fi access point: Keystone writes /etc/hostapd/<interface>.conf (mode 0600,
+# it holds the passphrase; atomically, via a temp file in the same directory)
+# and starts hostapd@<interface>.service over D-Bus. /etc/hostapd is created
+# above so it exists before the sandbox is built.
+ReadWritePaths=/etc/hostapd
 PrivateTmp=yes
 
 # Additional hardening

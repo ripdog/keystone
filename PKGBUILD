@@ -9,6 +9,8 @@ depends=("glibc" "sqlite" "nftables" "conntrack-tools" "systemd" "iproute2" "ipu
 optdepends=('miniupnpd-nft: UPnP IGD and NAT-PMP port mapping (AUR; the extra/miniupnpd build uses iptables and is unsupported)'
             'blocky-bin: DNS ad-blocking and encrypted upstream DNS (AUR)'
             'avahi: multicast DNS, so the router answers to <hostname>.local'
+            'hostapd: Wi-Fi access point'
+            'iw: Wi-Fi interface detection and the access point station list'
             'tcpdump: packet capture on the diagnostics page')
 makedepends=("rust" "cargo" "trunk" "git")
 conflicts=('keystone') # the extra repo's assembler framework shares the old name
@@ -47,6 +49,7 @@ package() {
   install -Dm644 "${startdir}/packaging/arch/keystone-web-ui.service" "${pkgdir}/usr/lib/systemd/system/keystone-web-ui.service"
   install -Dm644 "${startdir}/packaging/arch/keystone-blocky.service" "${pkgdir}/usr/lib/systemd/system/keystone-blocky.service"
   install -Dm644 "${startdir}/packaging/arch/miniupnpd.service.d/keystone.conf" "${pkgdir}/usr/lib/systemd/system/miniupnpd.service.d/keystone.conf"
+  install -Dm644 "${startdir}/packaging/arch/hostapd@.service.d/keystone.conf" "${pkgdir}/usr/lib/systemd/system/hostapd@.service.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/systemd-networkd.service.d/keystone.conf" "${pkgdir}/usr/lib/systemd/system/systemd-networkd.service.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/caddy.service.d/keystone.conf" "${pkgdir}/usr/lib/systemd/system/caddy.service.d/keystone.conf"
   install -Dm644 "${startdir}/packaging/arch/sysusers.conf" "${pkgdir}/usr/lib/sysusers.d/keystone.conf"

@@ -306,17 +306,11 @@ mod tests {
     #[test]
     fn only_the_dependable_channels_are_accepted() {
         for channel in WIRELESS_CHANNELS {
-            let config = WirelessConfig {
-                channel,
-                ..valid()
-            };
+            let config = WirelessConfig { channel, ..valid() };
             assert!(config.validate(&bridges()).is_ok(), "channel {channel}");
         }
         for channel in [0, 12, 13, 36, 255] {
-            let config = WirelessConfig {
-                channel,
-                ..valid()
-            };
+            let config = WirelessConfig { channel, ..valid() };
             assert!(config.validate(&bridges()).is_err(), "channel {channel}");
         }
     }

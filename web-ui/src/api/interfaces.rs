@@ -1,14 +1,14 @@
 //! Interface configuration API functions
 
 use keystone_core::api::{
-    RenameInterface, ResetDhcpSession, SaveInterfaceConfig, SaveManagedInterfaces,
+    ConvertToBridge, RenameInterface, ResetDhcpSession, SaveInterfaceConfig, SaveManagedInterfaces,
 };
 use keystone_core::{
-    InterfaceConfig, InterfaceConfigResponse, ManagedInterface, ManagedInterfacesResponse,
-    NetworkdPreviewResponse, RenameInterfaceRequest, RenameInterfaceResponse,
-    RenewInterfaceResponse, ResetDhcpSessionRequest, ResetDhcpSessionResponse,
-    SaveInterfaceConfigRequest, SaveInterfaceConfigResponse, SaveManagedInterfacesRequest,
-    SaveManagedInterfacesResponse, SystemState,
+    ConvertToBridgeRequest, ConvertToBridgeResponse, InterfaceConfig, InterfaceConfigResponse,
+    ManagedInterface, ManagedInterfacesResponse, NetworkdPreviewResponse, RenameInterfaceRequest,
+    RenameInterfaceResponse, RenewInterfaceResponse, ResetDhcpSessionRequest,
+    ResetDhcpSessionResponse, SaveInterfaceConfigRequest, SaveInterfaceConfigResponse,
+    SaveManagedInterfacesRequest, SaveManagedInterfacesResponse, SystemState,
 };
 
 use super::client::{call, call_with, get, post_empty};
@@ -105,4 +105,17 @@ pub async fn reset_dhcp_session(
     name: &str,
 ) -> Result<ResetDhcpSessionResponse, String> {
     call_with::<ResetDhcpSession>(token, &[("name", name)], &ResetDhcpSessionRequest {}).await
+}
+
+/// Move a LAN interface's configuration onto a new bridge that has the
+/// interface as its member. The change is staged, not applied.
+pub async fn convert_to_bridge(
+    token: &str,
+    name: &str,
+    bridge_name: &str,
+) -> Result<ConvertToBridgeResponse, String> {
+    let request = ConvertToBridgeRequest {
+        bridge_name: bridge_name.to_string(),
+    };
+    call_with::<ConvertToBridge>(token, &[("name", name)], &request).await
 }

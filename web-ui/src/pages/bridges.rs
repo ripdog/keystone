@@ -1,7 +1,7 @@
 //! Bridge configuration page
 
 use crate::components::use_toasts;
-use keystone_core::{BridgeConfig, ManagedInterface};
+use keystone_core::{BridgeConfig, InterfaceRole, ManagedInterface};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
@@ -19,6 +19,11 @@ pub fn BridgesPage(
     let (managed_interfaces, set_managed_interfaces) = signal(Vec::<ManagedInterface>::new());
     let (loading, set_loading) = signal(true);
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
+
+    // "Convert a LAN interface" panel state
+    let (convert_interface, set_convert_interface) = signal(String::new());
+    let (convert_name, set_convert_name) = signal(String::from("br-lan"));
+    let (converting, set_converting) = signal(false);
 
     // Modal state
     let (show_modal, set_show_modal) = signal(false);
@@ -215,6 +220,74 @@ pub fn BridgesPage(
         });
     };
 
+    // Enabled LAN interfaces that are not yet in a bridge.
+    let convertible = move || {
+        let taken: Vec<String> = bridges
+            .get()
+            .into_iter()
+            .flat_map(|bridge| bridge.members.into_iter().chain([bridge.name]))
+            .collect();
+        managed_interfaces
+            .get()
+            .into_iter()
+            .filter(|iface| {
+                iface.enabled && iface.role == InterfaceRole::LAN && !taken.contains(&iface.name)
+            })
+            .map(|iface| iface.name)
+            .collect::<Vec<_>>()
+    };
+
+    let convert = move |ev: web_sys::SubmitEvent| {
+        ev.prevent_default();
+        let Some(token) = auth_token.get() else {
+            return;
+        };
+        let interface = convert_interface.get();
+        let bridge_name = convert_name.get();
+        if interface.is_empty() || bridge_name.trim().is_empty() {
+            set_error_msg.set(Some(
+                "Choose an interface and a name for the new bridge".to_string(),
+            ));
+            return;
+        }
+        if !web_sys::window()
+            .and_then(|w| {
+                w.confirm_with_message(&format!(
+                    "Move the configuration of {interface} onto a new bridge {bridge_name}? \
+                     Its addresses, DHCP range and firewall zone move with it. Nothing changes \
+                     on the router until you apply."
+                ))
+                .ok()
+            })
+            .unwrap_or(false)
+        {
+            return;
+        }
+        set_error_msg.set(None);
+        set_converting.set(true);
+        spawn_local(async move {
+            match api::convert_to_bridge(&token, &interface, bridge_name.trim()).await {
+                Ok(response) if response.success => {
+                    config_changed.run(());
+                    toasts.success(response.message);
+                    if let Ok(bridge_list) = api::fetch_bridges(&token).await {
+                        set_bridges.set(bridge_list);
+                    }
+                    set_convert_interface.set(String::new());
+                }
+                Ok(response) => set_error_msg.set(Some(response.message)),
+                Err(e) => {
+                    if e.contains("Unauthorized") {
+                        on_unauthorized.run(());
+                    } else {
+                        set_error_msg.set(Some(format!("Error: {e}")));
+                    }
+                }
+            }
+            set_converting.set(false);
+        });
+    };
+
     view! {
         <div class="space-y-6">
             <div class="flex items-center justify-between">
@@ -228,6 +301,52 @@ pub fn BridgesPage(
                     "+ Add Bridge"
                 </button>
             </div>
+
+            <Show when=move || !loading.get() && !convertible().is_empty()>
+                <form on:submit=convert class="bg-gray-800 rounded-lg p-4 space-y-3">
+                    <h2 class="text-lg font-semibold text-white">"Bridge a LAN interface"</h2>
+                    <p class="text-sm text-gray-400">
+                        "To share the LAN with other ports or a Wi-Fi access point, move a LAN interface onto a new bridge. "
+                        "The bridge takes over its addresses, DHCP range and firewall zone, and the interface becomes its member. "
+                        "This only stages the change: review it and apply, and confirm within the time limit or it rolls back."
+                    </p>
+                    <div class="flex flex-wrap items-end gap-3">
+                        <div>
+                            <label class="block text-gray-300 mb-1 text-sm">"LAN interface"</label>
+                            <select
+                                class="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
+                                prop:value=move || convert_interface.get()
+                                on:change=move |ev| set_convert_interface.set(crate::components::form_utils::event_target_value(&ev))
+                            >
+                                <option value="">"Choose an interface"</option>
+                                {move || convertible()
+                                    .into_iter()
+                                    .map(|name| {
+                                        let value = name.clone();
+                                        view! { <option value=value>{name}</option> }
+                                    })
+                                    .collect_view()}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-gray-300 mb-1 text-sm">"New bridge name"</label>
+                            <input
+                                type="text"
+                                class="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white"
+                                prop:value=move || convert_name.get()
+                                on:input=move |ev| set_convert_name.set(crate::components::form_utils::event_target_value(&ev))
+                            />
+                        </div>
+                        <button
+                            type="submit"
+                            class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded disabled:opacity-50"
+                            disabled=move || converting.get()
+                        >
+                            {move || if converting.get() { "Converting..." } else { "Move onto a bridge" }}
+                        </button>
+                    </div>
+                </form>
+            </Show>
 
             <Show when=move || error_msg.get().is_some()>
                 <div class="bg-red-900/50 border border-red-500 rounded p-4 text-red-200">

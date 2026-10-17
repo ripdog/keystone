@@ -10,7 +10,7 @@ use crate::api;
 #[component]
 pub fn LoginPage(on_login: WriteSignal<Option<String>>) -> impl IntoView {
     crate::components::set_document_title("Sign in - Keystone");
-    let (username, set_username) = signal(String::from("admin"));
+    let (username, set_username) = signal(String::new());
     let (password, set_password) = signal(String::new());
     let (error_msg, set_error_msg) = signal(Option::<String>::None);
     let (loading, set_loading) = signal(false);

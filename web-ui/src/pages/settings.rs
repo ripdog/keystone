@@ -1,6 +1,6 @@
 //! System settings page
 
-use crate::components::use_toasts;
+use crate::components::{PendingActions, use_toasts};
 use keystone_core::{GlobalSettings, SaveUserRequest, UserInfo};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -14,6 +14,7 @@ pub fn SettingsPage(
     on_unauthorized: Callback<()>,
 ) -> impl IntoView {
     let toasts = use_toasts();
+    let actions = expect_context::<PendingActions>();
     let (users, set_users) = signal(Vec::<UserInfo>::new());
     let (show_user_modal, set_show_user_modal) = signal(false);
     let (editing_user, set_editing_user) = signal(Option::<UserInfo>::None);
@@ -250,6 +251,27 @@ pub fn SettingsPage(
                     >
                         "Open history"
                     </A>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h2 class="text-lg font-medium text-white">"Re-apply configuration"</h2>
+                        <p class="text-sm text-gray-500 mt-1">
+                            "Writes every saved setting to the router again, even when nothing is pending. "
+                            "Use it when a service still runs an old configuration, for example after a rollback. "
+                            "Network changes still need confirming, or they roll back."
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        class="shrink-0 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 text-white font-medium disabled:opacity-50"
+                        disabled=move || actions.locked.get()
+                        on:click=move |_| actions.apply_all.run(())
+                    >
+                        "Re-apply all"
+                    </button>
                 </div>
             </div>
 

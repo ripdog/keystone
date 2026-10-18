@@ -70,7 +70,7 @@ use std::sync::Arc;
 use tokio::net::UnixListener;
 use tower::ServiceExt;
 use tower_http::trace::TraceLayer;
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, warn};
 
 const DEV_HTTP_ADDR: &str = "127.0.0.1:3000";
 
@@ -764,8 +764,10 @@ async fn auth_middleware(
             && username == claims.sub
             && version == claims.version
         {
+            // Every line the handler logs names the caller.
+            let span = tracing::info_span!("user", name = %claims.sub);
             request.extensions_mut().insert(Actor(claims.sub));
-            return Ok(next.run(request).await);
+            return Ok(next.run(request).instrument(span).await);
         }
     }
 

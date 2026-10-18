@@ -6,7 +6,7 @@
 use keystone_core::LogLevel;
 use std::sync::OnceLock;
 use tracing_subscriber::{
-    EnvFilter, Registry, fmt, layer::SubscriberExt, reload, util::SubscriberInitExt,
+    EnvFilter, Layer, Registry, fmt, layer::SubscriberExt, reload, util::SubscriberInitExt,
 };
 
 type FilterHandle = reload::Handle<EnvFilter, Registry>;
@@ -26,8 +26,14 @@ pub fn init() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(directives(LogLevel::default())));
     let (filter, handle) = reload::Layer::new(filter);
-    // Colour codes are for terminals; in the journal they are noise.
-    let fmt_layer = fmt::layer().with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()));
+    // The journal stamps every line itself, and colour codes are for terminals.
+    let terminal = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let fmt_layer = fmt::layer().with_ansi(terminal);
+    let fmt_layer = if terminal {
+        fmt_layer.boxed()
+    } else {
+        fmt_layer.without_time().boxed()
+    };
     tracing_subscriber::registry()
         .with(filter)
         .with(fmt_layer)

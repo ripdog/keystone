@@ -33,7 +33,7 @@ use keystone_core::{
     StaticLeasesResponse,
 };
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::AppError;
 
@@ -92,7 +92,7 @@ pub fn dnsmasq_routes(state: DnsmasqState) -> Router<Arc<crate::AppState>> {
 async fn get_dnsmasq_state(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<DnsmasqStateResponse>, AppError> {
-    info!("Getting dnsmasq state");
+    debug!("Getting dnsmasq state");
     let pool = state.db.pool();
     let dnsmasq_state = dnsmasq::load_dnsmasq_state(pool).await?;
     Ok(Json(dnsmasq_state))
@@ -100,7 +100,7 @@ async fn get_dnsmasq_state(
 
 /// GET /dnsmasq/config - Get global dnsmasq config
 async fn get_config(State(state): State<DnsmasqState>) -> Result<Json<DnsmasqConfig>, AppError> {
-    info!("Getting dnsmasq config");
+    debug!("Getting dnsmasq config");
     let pool = state.db.pool();
     let config = dnsmasq::load_dnsmasq_config(pool).await?;
     Ok(Json(config))
@@ -141,7 +141,7 @@ async fn save_config(
 async fn get_ranges(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<DhcpRangesResponse>, AppError> {
-    info!("Getting DHCP ranges");
+    debug!("Getting DHCP ranges");
     let pool = state.db.pool();
     let ranges = dnsmasq::load_dhcp_ranges(pool).await?;
     Ok(Json(DhcpRangesResponse { ranges }))
@@ -199,7 +199,7 @@ async fn delete_range(
 async fn get_static_leases(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<StaticLeasesResponse>, AppError> {
-    info!("Getting static leases");
+    debug!("Getting static leases");
     let pool = state.db.pool();
     let leases = dnsmasq::load_static_leases(pool).await?;
     Ok(Json(StaticLeasesResponse { leases }))
@@ -258,7 +258,7 @@ async fn delete_static_lease(
 async fn get_options(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<DhcpOptionsResponse>, AppError> {
-    info!("Getting DHCP options");
+    debug!("Getting DHCP options");
     let pool = state.db.pool();
     let options = dnsmasq::load_dhcp_options(pool).await?;
     Ok(Json(DhcpOptionsResponse { options }))
@@ -315,7 +315,7 @@ async fn delete_option(
 async fn get_hosts(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<HostRecordsResponse>, AppError> {
-    info!("Getting host records");
+    debug!("Getting host records");
     let pool = state.db.pool();
     let records = dnsmasq::load_host_records(pool).await?;
     Ok(Json(HostRecordsResponse { records }))
@@ -372,7 +372,7 @@ async fn delete_host(
 async fn get_cnames(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<CnameRecordsResponse>, AppError> {
-    info!("Getting CNAME records");
+    debug!("Getting CNAME records");
     let pool = state.db.pool();
     let records = dnsmasq::load_cname_records(pool).await?;
     Ok(Json(CnameRecordsResponse { records }))
@@ -432,7 +432,7 @@ async fn delete_cname(
 async fn get_overrides(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<AddressOverridesResponse>, AppError> {
-    info!("Getting address overrides");
+    debug!("Getting address overrides");
     let pool = state.db.pool();
     let overrides = dnsmasq::load_address_overrides(pool).await?;
     Ok(Json(AddressOverridesResponse { overrides }))
@@ -489,7 +489,7 @@ async fn delete_override(
 async fn get_active_leases_endpoint(
     State(_state): State<DnsmasqState>,
 ) -> Result<Json<DhcpLeasesResponse>, AppError> {
-    info!("Getting active DHCP leases");
+    debug!("Getting active DHCP leases");
     let leases = get_active_leases()?;
     Ok(Json(DhcpLeasesResponse { leases }))
 }
@@ -502,7 +502,7 @@ async fn get_active_leases_endpoint(
 async fn preview_dnsmasq(
     State(state): State<DnsmasqState>,
 ) -> Result<Json<DnsmasqPreviewResponse>, AppError> {
-    info!("Generating dnsmasq config preview");
+    debug!("Generating dnsmasq config preview");
     let pool = state.db.pool();
     let config_content = dnsmasq::preview_dnsmasq_config(pool).await?;
     Ok(Json(DnsmasqPreviewResponse { config_content }))
@@ -564,7 +564,7 @@ async fn apply_dnsmasq(
 async fn get_dnsmasq_status(
     State(_state): State<DnsmasqState>,
 ) -> Result<Json<dnsmasq::DnsmasqServiceStatus>, AppError> {
-    info!("Getting dnsmasq status");
+    debug!("Getting dnsmasq status");
     let status = dnsmasq::get_dnsmasq_status();
     Ok(Json(status))
 }

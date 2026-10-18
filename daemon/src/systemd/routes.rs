@@ -8,7 +8,7 @@ use axum::{
 use keystone_core::{SystemdUnitControlResponse, SystemdUnitDetailResponse, SystemdUnitsResponse};
 use serde::Deserialize;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::AppError;
 
@@ -45,7 +45,7 @@ fn default_true() -> bool {
 async fn list_units(
     Query(query): Query<ListUnitsQuery>,
 ) -> Result<Json<SystemdUnitsResponse>, AppError> {
-    info!(
+    debug!(
         "Listing systemd units (keystone_only={})",
         query.keystone_only
     );
@@ -59,7 +59,7 @@ async fn list_units(
 async fn get_unit_detail(
     Path(name): Path<String>,
 ) -> Result<Json<SystemdUnitDetailResponse>, AppError> {
-    info!("Getting detail for unit: {}", name);
+    debug!("Getting detail for unit: {}", name);
 
     let unit = super::get_unit_detail(&name).await?;
 

@@ -12,7 +12,7 @@ use keystone_core::{
     InterfaceRole, WizardAdvanceResponse, WizardSaveInterfacesResponse, WizardSkipResponse,
     WizardState, WizardStateResponse, WizardStep,
 };
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{AppError, AppState, apply, soho, status};
 
@@ -29,7 +29,7 @@ pub fn wizard_routes() -> Router<Arc<AppState>> {
 async fn get_wizard_state(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<WizardStateResponse>, AppError> {
-    info!("Getting wizard state");
+    debug!("Getting wizard state");
 
     let settings = state.db.get_global_settings().await?;
     let current_step = WizardStep::from_u8(settings.wizard_step);

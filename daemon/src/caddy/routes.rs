@@ -20,7 +20,7 @@ use keystone_core::{
     CaddyValidateResponse, SaveCaddyConfigResponse,
 };
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::AppError;
 
@@ -54,7 +54,7 @@ pub fn caddy_routes(state: CaddyState) -> Router<Arc<crate::AppState>> {
 async fn get_caddy_state(
     State(state): State<CaddyState>,
 ) -> Result<Json<CaddyStateResponse>, AppError> {
-    info!("Getting Caddy state");
+    debug!("Getting Caddy state");
     let pool = state.db.pool();
     let config = caddy::load_caddy_config(pool).await?;
     let available_interfaces = state
@@ -74,7 +74,7 @@ async fn get_caddy_state(
 
 /// GET /caddy/config - Get Caddy configuration
 async fn get_config(State(state): State<CaddyState>) -> Result<Json<CaddyConfig>, AppError> {
-    info!("Getting Caddy config");
+    debug!("Getting Caddy config");
     let pool = state.db.pool();
     let config = caddy::load_caddy_config(pool).await?;
     Ok(Json(config))
@@ -112,7 +112,7 @@ async fn save_config(
 async fn preview_caddy(
     State(state): State<CaddyState>,
 ) -> Result<Json<CaddyPreviewResponse>, AppError> {
-    info!("Generating Caddyfile preview");
+    debug!("Generating Caddyfile preview");
     let pool = state.db.pool();
     let caddyfile = caddy::preview_caddyfile(pool).await?;
     Ok(Json(CaddyPreviewResponse { caddyfile }))
@@ -199,7 +199,7 @@ async fn apply_caddy(
 async fn get_caddy_status(
     State(_state): State<CaddyState>,
 ) -> Result<Json<caddy::CaddyServiceStatus>, AppError> {
-    info!("Getting Caddy status");
+    debug!("Getting Caddy status");
     let status = caddy::get_caddy_status();
     Ok(Json(status))
 }

@@ -45,7 +45,7 @@ use keystone_core::{
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::AppError;
 
@@ -164,7 +164,7 @@ fn tidy_group(entries: Vec<String>, description: Option<String>) -> (Vec<String>
 async fn get_address_groups(
     State(state): State<FirewallState>,
 ) -> Result<Json<AddressGroupsResponse>, AppError> {
-    info!("Getting address groups");
+    debug!("Getting address groups");
     let groups = state.db.get_address_groups().await?;
     Ok(Json(AddressGroupsResponse { groups }))
 }
@@ -225,7 +225,7 @@ async fn delete_address_group(
 async fn get_port_groups(
     State(state): State<FirewallState>,
 ) -> Result<Json<PortGroupsResponse>, AppError> {
-    info!("Getting port groups");
+    debug!("Getting port groups");
     let groups = state.db.get_port_groups().await?;
     Ok(Json(PortGroupsResponse { groups }))
 }
@@ -289,7 +289,7 @@ async fn delete_port_group(
 async fn get_zones(
     State(state): State<FirewallState>,
 ) -> Result<Json<FirewallZonesResponse>, AppError> {
-    info!("Getting firewall zones");
+    debug!("Getting firewall zones");
     let zones = state.db.get_firewall_zones().await?;
     Ok(Json(FirewallZonesResponse { zones }))
 }
@@ -299,7 +299,7 @@ async fn get_zone(
     State(state): State<FirewallState>,
     Path(id): Path<i64>,
 ) -> Result<Json<Option<FirewallZone>>, AppError> {
-    info!("Getting firewall zone id: {}", id);
+    debug!("Getting firewall zone id: {}", id);
     let zone = state.db.get_firewall_zone(id).await?;
     Ok(Json(zone))
 }
@@ -376,7 +376,7 @@ async fn delete_zone(
 async fn get_zone_forwards(
     State(state): State<FirewallState>,
 ) -> Result<Json<ZoneForwardsResponse>, AppError> {
-    info!("Getting zone forwards");
+    debug!("Getting zone forwards");
     let forwards = state.db.get_zone_forwards().await?;
     Ok(Json(ZoneForwardsResponse { forwards }))
 }
@@ -434,7 +434,7 @@ async fn delete_zone_forward(
 async fn get_input_rules(
     State(state): State<FirewallState>,
 ) -> Result<Json<InputRulesResponse>, AppError> {
-    info!("Getting input rules");
+    debug!("Getting input rules");
     let rules = state.db.get_input_rules().await?;
     Ok(Json(InputRulesResponse { rules }))
 }
@@ -520,7 +520,7 @@ async fn reorder_input_rules(
 async fn get_forward_rules(
     State(state): State<FirewallState>,
 ) -> Result<Json<ForwardRulesResponse>, AppError> {
-    info!("Getting forward rules");
+    debug!("Getting forward rules");
     let rules = state.db.get_forward_rules().await?;
     Ok(Json(ForwardRulesResponse { rules }))
 }
@@ -604,7 +604,7 @@ async fn reorder_forward_rules(
 async fn get_port_forwards(
     State(state): State<FirewallState>,
 ) -> Result<Json<PortForwardsResponse>, AppError> {
-    info!("Getting port forwards");
+    debug!("Getting port forwards");
     let port_forwards = state.db.get_port_forwards().await?;
     Ok(Json(PortForwardsResponse { port_forwards }))
 }
@@ -676,7 +676,7 @@ async fn delete_port_forward(
 async fn get_global_settings(
     State(state): State<FirewallState>,
 ) -> Result<Json<FirewallGlobalSettingsResponse>, AppError> {
-    info!("Getting firewall global settings");
+    debug!("Getting firewall global settings");
     let settings = state.db.get_firewall_global_settings().await?;
     Ok(Json(FirewallGlobalSettingsResponse { settings }))
 }
@@ -705,7 +705,7 @@ async fn save_global_settings(
 async fn get_firewall_config(
     State(state): State<FirewallState>,
 ) -> Result<Json<FirewallConfigResponse>, AppError> {
-    info!("Getting firewall config");
+    debug!("Getting firewall config");
     let config = state.db.get_firewall_config().await?;
     Ok(Json(FirewallConfigResponse { config }))
 }
@@ -714,14 +714,14 @@ async fn get_firewall_config(
 async fn preview_firewall(
     State(state): State<FirewallState>,
 ) -> Result<Json<FirewallPreviewResponse>, AppError> {
-    info!("Generating firewall preview");
+    debug!("Generating firewall preview");
     let ruleset = generate_preview(&state.db).await?;
     Ok(Json(FirewallPreviewResponse { ruleset }))
 }
 
 /// GET /firewall/preview/json - Preview generated nftables rules (raw JSON)
 async fn preview_firewall_json(State(state): State<FirewallState>) -> Result<String, AppError> {
-    info!("Generating firewall JSON preview");
+    debug!("Generating firewall JSON preview");
     let json = generate_json(&state.db).await?;
     Ok(json)
 }

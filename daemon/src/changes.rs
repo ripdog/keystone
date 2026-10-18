@@ -26,7 +26,7 @@ use keystone_core::changes::{
     SnapshotListResponse, SnapshotResponse, SnapshotSummary,
 };
 use similar::TextDiff;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::db::Database;
 use crate::firewall::FirewallApplyManager;
@@ -533,7 +533,7 @@ fn actor_name(actor: &Option<Extension<Actor>>) -> Option<&str> {
 async fn get_pending_changes(
     State(state): State<ChangesState>,
 ) -> Result<Json<PendingChangesResponse>, AppError> {
-    info!("Computing pending configuration changes");
+    debug!("Computing pending configuration changes");
     let live = state.firewall.awaiting_confirmation().await;
     Ok(Json(pending_changes(&state.db, &live).await?))
 }

@@ -70,7 +70,7 @@ use std::sync::Arc;
 use tokio::net::UnixListener;
 use tower::ServiceExt;
 use tower_http::trace::TraceLayer;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 const DEV_HTTP_ADDR: &str = "127.0.0.1:3000";
 
@@ -557,7 +557,7 @@ async fn lan_bind_addresses(
 async fn get_system_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<SystemStatusResponse>, AppError> {
-    info!("Performing system status checks");
+    debug!("Performing system status checks");
 
     let settings = state.db.get_global_settings().await?;
     let mut response = status::perform_all_checks(settings.setup_complete);
@@ -775,7 +775,7 @@ async fn auth_middleware(
 
 /// GET /state - Retrieve current system state
 async fn get_state(State(state): State<Arc<AppState>>) -> Result<Json<SystemState>, AppError> {
-    info!("Retrieving system state");
+    debug!("Retrieving system state");
 
     let configs = state.db.get_interface_configs().await?;
     Ok(Json(read_system_state(&configs).unwrap_or_default()))
@@ -785,7 +785,7 @@ async fn get_state(State(state): State<Arc<AppState>>) -> Result<Json<SystemStat
 async fn get_dashboard(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<DashboardResponse>, AppError> {
-    info!("Retrieving dashboard");
+    debug!("Retrieving dashboard");
 
     let configs = state.db.get_interface_configs().await?;
     let gateways = state.gateways.read().await.clone();
@@ -1022,7 +1022,7 @@ fn read_system_state(configs: &[keystone_core::InterfaceConfig]) -> anyhow::Resu
 async fn get_managed_interfaces(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ManagedInterfacesResponse>, AppError> {
-    info!("Retrieving managed interfaces");
+    debug!("Retrieving managed interfaces");
 
     let interfaces = state.db.get_managed_interfaces().await?;
 
@@ -1055,7 +1055,7 @@ async fn save_managed_interfaces(
 async fn get_interface_configs(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<InterfaceConfigsResponse>, AppError> {
-    info!("Retrieving interface configurations");
+    debug!("Retrieving interface configurations");
 
     let configs = state.db.get_interface_configs().await?;
 
@@ -1067,7 +1067,7 @@ async fn get_interface_config(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Result<Json<InterfaceConfigResponse>, AppError> {
-    info!("Retrieving interface config for: {}", name);
+    debug!("Retrieving interface config for: {}", name);
 
     let config = state.db.get_interface_config(&name).await?;
 
@@ -1341,7 +1341,7 @@ async fn run_networkctl(name: &str, action: &'static str) -> Result<(), AppError
 async fn get_vlans(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<VlanConfigsResponse>, AppError> {
-    info!("Retrieving VLAN configurations");
+    debug!("Retrieving VLAN configurations");
 
     let configs = state.db.get_all_vlans().await?;
 
@@ -1353,7 +1353,7 @@ async fn get_vlan(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<VlanConfigResponse>, AppError> {
-    info!("Retrieving VLAN config for id: {}", id);
+    debug!("Retrieving VLAN config for id: {}", id);
 
     let config = state.db.get_vlan(id).await?;
 
@@ -1439,7 +1439,7 @@ async fn delete_vlan(
 async fn get_bridges(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<keystone_core::BridgeConfigsResponse>, AppError> {
-    info!("Getting all bridge configs");
+    debug!("Getting all bridge configs");
     let configs = state.db.get_all_bridges().await?;
     Ok(Json(keystone_core::BridgeConfigsResponse { configs }))
 }
@@ -1449,7 +1449,7 @@ async fn get_bridge(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(id): axum::extract::Path<i64>,
 ) -> Result<Json<keystone_core::BridgeConfigResponse>, AppError> {
-    info!("Getting bridge config id: {}", id);
+    debug!("Getting bridge config id: {}", id);
     let config = state.db.get_bridge(id).await?;
     Ok(Json(keystone_core::BridgeConfigResponse { config }))
 }
@@ -1620,7 +1620,7 @@ pub(crate) async fn networkd_preview_files(
 async fn networkd_preview(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<keystone_core::NetworkdPreviewResponse>, AppError> {
-    info!("Generating networkd preview");
+    debug!("Generating networkd preview");
     let files = networkd_preview_files(&state.db).await?;
     Ok(Json(keystone_core::NetworkdPreviewResponse { files }))
 }
@@ -1771,7 +1771,7 @@ async fn apply_all(
 
 /// GET /users - Get all users
 async fn get_users(State(state): State<Arc<AppState>>) -> Result<Json<UsersResponse>, AppError> {
-    info!("Retrieving users");
+    debug!("Retrieving users");
 
     let users = state.db.get_users().await?;
 
@@ -1887,7 +1887,7 @@ async fn delete_user(
 async fn get_global_settings(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<GlobalSettingsResponse>, AppError> {
-    info!("Retrieving global settings");
+    debug!("Retrieving global settings");
 
     let settings = state.db.get_global_settings().await?;
 

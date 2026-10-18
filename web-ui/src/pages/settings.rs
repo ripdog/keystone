@@ -1,7 +1,7 @@
 //! System settings page
 
 use crate::components::{PendingActions, use_toasts};
-use keystone_core::{GlobalSettings, SaveUserRequest, UserInfo};
+use keystone_core::{GlobalSettings, LogLevel, SaveUserRequest, UserInfo};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use leptos_router::components::A;
@@ -325,6 +325,54 @@ pub fn SettingsPage(
                         <p class="text-sm text-gray-500 mt-2">
                             "When enabled, prevents applying any configuration changes to the router. "
                             "Useful for preventing accidental changes in production."
+                        </p>
+                    </div>
+                </Show>
+            </div>
+
+            <div class="bg-gray-800 rounded-lg p-6 shadow-lg">
+                <h2 class="text-lg font-medium text-white mb-4">"Daemon Logging"</h2>
+
+                <Show when=move || !settings_loading.get()>
+                    <div class="bg-gray-700 rounded p-4">
+                        <label class="block text-sm text-gray-300 mb-2" for="log-level">
+                            "Log level"
+                        </label>
+                        <select
+                            id="log-level"
+                            class="bg-gray-600 text-white rounded px-3 py-2"
+                            prop:value=move || global_settings.get().log_level.as_str()
+                            on:change=move |ev| {
+                                let Ok(level) = event_target_value(&ev).parse::<LogLevel>() else {
+                                    return;
+                                };
+                                let token = match auth_token.get() {
+                                    Some(t) => t,
+                                    None => return,
+                                };
+                                let mut settings = global_settings.get();
+                                settings.log_level = level;
+                                set_global_settings.set(settings.clone());
+                                spawn_local(async move {
+                                    match api::save_global_settings(&token, settings).await {
+                                        Ok(response) if response.success => {
+                                            toasts.success(format!("Log level set to {}", level.as_str()));
+                                        }
+                                        Ok(response) => set_error_msg.set(Some(response.message)),
+                                        Err(e) => set_error_msg.set(Some(format!("Error: {}", e))),
+                                    }
+                                });
+                            }
+                        >
+                            {LogLevel::ALL
+                                .into_iter()
+                                .map(|level| view! { <option value=level.as_str()>{level.as_str()}</option> })
+                                .collect_view()}
+                        </select>
+                        <p class="text-sm text-gray-500 mt-2">
+                            "How much the Keystone daemon writes to the system journal. Applies "
+                            "immediately and persists across restarts. Use debug or trace only "
+                            "while troubleshooting."
                         </p>
                     </div>
                 </Show>

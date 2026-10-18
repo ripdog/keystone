@@ -22,6 +22,7 @@ mod dnsmasq;
 mod firewall;
 mod gateway;
 mod interface_rename;
+mod log_level;
 mod logs;
 mod mdns;
 mod networkd;
@@ -112,15 +113,7 @@ impl AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
-    // Colour codes are for terminals; in the journal they are noise.
-    tracing_subscriber::fmt()
-        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "keystone_daemon=debug,tower_http=debug".into()),
-        )
-        .init();
+    log_level::init();
 
     info!("Starting Keystone Daemon");
 
@@ -133,6 +126,12 @@ async fn main() -> anyhow::Result<()> {
     // Initialize database
     let db = Database::new().await?;
     info!("Database initialized");
+
+    // The level chosen in the web UI replaces the startup default.
+    match db.get_global_settings().await {
+        Ok(settings) => log_level::apply(settings.log_level),
+        Err(error) => warn!("Failed to load log level, keeping the default: {error:#}"),
+    }
 
     // Get or create JWT key from database
     let jwt_key = db.get_or_create_jwt_key().await?;
@@ -1906,6 +1905,7 @@ async fn save_global_settings(
     );
 
     state.db.save_global_settings(&request.settings).await?;
+    log_level::apply(request.settings.log_level);
 
     Ok(Json(SaveGlobalSettingsResponse {
         success: true,

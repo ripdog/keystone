@@ -17,19 +17,22 @@ impl<'a> SettingsDb<'a> {
 
     /// Get global application settings
     pub async fn get_global_settings(&self) -> Result<GlobalSettings> {
-        let row = sqlx::query_as::<_, (bool, bool, i64)>(
-            "SELECT config_changes_disabled, setup_complete, wizard_step FROM global_settings WHERE id = 1",
+        let row = sqlx::query_as::<_, (bool, bool, i64, String)>(
+            "SELECT config_changes_disabled, setup_complete, wizard_step, log_level FROM global_settings WHERE id = 1",
         )
         .fetch_optional(self.pool)
         .await
         .context("Failed to fetch global settings")?;
 
         match row {
-            Some((config_changes_disabled, setup_complete, wizard_step)) => Ok(GlobalSettings {
-                config_changes_disabled,
-                setup_complete,
-                wizard_step: wizard_step as u8,
-            }),
+            Some((config_changes_disabled, setup_complete, wizard_step, log_level)) => {
+                Ok(GlobalSettings {
+                    config_changes_disabled,
+                    setup_complete,
+                    wizard_step: wizard_step as u8,
+                    log_level: log_level.parse().unwrap_or_default(),
+                })
+            }
             None => {
                 // Return defaults if no row exists (shouldn't happen after migration)
                 Ok(GlobalSettings::default())
@@ -41,12 +44,13 @@ impl<'a> SettingsDb<'a> {
     pub async fn save_global_settings(&self, settings: &GlobalSettings) -> Result<()> {
         sqlx::query(
             r#"INSERT OR REPLACE INTO global_settings 
-               (id, config_changes_disabled, setup_complete, wizard_step, updated_at)
-               VALUES (1, ?, ?, ?, strftime('%s', 'now'))"#,
+               (id, config_changes_disabled, setup_complete, wizard_step, log_level, updated_at)
+               VALUES (1, ?, ?, ?, ?, strftime('%s', 'now'))"#,
         )
         .bind(settings.config_changes_disabled)
         .bind(settings.setup_complete)
         .bind(settings.wizard_step as i64)
+        .bind(settings.log_level.as_str())
         .execute(self.pool)
         .await
         .context("Failed to save global settings")?;

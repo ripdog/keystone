@@ -2735,6 +2735,50 @@ pub struct ConnectionsResponse {
 // Global Settings Types
 // ============================================================================
 
+/// Verbosity of the daemon's own logging.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub const ALL: [LogLevel; 5] = [
+        LogLevel::Error,
+        LogLevel::Warn,
+        LogLevel::Info,
+        LogLevel::Debug,
+        LogLevel::Trace,
+    ];
+
+    /// Lowercase name, as stored in the database and used in filter directives.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
+}
+
+impl std::str::FromStr for LogLevel {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        LogLevel::ALL
+            .into_iter()
+            .find(|level| level.as_str() == value)
+            .ok_or_else(|| format!("unknown log level '{value}'"))
+    }
+}
+
 /// Global application settings that affect system-wide behavior
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct GlobalSettings {
@@ -2748,6 +2792,9 @@ pub struct GlobalSettings {
     /// Current wizard step (0-4). When >= 4, wizard is complete.
     #[serde(default)]
     pub wizard_step: u8,
+    /// Verbosity of the daemon's logs. Applied immediately, without a restart.
+    #[serde(default)]
+    pub log_level: LogLevel,
 }
 
 /// Response containing global settings

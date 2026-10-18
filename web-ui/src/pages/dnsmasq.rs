@@ -1473,7 +1473,10 @@ fn common_dhcp_options(ipv6: bool) -> &'static [(&'static str, &'static str)] {
 /// The selector value for a stored option name: its preset name when it is a
 /// common option for the family, otherwise the custom key.
 fn dhcp_option_choice(option: &str, ipv6: bool) -> String {
-    if common_dhcp_options(ipv6).iter().any(|(name, _)| *name == option) {
+    if common_dhcp_options(ipv6)
+        .iter()
+        .any(|(name, _)| *name == option)
+    {
         option.to_string()
     } else {
         CUSTOM_OPTION_KEY.to_string()

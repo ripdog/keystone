@@ -279,7 +279,7 @@ pub fn start(db: Database) -> ClientTrafficSnapshot {
         let mut tick_count: u64 = 0;
         loop {
             ticker.tick().await;
-            if installed_for.is_none() || tick_count % WAN_REFRESH_TICKS == 0 {
+            if installed_for.is_none() || tick_count.is_multiple_of(WAN_REFRESH_TICKS) {
                 match wan_interfaces(&db).await {
                     Ok(wan) if installed_for.as_ref() != Some(&wan) => match install(&wan).await {
                         Ok(()) => {

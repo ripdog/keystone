@@ -92,6 +92,12 @@ fn local_parts(realtime_us: u64) -> (String, String) {
     )
 }
 
+/// Local `YYYY-MM-DD HH:MM:SS.mmm` of a journal timestamp.
+fn local_full(realtime_us: u64) -> String {
+    let (day, time) = local_parts(realtime_us);
+    format!("{day} {time}.{:03}", (realtime_us / 1000) % 1000)
+}
+
 /// Microseconds since the epoch of a `datetime-local` value (local time), or
 /// `None` when it is empty or not a date.
 fn parse_local_datetime(value: &str) -> Option<u64> {
@@ -133,6 +139,9 @@ pub fn LogViewer(
     let entries = RwSignal::new(Vec::<JournalEntry>::new());
     let paused = RwSignal::new(false);
     let filter = RwSignal::new(String::new());
+    // Show the date and milliseconds in the time column, for lining entries up
+    // with other logs.
+    let full_time = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
     let cursor_reset = RwSignal::new(false);
     // Set while the view is a jump to a date; streaming is then off.
@@ -311,6 +320,11 @@ pub fn LogViewer(
         let mut out = Vec::new();
         for entry in entries.get() {
             let (day, time) = local_parts(entry.realtime_us);
+            let shown_time = if full_time.get() {
+                local_full(entry.realtime_us)
+            } else {
+                time.clone()
+            };
             let source = short_unit(&entry.unit).to_string();
             let pid = entry.pid.map(|pid| format!("[{pid}]")).unwrap_or_default();
             let fields = [
@@ -338,7 +352,7 @@ pub fn LogViewer(
             out.push(
                 view! {
                     <tr class="align-top hover:bg-white/[0.03]" title=priority_name(entry.priority)>
-                        <td class="pl-3 pr-2 py-0.5 whitespace-nowrap text-slate-500">{time}</td>
+                        <td class="pl-3 pr-2 py-0.5 whitespace-nowrap text-slate-500">{shown_time}</td>
                         <td class="px-2 py-0.5 whitespace-nowrap">
                             {show_unit.then(|| view! {
                                 <span class=unit_class(&entry.unit)>{source}</span>
@@ -392,6 +406,14 @@ pub fn LogViewer(
                 >
                     "Latest"
                 </button>
+                <label class="flex items-center gap-2 text-sm text-slate-400">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || full_time.get()
+                        on:change=move |ev| full_time.set(event_target_checked(&ev))
+                    />
+                    "Full timestamps"
+                </label>
                 <div class="ml-auto">
                     <FilterBox query=filter placeholder="Filter loaded lines" />
                 </div>

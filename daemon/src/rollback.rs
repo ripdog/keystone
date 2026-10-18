@@ -7,7 +7,8 @@
 //! the address the web service binds) describes the new one. A rolled back
 //! apply is therefore undone completely: the components it covered return to
 //! their last applied configuration, and the services that apply without a
-//! rollback timer are applied again from it.
+//! rollback timer (including mDNS, which the network apply configures) are
+//! applied again from it.
 //!
 //! The configuration that is replaced is kept as a `pre_restore` snapshot, so
 //! the rejected edits can still be brought back from the history page.
@@ -18,7 +19,7 @@ use tracing::{error, info, warn};
 
 use crate::db::Database;
 use crate::snapshots::{self, SnapshotStatus};
-use crate::{blocky, caddy, dnsmasq, sqm, upnp, wireless};
+use crate::{blocky, caddy, dnsmasq, mdns, sqm, upnp, wireless};
 
 /// Settle the snapshot of a rolled back apply session and undo its
 /// configuration. Failures are logged: the rollback itself already happened.
@@ -71,6 +72,11 @@ async fn reapply_services(db: &Database, components: &[Component]) {
             }
         };
     }
+    // mDNS is part of the network apply, but its avahi configuration is not
+    // among the files a network rollback restores.
+    reapply!(Component::Networkd, "mDNS", async {
+        mdns::apply(&db.get_interface_configs().await?).await
+    });
     reapply!(Component::Sqm, "SQM", sqm::apply_saved(db));
     reapply!(Component::Upnp, "UPnP", upnp::apply_saved(db));
     reapply!(Component::Blocky, "Blocky", blocky::apply_saved(db));

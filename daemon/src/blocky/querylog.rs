@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use keystone_core::DhcpLease;
@@ -245,9 +246,10 @@ fn entry_from_record(
         return None;
     }
     let client_ip = record[1].clone();
-    // Blocky fills client_names only when client lookup is configured. Fall
-    // back to the DHCP lease hostname, which dnsmasq knows.
-    let client_name = if record[2].is_empty() {
+    // Blocky has real client names only when client lookup is configured;
+    // otherwise it writes nothing or just an address. Fall back to the DHCP
+    // lease hostname, which dnsmasq knows.
+    let client_name = if record[2].is_empty() || record[2].parse::<IpAddr>().is_ok() {
         lease_names.get(&client_ip).cloned()
     } else {
         Some(record[2].clone())
@@ -389,6 +391,23 @@ mod tests {
         let entry = entry_from_record(&record, &names).unwrap();
         assert_eq!(entry.client_name.as_deref(), Some("tablet; kids"));
         assert!(entry.blocked);
+    }
+
+    #[test]
+    fn a_bare_address_as_client_name_is_not_a_name() {
+        let names = lease_hostnames(&[lease("192.168.1.20", Some("laptop"))]);
+        let text = line(
+            "2026-10-14 09:00:00",
+            "192.168.1.20",
+            "127.0.0.1",
+            "x.test",
+            "RESOLVED",
+        );
+        let record = parse_records(&text).remove(0);
+        let entry = entry_from_record(&record, &names).unwrap();
+        assert_eq!(entry.client_name.as_deref(), Some("laptop"));
+        let entry = entry_from_record(&record, &HashMap::new()).unwrap();
+        assert_eq!(entry.client_name, None);
     }
 
     #[test]

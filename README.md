@@ -17,6 +17,19 @@ Keystone turns a spare x86 box into a home or small-office router with a browser
 
 > **Status: pre-1.0.** Keystone is under active development and used on real hardware, but network and firewall changes can disconnect a router. Try it on a spare machine or VM and keep console access while you configure it.
 
+<p align="center">
+  <img src="docs/assets/dashboard.png" alt="Keystone dashboard: WAN gateway health, interface addresses, system load, service controls and live traffic graphs" width="100%">
+</p>
+
+<details>
+<summary>More screenshots</summary>
+
+<p align="center">
+  <img src="docs/assets/clients.png" alt="Keystone clients page: LAN devices with addresses, vendors, static reservations and port-forward shortcuts" width="100%">
+</p>
+
+</details>
+
 ## Why Keystone
 
 - **Safe to change remotely.** Edits are staged, previewed and applied together. Network and firewall applies come with a 60-second rollback timer, so a change that cuts you off reverts itself. Every apply is snapshotted and can be diffed, restored, exported and imported.
@@ -73,6 +86,7 @@ A Rust workspace of four crates: `core` (shared models), `daemon` (root backend)
 | [Architecture](docs/architecture.md) | Components, security model, apply/rollback lifecycle, firewall design |
 | [Development](docs/development.md) | Toolchain, `just` commands, running locally, tests, packaging |
 | [Vagrant testing](docs/vagrant.md) | Two-VM lab and end-to-end integration tests |
+| [Changelog](CHANGELOG.md) | What changed in each release |
 | [AGENTS.md](AGENTS.md) | Repository layout and rules for contributors and coding agents |
 
 ## Contributing

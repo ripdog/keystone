@@ -10,7 +10,7 @@
 use anyhow::{Context, Result};
 use keystone_core::{ConnectionEntry, ConnectionsResponse};
 use quick_xml::{
-    Reader,
+    Reader, XmlVersion,
     events::{BytesStart, Event},
 };
 use std::net::IpAddr;
@@ -178,7 +178,7 @@ fn attribute(element: &BytesStart, name: &str) -> Option<String> {
         .try_get_attribute(name)
         .ok()
         .flatten()?
-        .unescape_value()
+        .normalized_value(XmlVersion::Implicit1_0)
         .ok()
         .map(|value| value.into_owned())
 }
@@ -209,22 +209,22 @@ pub(crate) fn parse_flow(xml: &str) -> Option<ConnectionEntry> {
     loop {
         match reader.read_event().ok()? {
             Event::Start(element) => {
-                let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                let name = element.name().as_ref().to_owned();
                 apply_element(&name, &element, &mut direction, &mut original, &mut reply);
                 path.push(name);
             }
             Event::Empty(element) => {
-                let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                let name = element.name().as_ref().to_owned();
                 apply_element(&name, &element, &mut direction, &mut original, &mut reply);
             }
             Event::End(element) => {
                 path.pop();
-                if element.name().as_ref() == b"meta" {
+                if element.name().as_ref() == "meta" {
                     direction = None;
                 }
             }
             Event::Text(text) => {
-                let value = text.unescape().ok()?.trim().to_string();
+                let value = text.xml10_content().trim().to_string();
                 if value.is_empty() {
                     continue;
                 }

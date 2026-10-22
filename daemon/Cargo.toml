@@ -51,7 +51,7 @@ socket2 = { version = "0.6", features = ["all"] }
 # Firewall (nftables)
 nftables = "0.6"
 # Parses `conntrack -L -o xml` output for the connections view.
-quick-xml = "0.37"
+quick-xml = "0.42"
 uuid = { version = "1.11", features = ["v4"] }
 
 # Line diffs of generated configuration

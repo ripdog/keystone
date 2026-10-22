@@ -409,6 +409,7 @@ pub fn merge_clients(src: &ClientSources<'_>) -> Vec<Client> {
         client.port_forward_count = src
             .forwards
             .iter()
+            .filter(|forward| forward.enabled)
             .filter(|forward| forward_targets(forward).any(|ip| addresses.contains(&ip)))
             .count();
     }
@@ -682,6 +683,10 @@ mod tests {
         let forwards = [
             forward(Some("192.168.1.20"), None),
             forward(Some("192.168.1.99"), None),
+            SimplePortForward {
+                enabled: false,
+                ..forward(Some("192.168.1.20"), None)
+            },
         ];
 
         let clients = merge(&neighbours, &leases, &statics, &forwards);

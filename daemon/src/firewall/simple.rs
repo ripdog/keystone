@@ -395,13 +395,13 @@ pub async fn create(
         for ip in &addresses {
             let dest_port = req.destination_port.unwrap_or(req.port);
             let name = rule_name(&zone.name, protocol, req.port, *ip, dest_port);
-            sqlx::query("INSERT INTO firewall_forward_rules (name, description, simple_forward_group, enabled, position, source_zone_id, protocol, dest_port_start, dest_ip, action, log_enabled, created_at, updated_at) VALUES (?, ?, ?, 1, 0, ?, ?, ?, ?, 'accept', 0, strftime('%s','now'), strftime('%s','now'))")
-                .bind(&name).bind(&description).bind(&pair_key).bind(zone_id)
+            sqlx::query("INSERT INTO firewall_forward_rules (name, description, simple_forward_group, enabled, position, source_zone_id, protocol, dest_port_start, dest_ip, action, log_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, 'accept', 0, strftime('%s','now'), strftime('%s','now'))")
+                .bind(&name).bind(&description).bind(&pair_key).bind(req.enabled).bind(zone_id)
                 .bind(protocol.to_string()).bind(dest_port as i64).bind(ip.to_string())
                 .execute(&mut *tx).await?;
             if ip.is_ipv4() {
-                sqlx::query("INSERT INTO firewall_port_forwards (name, description, enabled, protocol, source_zone_id, external_port_start, dest_ip, dest_port, created_at, updated_at) VALUES (?, ?, 1, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))")
-                    .bind(&name).bind(&description).bind(protocol.to_string()).bind(zone_id)
+                sqlx::query("INSERT INTO firewall_port_forwards (name, description, enabled, protocol, source_zone_id, external_port_start, dest_ip, dest_port, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))")
+                    .bind(&name).bind(&description).bind(req.enabled).bind(protocol.to_string()).bind(zone_id)
                     .bind(req.port as i64).bind(ip.to_string()).bind(dest_port as i64)
                     .execute(&mut *tx).await?;
             }
@@ -467,8 +467,8 @@ pub async fn update(
                 *ip,
                 dest_port,
             );
-            sqlx::query("INSERT INTO firewall_forward_rules (name, description, simple_forward_group, enabled, position, source_zone_id, dest_zone_id, protocol, dest_port_start, source_ip, dest_ip, action, log_enabled, log_prefix, rate_limit, created_at, updated_at) SELECT ?, ?, ?, enabled, position, source_zone_id, dest_zone_id, ?, ?, source_ip, ?, action, log_enabled, log_prefix, rate_limit, strftime('%s','now'), strftime('%s','now') FROM firewall_forward_rules WHERE id = ?")
-                .bind(name).bind(&description).bind(&key).bind(protocol.to_string())
+            sqlx::query("INSERT INTO firewall_forward_rules (name, description, simple_forward_group, enabled, position, source_zone_id, dest_zone_id, protocol, dest_port_start, source_ip, dest_ip, action, log_enabled, log_prefix, rate_limit, created_at, updated_at) SELECT ?, ?, ?, ?, position, source_zone_id, dest_zone_id, ?, ?, source_ip, ?, action, log_enabled, log_prefix, rate_limit, strftime('%s','now'), strftime('%s','now') FROM firewall_forward_rules WHERE id = ?")
+                .bind(name).bind(&description).bind(&key).bind(req.enabled).bind(protocol.to_string())
                 .bind(dest_port as i64).bind(ip.to_string()).bind(rule_id)
                 .execute(&mut *tx).await?;
         }
@@ -493,8 +493,8 @@ pub async fn update(
                 *ip,
                 dest_port,
             );
-            sqlx::query("UPDATE firewall_forward_rules SET name = ?, description = ?, simple_forward_group = ?, protocol = ?, dest_port_start = ?, dest_ip = ?, updated_at = strftime('%s','now') WHERE id = ?")
-                .bind(name).bind(&description).bind(&key).bind(protocol.to_string())
+            sqlx::query("UPDATE firewall_forward_rules SET name = ?, description = ?, simple_forward_group = ?, enabled = ?, protocol = ?, dest_port_start = ?, dest_ip = ?, updated_at = strftime('%s','now') WHERE id = ?")
+                .bind(name).bind(&description).bind(&key).bind(req.enabled).bind(protocol.to_string())
                 .bind(dest_port as i64).bind(ip.to_string()).bind(old)
                 .execute(&mut *tx).await?;
         } else {
@@ -520,19 +520,19 @@ pub async fn update(
             .filter(|_| old_nats.len() == 1)
             .filter(|id| !old_nat_ids_used_elsewhere.contains(id))
         {
-            sqlx::query("UPDATE firewall_port_forwards SET name = ?, description = ?, protocol = ?, external_port_start = ?, dest_ip = ?, dest_port = ?, updated_at = strftime('%s','now') WHERE id = ?")
-                .bind(&name).bind(&description).bind(protocol.to_string())
+            sqlx::query("UPDATE firewall_port_forwards SET name = ?, description = ?, enabled = ?, protocol = ?, external_port_start = ?, dest_ip = ?, dest_port = ?, updated_at = strftime('%s','now') WHERE id = ?")
+                .bind(&name).bind(&description).bind(req.enabled).bind(protocol.to_string())
                 .bind(req.port as i64).bind(ip.to_string()).bind(dest_port as i64).bind(nat_id)
                 .execute(&mut *tx).await?;
             retained_nat = Some(nat_id);
         } else if let Some(nat_id) = nat_template_id {
-            sqlx::query("INSERT INTO firewall_port_forwards (name, description, enabled, protocol, source_zone_id, external_port_start, source_ip, dest_ip, dest_port, created_at, updated_at) SELECT ?, ?, enabled, ?, source_zone_id, ?, source_ip, ?, ?, strftime('%s','now'), strftime('%s','now') FROM firewall_port_forwards WHERE id = ?")
-                .bind(&name).bind(&description).bind(protocol.to_string())
+            sqlx::query("INSERT INTO firewall_port_forwards (name, description, enabled, protocol, source_zone_id, external_port_start, source_ip, dest_ip, dest_port, created_at, updated_at) SELECT ?, ?, ?, ?, source_zone_id, ?, source_ip, ?, ?, strftime('%s','now'), strftime('%s','now') FROM firewall_port_forwards WHERE id = ?")
+                .bind(&name).bind(&description).bind(req.enabled).bind(protocol.to_string())
                 .bind(req.port as i64).bind(ip.to_string()).bind(dest_port as i64).bind(nat_id)
                 .execute(&mut *tx).await?;
         } else {
-            sqlx::query("INSERT INTO firewall_port_forwards (name, description, enabled, protocol, source_zone_id, external_port_start, source_ip, dest_ip, dest_port, created_at, updated_at) SELECT ?, ?, enabled, ?, source_zone_id, ?, source_ip, ?, ?, strftime('%s','now'), strftime('%s','now') FROM firewall_forward_rules WHERE simple_forward_group = ? LIMIT 1")
-                .bind(&name).bind(&description).bind(protocol.to_string())
+            sqlx::query("INSERT INTO firewall_port_forwards (name, description, enabled, protocol, source_zone_id, external_port_start, source_ip, dest_ip, dest_port, created_at, updated_at) SELECT ?, ?, ?, ?, source_zone_id, ?, source_ip, ?, ?, strftime('%s','now'), strftime('%s','now') FROM firewall_forward_rules WHERE simple_forward_group = ? LIMIT 1")
+                .bind(&name).bind(&description).bind(req.enabled).bind(protocol.to_string())
                 .bind(req.port as i64).bind(ip.to_string()).bind(dest_port as i64).bind(&key)
                 .execute(&mut *tx).await?;
         }
@@ -686,6 +686,7 @@ mod tests {
             port: 443,
             destination_port: None,
             description: Some("Media\nserver".into()),
+            enabled: true,
         };
         assert!(validate(&r).is_err());
         r.description = Some("  Media server  ".into());
@@ -702,6 +703,7 @@ mod tests {
             port: 443,
             destination_port: None,
             description: None,
+            enabled: true,
         };
         assert_eq!(validate(&r).unwrap().len(), 2);
         r.destination_port = Some(8443);
@@ -870,6 +872,7 @@ mod tests {
             port: 8080,
             destination_port: None,
             description: Some("Media server".into()),
+            enabled: true,
         };
         let Json(created) = create(State(state.clone()), Json(request))
             .await
@@ -917,6 +920,7 @@ mod tests {
             port: 8888,
             destination_port: Some(9999),
             description: Some("Updated comment".into()),
+            enabled: true,
         };
         let Json(updated) = update(State(state.clone()), Path(pair.rule_id), Json(edit.clone()))
             .await
@@ -933,13 +937,61 @@ mod tests {
         assert_eq!(db.get_forward_rules().await.unwrap().len(), 1);
         edit.ipv6 = Some("2001:db8::41".into());
         edit.destination_port = None;
-        let Json(updated) = update(State(state.clone()), Path(single.rule_id), Json(edit))
-            .await
-            .unwrap_or_else(|e| panic!("{}", e.0));
+        let Json(updated) = update(
+            State(state.clone()),
+            Path(single.rule_id),
+            Json(edit.clone()),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.0));
         assert_eq!(updated.forwards.len(), 1);
         assert!(updated.forwards[0].ipv6.is_some());
         assert!(updated.forwards[0].ipv4.is_some());
         assert_eq!(db.get_forward_rules().await.unwrap().len(), 2);
+
+        // Disabling keeps the forward listed but out of the generated ruleset.
+        let generated = || async {
+            let config = db.get_firewall_config().await.unwrap();
+            serde_json::to_string(&super::super::generate::generate_ruleset(&config).nftables)
+                .unwrap()
+        };
+        assert!(generated().await.contains("192.168.1.41"));
+        edit.enabled = false;
+        let Json(disabled) = update(
+            State(state.clone()),
+            Path(updated.forwards[0].rule_id),
+            Json(edit.clone()),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.0));
+        assert_eq!(disabled.forwards.len(), 1);
+        assert!(!disabled.forwards[0].enabled);
+        assert!(
+            db.get_forward_rules()
+                .await
+                .unwrap()
+                .iter()
+                .all(|r| !r.enabled)
+        );
+        assert!(
+            db.get_port_forwards()
+                .await
+                .unwrap()
+                .iter()
+                .all(|p| !p.enabled)
+        );
+        let off = generated().await;
+        assert!(!off.contains("192.168.1.41") && !off.contains("2001:db8::41"));
+        edit.enabled = true;
+        let Json(updated) = update(
+            State(state.clone()),
+            Path(disabled.forwards[0].rule_id),
+            Json(edit),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{}", e.0));
+        assert!(updated.forwards[0].enabled);
+        assert!(generated().await.contains("192.168.1.41"));
         for f in updated.forwards {
             let Json(deleted) = remove(State(state.clone()), Path(f.rule_id))
                 .await

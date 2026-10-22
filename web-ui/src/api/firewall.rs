@@ -3,7 +3,7 @@
 use keystone_core::api::{
     ConfirmFirewall, CreateSimpleForward, Endpoint, ReorderForwardRules, ReorderInputRules,
     SaveAddressGroup, SaveFirewallGlobalSettings, SaveFirewallZone, SaveForwardRule, SaveInputRule,
-    SavePortGroup, SaveZoneForward, TestFirewallPacket, UpdateSimpleForward,
+    SavePortForward, SavePortGroup, SaveZoneForward, TestFirewallPacket, UpdateSimpleForward,
 };
 use keystone_core::{
     AddressGroup, AddressGroupsResponse, ConnectionsResponse, CreateSimplePortForwardRequest,
@@ -13,9 +13,9 @@ use keystone_core::{
     FirewallZonesResponse, ForwardRule, ForwardRulesResponse, InputRule, InputRulesResponse,
     LanDevice, LanDevicesResponse, PortForward, PortGroup, PortGroupsResponse, ReorderRulesRequest,
     SaveAddressGroupRequest, SaveFirewallGlobalSettingsRequest, SaveFirewallGlobalSettingsResponse,
-    SaveFirewallZoneRequest, SaveForwardRuleRequest, SaveInputRuleRequest, SavePortGroupRequest,
-    SaveZoneForwardRequest, SimplePortForward, SimplePortForwardsResponse, TestPacketRequest,
-    TestPacketResponse, ZoneForwardPolicy, ZoneForwardsResponse,
+    SaveFirewallZoneRequest, SaveForwardRuleRequest, SaveInputRuleRequest, SavePortForwardRequest,
+    SavePortGroupRequest, SaveZoneForwardRequest, SimplePortForward, SimplePortForwardsResponse,
+    TestPacketRequest, TestPacketResponse, ZoneForwardPolicy, ZoneForwardsResponse,
 };
 
 use super::client::{call, call_at, call_with, delete, get, post_empty};
@@ -195,6 +195,12 @@ pub async fn fetch_simple_forwards(token: &str) -> Result<Vec<SimplePortForward>
 pub async fn fetch_other_port_forwards(token: &str) -> Result<Vec<PortForward>, String> {
     let response: SimplePortForwardsResponse = get("/api/firewall/simple-forwards", token).await?;
     Ok(response.other_port_forwards)
+}
+
+/// Save a raw port forward (DNAT) row
+pub async fn save_port_forward(token: &str, port_forward: PortForward) -> Result<i64, String> {
+    let response = call::<SavePortForward>(token, &SavePortForwardRequest { port_forward }).await?;
+    saved_id(response.success, response.message, response.port_forward_id)
 }
 
 /// Delete a raw port forward (DNAT) row

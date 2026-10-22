@@ -44,6 +44,29 @@ fn raw_fields(pf: &PortForward) -> Vec<String> {
     ]
 }
 
+/// The request that re-saves `forward` as it is, with `enabled` as given.
+fn forward_request(forward: &SimplePortForward, enabled: bool) -> CreateSimplePortForwardRequest {
+    CreateSimplePortForwardRequest {
+        tcp: matches!(forward.protocol, RuleProtocol::Tcp | RuleProtocol::TcpUdp),
+        udp: matches!(forward.protocol, RuleProtocol::Udp | RuleProtocol::TcpUdp),
+        ipv4: forward.ipv4.clone(),
+        ipv6: forward.ipv6.clone(),
+        port: forward.external_port,
+        destination_port: Some(forward.destination_port),
+        description: forward.description.clone(),
+        enabled,
+    }
+}
+
+/// Row class: disabled rules stay visible but are dimmed.
+fn row_class(enabled: bool) -> &'static str {
+    if enabled {
+        "border-b border-gray-700 text-gray-200"
+    } else {
+        "border-b border-gray-700 text-gray-500"
+    }
+}
+
 /// The simple forwards that match a search.
 fn filter_simple(items: &[SimplePortForward], query: &str) -> Vec<SimplePortForward> {
     items
@@ -108,6 +131,7 @@ pub(super) fn SimpleForwardsTab(
     let port = RwSignal::new(String::new());
     let destination_port = RwSignal::new(String::new());
     let description = RwSignal::new(String::new());
+    let enabled = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let error = RwSignal::new(String::new());
 
@@ -202,6 +226,7 @@ pub(super) fn SimpleForwardsTab(
             destination_port: internal,
             description: (!description.get_untracked().trim().is_empty())
                 .then(|| description.get_untracked().trim().to_owned()),
+            enabled: enabled.get_untracked(),
         };
         leptos::task::spawn_local(async move {
             let outcome = match edit_id.get_untracked() {
@@ -247,6 +272,7 @@ pub(super) fn SimpleForwardsTab(
                             ipv4.set(String::new()); ipv6.set(String::new());
                             tcp.set(true); udp.set(false); port.set(String::new());
                             destination_port.set(String::new()); description.set(String::new());
+                            enabled.set(true);
                             editing.set(true);
                         }
                     }>
@@ -340,6 +366,10 @@ pub(super) fn SimpleForwardsTab(
                             class="w-full px-3 py-2 bg-gray-600 text-gray-100 rounded border border-gray-500"
                             prop:value=move || description.get() on:input=move |ev| description.set(event_target_value(&ev)) />
                     </div>
+                    <label class="flex gap-2 items-center text-gray-200">
+                        <input type="checkbox" prop:checked=move || enabled.get() on:change=move |ev| enabled.set(event_target_checked(&ev)) />
+                        "Enabled (a disabled forward is kept here but left out of the generated firewall)"
+                    </label>
                     <button on:click=save disabled=move || saving.get()
                         class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50">
                         {move || if saving.get() { "Saving..." } else { "Save" }}
@@ -371,9 +401,11 @@ pub(super) fn SimpleForwardsTab(
                                         <For each=move || filter_simple(&items, &filter.get()) key=|f| f.rule_id children=move |f| {
                                             let id = f.rule_id;
                                             let to_edit = f.clone();
+                                            let to_toggle = f.clone();
+                                            let is_enabled = f.enabled;
                                             let forward_ids: Vec<i64> = [f.ipv4_rule_id, f.ipv6_rule_id].into_iter().flatten().collect();
                                             view! {
-                                                <tr class="border-b border-gray-700 text-gray-200">
+                                                <tr class=row_class(is_enabled)>
                                                     <td class="px-2 py-2">
                                                         <div>{format!("{} {}:{}", f.source_zone.as_deref().unwrap_or("WAN"), f.protocol, f.external_port)}</div>
                                                         {f.description.clone().map(|s| view! { <div class="text-xs text-gray-400 mt-1">{s}</div> })}
@@ -403,12 +435,31 @@ pub(super) fn SimpleForwardsTab(
                                                             port.set(to_edit.external_port.to_string());
                                                             destination_port.set(if to_edit.destination_port == to_edit.external_port { String::new() } else { to_edit.destination_port.to_string() });
                                                             description.set(to_edit.description.clone().unwrap_or_default());
+                                                            enabled.set(to_edit.enabled);
                                                             // Show both addresses explicitly even when the discovery list has changed.
                                                             manual.set(true);
                                                             selected.set(String::new());
                                                             error.set(String::new());
                                                             editing.set(true);
                                                         }>"Edit"</button>
+                                                        <button class="text-yellow-300 hover:text-yellow-200 mr-3" on:click=move |_| {
+                                                            error.set(String::new());
+                                                            let token = token.get_untracked();
+                                                            let req = forward_request(&to_toggle, !to_toggle.enabled);
+                                                            leptos::task::spawn_local(async move {
+                                                                match api::update_simple_forward(&token, id, req).await {
+                                                                    Ok(()) => {
+                                                                        toasts.success("Forward updated. Use Apply all in the pending changes bar to activate it.");
+                                                                        config_changed.run(());
+                                                                        reload_trigger.update(|v| *v += 1);
+                                                                    }
+                                                                    Err(e) => {
+                                                                        if e.contains("Unauthorized") { on_unauthorized.run(()); }
+                                                                        error.set(e);
+                                                                    }
+                                                                }
+                                                            });
+                                                        }>{if is_enabled { "Disable" } else { "Enable" }}</button>
                                                         <button class="text-red-400 hover:text-red-300" on:click=move |_| {
                                                             error.set(String::new());
                                                             let token = token.get_untracked();
@@ -465,6 +516,8 @@ pub(super) fn SimpleForwardsTab(
                                 <tbody>
                                     <For each=move || filter_raw(&items, &filter.get()) key=|pf| pf.id children=move |pf| {
                                         let id = pf.id;
+                                        let is_enabled = pf.enabled;
+                                        let to_toggle = pf.clone();
                                         let hit_ids: Vec<i64> = id.into_iter().collect();
                                         let source = raw_source(&pf);
                                         let ports = match pf.external_port_end {
@@ -483,7 +536,7 @@ pub(super) fn SimpleForwardsTab(
                                             destination.push_str(&format!("*{suffix}"));
                                         }
                                         view! {
-                                            <tr class="border-b border-gray-700 text-gray-200">
+                                            <tr class=row_class(is_enabled)>
                                                 <td class="px-2 py-2">{pf.name.clone()}</td>
                                                 <td class="px-2 py-2">{pf.protocol.to_string()}</td>
                                                 <td class="px-2 py-2">{ports}</td>
@@ -491,7 +544,26 @@ pub(super) fn SimpleForwardsTab(
                                                 <td class="px-2 py-2">{source}</td>
                                                 <td class="px-2 py-2">{if pf.enabled { "Yes" } else { "No" }}</td>
                                                 <td class="px-2 py-2 whitespace-nowrap"><RuleHits counters=counters kinds=RAW_HIT_KINDS rule_ids=hit_ids /></td>
-                                                <td class="px-2 py-2 text-right">
+                                                <td class="px-2 py-2 text-right whitespace-nowrap">
+                                                    <button class="text-yellow-300 hover:text-yellow-200 mr-3" on:click=move |_| {
+                                                        error.set(String::new());
+                                                        let token = token.get_untracked();
+                                                        let mut port_forward = to_toggle.clone();
+                                                        port_forward.enabled = !port_forward.enabled;
+                                                        leptos::task::spawn_local(async move {
+                                                            match api::save_port_forward(&token, port_forward).await {
+                                                                Ok(_) => {
+                                                                    toasts.success("Port forward updated. Use Apply all in the pending changes bar to activate it.");
+                                                                    config_changed.run(());
+                                                                    reload_trigger.update(|v| *v += 1);
+                                                                }
+                                                                Err(e) => {
+                                                                    if e.contains("Unauthorized") { on_unauthorized.run(()); }
+                                                                    error.set(e);
+                                                                }
+                                                            }
+                                                        });
+                                                    }>{if is_enabled { "Disable" } else { "Enable" }}</button>
                                                     <button class="text-red-400 hover:text-red-300" on:click=move |_| {
                                                         let Some(id) = id else { return };
                                                         error.set(String::new());

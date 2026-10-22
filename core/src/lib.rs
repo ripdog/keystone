@@ -2318,6 +2318,10 @@ pub struct CreateSimplePortForwardRequest {
     pub destination_port: Option<u16>,
     #[serde(default)]
     pub description: Option<String>,
+    /// A disabled forward stays listed and editable but is left out of the
+    /// generated firewall configuration.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -67,6 +67,8 @@ package() {
   "${ctl}" completions zsh | install -Dm644 /dev/stdin "${pkgdir}/usr/share/zsh/site-functions/_keystonectl"
 
   install -Dm644 "${startdir}/README.md" "${pkgdir}/usr/share/doc/keystone/README.md"
+  install -Dm644 "${startdir}"/docs/*.md -t "${pkgdir}/usr/share/doc/keystone/docs"
+  install -Dm644 "${startdir}/docs/assets/logo.svg" "${pkgdir}/usr/share/doc/keystone/docs/assets/logo.svg"
 
   install -Dm644 "${startdir}/web-ui/dist/index.html" "${pkgdir}/usr/share/keystone/dist/index.html"
   install -Dm644 "${startdir}/web-ui/dist/keystone-web-ui.js" "${pkgdir}/usr/share/keystone/dist/keystone-web-ui.js"

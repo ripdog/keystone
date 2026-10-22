@@ -1,6 +1,6 @@
 [Unit]
 Description=Keystone Router/Firewall Daemon
-Documentation=https://github.com/example/keystone
+Documentation=https://github.com/ripdog/keystone
 After=network.target
 Wants=network.target
 

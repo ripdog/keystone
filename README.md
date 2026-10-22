@@ -1,84 +1,84 @@
+<div align="center">
+
+<img src="docs/assets/logo.svg" alt="Keystone logo" width="96" height="96">
+
 # Keystone
 
-Keystone is a web-based router and firewall manager for **Arch Linux**. It provides a browser UI and command-line tooling for managing a dedicated Linux router without exposing its privileged management daemon directly to the network.
+**A web-managed router and firewall for Arch Linux, with a root daemon you never expose to the network.**
 
-> **Status:** In development. Network and firewall changes can disconnect a router. Test on a spare machine or VM and maintain console access while configuring a real router.
+[![Linux build](https://github.com/ripdog/keystone/actions/workflows/linux.yml/badge.svg)](https://github.com/ripdog/keystone/actions/workflows/linux.yml)
+![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)
+![Platform: Arch Linux](https://img.shields.io/badge/platform-Arch%20Linux-1793d1?logo=archlinux&logoColor=white)
+![Written in Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust)
+
+</div>
+
+Keystone turns a spare x86 box into a home or small-office router with a browser UI, a CLI and a safety net. It configures the standard Linux tools (systemd-networkd, nftables, dnsmasq, and friends) rather than replacing them, so what it generates is ordinary, inspectable system configuration.
+
+> **Status: pre-1.0.** Keystone is under active development and used on real hardware, but network and firewall changes can disconnect a router. Try it on a spare machine or VM and keep console access while you configure it.
+
+## Why Keystone
+
+- **Safe to change remotely.** Edits are staged, previewed and applied together. Network and firewall applies come with a 60-second rollback timer, so a change that cuts you off reverts itself. Every apply is snapshotted and can be diffed, restored, exported and imported.
+- **Privilege-separated by design.** The web server runs unprivileged and talks to a root daemon over a permission-restricted Unix socket. There is no daemon port, no default password, and the UI never listens on the WAN.
+- **Opinionated setup, full control after.** A wizard builds a working dual-stack router (WAN DHCP/PD, LAN, NAT, firewall zones) in a minute; every part is then editable.
+- **Plain Linux underneath.** No private network stack: stop Keystone and your router keeps running on networkd, nftables and dnsmasq.
 
 ## Features
 
-- **Networking:** Configure WAN and LAN interfaces using systemd-networkd, including IPv4, IPv6, DHCP, and IPv6 prefix delegation.
-- **Firewall:** Manage nftables rules, NAT, and IPv4/IPv6 port forwarding.
-- **Services:** Configure dnsmasq for DNS/DHCP, Caddy for HTTPS, and OpenSSH access on the router.
-- **Monitoring:** Inspect interface state, traffic counters, and WAN gateway reachability.
-- **First-run setup:** Interactive `keystonectl setup` wizard and local administrator creation.
+| | |
+|---|---|
+| **Networking** | Physical interfaces, VLANs and bridges (convert a LAN port to a bridge in one step); static addressing, DHCPv4/v6 and IPv6 prefix delegation; Wi-Fi access point (hostapd); mDNS (`<host>.local`); live networkd preview |
+| **Firewall** | Zone-based nftables: zones, zone forwards, input and forward rules, address/port groups, DNAT port forwards (individually switchable), NAT with hairpin support, DNS redirect enforcement, UPnP / NAT-PMP |
+| **Firewall tooling** | Rule-set preview, packet tester, live log and connection tracking viewer |
+| **DNS & DHCP** | dnsmasq: DHCP ranges, static and active leases, DHCP options, host/CNAME records, address overrides. Optional [Blocky](https://github.com/0xERR0R/blocky) for ad-blocking and encrypted upstreams, with a query log |
+| **Traffic shaping** | SQM with CAKE to fight bufferbloat on the WAN |
+| **HTTPS & remote access** | Caddy reverse proxy (including DNS-challenge certificates) and OpenSSH server settings |
+| **Visibility** | Dashboard with traffic graphs, per-client view with vendor lookup, service status and logs, ping/traceroute/DNS/TCP tools, packet capture |
+| **Operations** | Pending-changes tracking per component, configuration history, setup wizard, `keystonectl` with shell completions and a login banner, Arch package and USB image builder |
 
-## Security model
+## Quick start
 
-Keystone has three components:
+```bash
+git clone https://github.com/ripdog/keystone.git && cd keystone
+makepkg -si                                   # builds and installs keystone-router
+
+sudo keystonectl bootstrap-admin              # create the first administrator, locally
+sudo systemctl enable --now keystone-daemon keystone-web-ui
+```
+
+Then browse to `http://<router-LAN-address>:8080` (or `http://127.0.0.1:8080` on the router) and follow the setup wizard, or run `sudo keystonectl setup` for the terminal version. Review and apply the staged configuration, then **confirm within 60 seconds**; if you can't, Keystone rolls back on its own.
+
+Full instructions, optional packages (Blocky, miniupnpd, Caddy, hostapd, ...), USB image creation and file locations are in the **[installation guide](docs/installation.md)**.
+
+## How it fits together
 
 ```text
-Browser ──HTTP(S)──> keystone-web-ui (unprivileged)
-                                  │
-                       permission-restricted Unix socket
-                                  │
-                          keystone-daemon (root)
-                                  │
-                      networkd / nftables / services
+Browser ──HTTP(S)──> keystone-web-ui   (unprivileged, :8080 on loopback + LAN only)
+                           │
+                Unix socket (group keystone, 0660)  ◄── keystonectl
+                           │
+                    keystone-daemon     (root, SQLite)
+                           │
+ systemd-networkd · nftables · dnsmasq · Blocky · miniupnpd · hostapd · Caddy · avahi · tc
 ```
 
-The daemon listens on a Unix socket at `/run/keystone/keystone.sock`, **not** a public HTTP port. The web service listens on port **8080**, restricted to loopback and configured LAN addresses (never WAN). An optional Caddy reverse proxy can provide HTTPS.
+A Rust workspace of four crates: `core` (shared models), `daemon` (root backend), `web-ui` (Axum proxy + Leptos/WASM frontend) and `ctl` (`keystonectl`). See [architecture](docs/architecture.md) for the security model, configuration lifecycle and firewall design.
 
-There is **no default administrator password or remote bootstrap account**. Create the initial administrator locally at the console.
+## Documentation
 
-## Installation
+| Guide | Contents |
+|---|---|
+| [Installation & first run](docs/installation.md) | Requirements, building the package, USB image, setup wizard, CLI basics, file locations |
+| [Architecture](docs/architecture.md) | Components, security model, apply/rollback lifecycle, firewall design |
+| [Development](docs/development.md) | Toolchain, `just` commands, running locally, tests, packaging |
+| [Vagrant testing](docs/vagrant.md) | Two-VM lab and end-to-end integration tests |
+| [AGENTS.md](AGENTS.md) | Repository layout and rules for contributors and coding agents |
 
-Keystone currently targets Arch Linux with systemd. Runtime services include **systemd-networkd, nftables, and dnsmasq**; Caddy and OpenSSH integration are optional. The repository contains an Arch `PKGBUILD`, service definitions in `packaging/arch/`, and an image-building script at `scripts/create-keystone-usb.sh` for a dedicated router.
+## Contributing
 
-For a development build, install Rust (see `rust-toolchain.toml` when present), the `wasm32-unknown-unknown` target, [Trunk](https://trunkrs.dev/), and the system SQLite development library. Then build both the native binaries and the browser frontend:
-
-```bash
-cargo build --workspace
-(cd web-ui && trunk build)
-```
-
-The three native executables are `target/debug/keystone-daemon`, `target/debug/keystone-web-ui`, and `target/debug/keystonectl`. The frontend is generated in `web-ui/dist/`.
-
-### Initial setup
-
-On a **dedicated test/router machine**, from the repository root:
-
-1. Create an administrator locally:
-   ```bash
-   sudo target/debug/keystonectl bootstrap-admin
-   ```
-2. Start the daemon (in a separate terminal):
-   ```bash
-   sudo target/debug/keystone-daemon
-   ```
-3. Run the interactive router configuration wizard:
-   ```bash
-   sudo target/debug/keystonectl setup
-   ```
-4. Start the unprivileged web server (in another terminal):
-   ```bash
-   KEYSTONE_DIST_DIR="$PWD/web-ui/dist" target/debug/keystone-web-ui
-   ```
-
-Open `http://127.0.0.1:8080` on the router, or `http://<router-LAN-address>:8080` from a LAN device, and log in with the account you created. For installed packages, use the supplied systemd services instead of starting processes manually.
-
-**Do not perform initial network configuration over your only SSH connection.** Apply networking and firewall changes with console access available.
-
-## Development
-
-```bash
-just check       # Cargo compile checks
-just test        # Rust tests
-just fmt-check   # Rust formatting check
-just ci          # Formatting, Clippy, and tests
-```
-
-`just build` builds native binaries; building the frontend also requires `trunk build` in `web-ui/`. The `justfile` and [VAGRANT.md](VAGRANT.md) contain developer and VM-testing commands. [AGENTS.md](AGENTS.md) describes the repository layout and coding rules.
+Issues and pull requests are welcome. Run `just ci` (formatting, Clippy and tests) before sending a change, add focused tests for new behaviour, and read the project rules in [AGENTS.md](AGENTS.md), particularly the ones on privilege separation and input validation.
 
 ## License
 
-Keystone is licensed under the **GNU General Public License version 3.0 only** (`GPL-3.0-only`). See [LICENSE](LICENSE) for the complete license.
+Keystone is licensed under the **GNU General Public License v3.0 only** (`GPL-3.0-only`). See [LICENSE](LICENSE).

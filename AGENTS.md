@@ -8,7 +8,7 @@ Keystone is an Arch Linux router/firewall manager written in Rust (edition 2024;
 - `daemon/` — root-privileged backend; Unix socket at `/run/keystone/keystone.sock`.
 - `web-ui/` — unprivileged HTTP proxy and Leptos/WASM frontend.
 - `ctl/` — `keystonectl` CLI, including local first-admin setup (`sudo keystonectl bootstrap-admin`).
-- `justfile` — development commands; `VAGRANT.md` — VM/integration testing.
+- `justfile` — development commands; `docs/` — installation, architecture, development and VM/integration testing guides.
 
 ## Development
 

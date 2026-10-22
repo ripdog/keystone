@@ -7,6 +7,37 @@ on:
   workflow_dispatch:
 
 jobs:
+  checks:
+    name: Format, Clippy and tests (Ubuntu x86_64)
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libsqlite3-dev libssl-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --all
+
   build:
     name: Build (Ubuntu x86_64)
     runs-on: ubuntu-24.04
@@ -24,6 +55,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@v2
 
       - name: Compile Linux binaries
         run: cargo build --workspace

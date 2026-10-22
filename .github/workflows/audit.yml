@@ -1,0 +1,34 @@
+name: Dependency audit
+
+# Advisories are published independently of our commits, so also run weekly.
+on:
+  push:
+    branches: [master]
+    paths:
+      - Cargo.lock
+      - .github/workflows/audit.yml
+  pull_request:
+    paths:
+      - Cargo.lock
+      - .github/workflows/audit.yml
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Scan Cargo.lock against the RustSec advisory database
+        run: cargo audit

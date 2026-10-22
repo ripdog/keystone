@@ -4,9 +4,18 @@ All notable changes to Keystone are recorded here. The format follows [Keep a Ch
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-22
+
+The first minor release since the 0.4 series. It adds no new router features; it makes the project ready to share: documentation, CI and dependency hygiene.
+
 ### Added
 - Documentation moved to `docs/` (installation, architecture, development, Vagrant testing), a rewritten README with screenshots, and this changelog. The package now installs the docs.
 - CI runs `cargo fmt --check`, Clippy (warnings are errors) and the test suite on every push and pull request, and a weekly `cargo audit` of `Cargo.lock`.
+- Releases are tagged in git (`vX.Y.Z`), including the earlier 0.x releases.
+
+### Security
+- Updated `quick-xml` to 0.42, fixing RUSTSEC-2026-0194 and RUSTSEC-2026-0195 (denial of service) in the firewall connection-tracking parser.
+- RUSTSEC-2023-0071 (`rsa` Marvin attack, no fix available) is acknowledged in `.cargo/audit.toml`: Keystone only uses HS256 session tokens, so no RSA operation runs.
 
 ### Fixed
 - The systemd units' `Documentation=` URL pointed at a placeholder repository.

@@ -41,7 +41,9 @@ nix = { version = "0.30.1", features = ["user", "fs"] }
 
 # Authentication
 argon2.workspace = true
-jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
+# OS RNG for Argon2 password salts.
+password-hash = { version = "0.5", features = ["getrandom"] }
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 rand.workspace = true
 toml = "1.1"
 libc = "0.2.178"

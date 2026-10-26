@@ -12,7 +12,7 @@ optdepends=('miniupnpd-nft: UPnP IGD and NAT-PMP port mapping (AUR; the extra/mi
             'hostapd: Wi-Fi access point'
             'iw: Wi-Fi interface detection and the access point station list'
             'tcpdump: packet capture on the diagnostics page')
-makedepends=("rust" "cargo" "trunk" "git")
+makedepends=("rust" "cargo" "cmake" "trunk" "git")
 conflicts=('keystone') # the extra repo's assembler framework shares the old name
 # Do not inherit host-specific -march=native/-O3/LTO flags. C dependencies
 # (including cryptographic RNG implementations) control their own optimisation.
